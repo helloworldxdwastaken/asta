@@ -1,0 +1,58 @@
+# ─── SECRETS: never commit. Safe to push only when these are ignored. ───────
+.env
+.env.*
+!.env.example
+*.env.local
+*.env.production
+.env.development
+.env.development.local
+.env.test
+.env.production.local
+secrets/
+*.pem
+*.key
+*.p12
+credentials.json
+token.json
+*.credentials
+
+# Backend (API keys, DB with chats/reminders/phone refs)
+backend/.env
+backend/asta.db
+.asta.pid
+.asta-frontend.pid
+backend/*.db
+backend/chroma_db/
+
+# WhatsApp bridge (session, cache, any stored numbers)
+services/whatsapp/.wweb_auth/
+services/whatsapp/.wweb_cache/
+services/whatsapp/*.json
+!services/whatsapp/package.json
+
+# Node
+node_modules/
+frontend/node_modules/
+services/whatsapp/node_modules/
+npm-debug.log*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Build / IDE
+dist/
+build/
+*.log
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Docker
+.docker/
