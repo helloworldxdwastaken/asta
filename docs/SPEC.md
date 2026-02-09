@@ -28,7 +28,7 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 - **Spotify** — `backend/app/spotify_client.py`, `routers/spotify.py`: search (Client ID/Secret in Settings → Spotify or `.env`). Playback: OAuth connect, list devices, "play X on Spotify" with device picker (reply with number or name). `GET /api/spotify/connect`, `/api/spotify/callback`, `/api/spotify/devices`, `POST /api/spotify/play`.
 - **Reminders** — `backend/app/reminders.py`: "Wake me up at 7am", "remind me tomorrow at 8am to X", "remind me in 30 min". User timezone from location; friendly message at trigger time (Telegram/WhatsApp or web). APScheduler + DB. **On startup**, `reload_pending_reminders()` loads all pending reminders from DB into the scheduler so they fire after a restart.
 - **Audio notes** — `backend/app/audio_transcribe.py`, `app/audio_notes.py`, `routers/audio.py`: Upload audio (meetings, voice memos); transcribe with faster-whisper (local; model choice: base/small/medium); format with default AI. `POST /api/audio/process` (multipart: file, instruction, whisper_model, async_mode). With `async_mode=1`, returns 202 + job_id; poll `GET /api/audio/status/{job_id}` for progress (transcribing → formatting → done). Meeting notes (when instruction is "meeting") are saved in DB so user can ask "last meeting?" in Chat; context injects recent saved meetings. Telegram: voice/audio and audio-from-URL with progress messages ("Transcribing…", "Formatting…"). UI shows progress bar. Dependencies: `faster-whisper`, `python-multipart` (see `backend/requirements.txt`).
-- **WhatsApp bridge** — `services/whatsapp/` (whatsapp-web.js): receives messages, POSTs to `/api/incoming/whatsapp`, sends reply. Run with `ASTA_API_URL=http://localhost:8000 node index.js` or Docker profile `whatsapp`.
+- **WhatsApp bridge** — `services/whatsapp/` (whatsapp-web.js): receives messages, POSTs to `/api/incoming/whatsapp`, sends reply. Run with `ASTA_API_URL=http://localhost:8000 node index.js`.
 - **Telegram bot** — `backend/app/channels/telegram_bot.py`: long polling when `TELEGRAM_BOT_TOKEN` set; same message handler as panel/WhatsApp.
 - **File management** — `backend/app/routers/files.py`: list/read under `ASTA_ALLOWED_PATHS`.
 - **Google Drive** — Stub in `routers/drive.py`; OAuth and list can be wired next.
@@ -123,10 +123,9 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 - Validate and sanitize all user input; rate-limit public endpoints (Telegram/WhatsApp).
 - Prefer read-only Drive scope if only “see what’s on the drive” is needed.
 
-### 4.3 Easy install
+### 4.3 Easy install (planned)
 
-- **Docker Compose:** `docker compose up -d` runs API + panel + any workers; document in README and docs/INSTALL.md.
-- **Native:** `pip install -e .` in backend, `npm run build` in frontend, serve frontend from backend or separately. Optional `install.sh` / `install.ps1` for Mac/Linux/Windows that sets venv, env template, and run command.
+- **Native:** `./asta.sh start` runs backend + frontend after manual venv/npm install. **Planned:** one command (e.g. `install.sh` or `curl ... | sh`) that pulls from GitHub and installs dependencies (venv, pip, npm) so you can run `./asta.sh start` with minimal steps. Document in README and docs/INSTALL.md.
 
 ### 4.4 What “learn for X time” should do
 
@@ -163,18 +162,15 @@ asta/
 │   │   ├── routers/     # chat, files, drive, rag, settings, spotify
 │   │   ├── rag/         # Ingest, embed, retrieve
 │   │   └── tasks/       # Scheduler (learning, reminders)
-│   ├── requirements.txt
-│   └── Dockerfile
+│   └── requirements.txt
 ├── frontend/
 │   ├── src/
 │   │   ├── pages/       # Dashboard, Chat, Files, Drive, Learning, Settings, Skills
 │   │   └── api/         # API client
 │   ├── package.json
-│   └── Dockerfile
 ├── services/whatsapp/   # WhatsApp bridge (Node)
-├── asta.sh              # Start/stop/restart backend (port 8000)
-├── docker-compose.yml
-├── .env.example         # Template; copy to backend/.env (native) or .env (Docker)
+├── asta.sh              # Start/stop/restart backend + frontend
+├── .env.example         # Template; copy to backend/.env
 └── README.md
 ```
 

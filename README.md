@@ -1,82 +1,105 @@
 # Asta
 
-**Personal control plane:** one place to talk to AI (Google, Claude, Ollama), automate tasks, manage files and Google Drive, and chat via **WhatsApp** and **Telegram**. The AI has **unified context**: conversation, channels, files, Drive (when connected), learned knowledge, **time & weather**, **web search**, **lyrics**, **Spotify** (search + play on your devices), **reminders** (wake me up, remind me at…), and **audio notes** (upload meetings/voice memos → transcript + meeting notes). Skills are intent-based and can be toggled in Settings.
+One place to talk to AI, automate tasks, and stay in control: **web panel**, **Telegram**, and **WhatsApp**. One user, one context.
 
-## Features
+**AI:** Groq, Google Gemini, Claude, Ollama — set your default in Settings.  
+**Skills:** Time & weather, web search, lyrics, Spotify (search + play on your devices), reminders (“wake me up at 7am”), audio notes (upload/voice → transcript + meeting notes), and **learn about X for Y minutes** (background learning + notify when done).  
+**Data:** Chat history, files (allowed paths), Google Drive (stub), and learned knowledge (RAG with Ollama + Chroma). No Docker — **native install** only.
 
-| Feature | Status |
-|--------|--------|
-| Web control panel (Dashboard, Chat, Files, Drive, Learning, Settings, Skills) | Done |
-| AI providers: Groq, Google Gemini, Claude, Ollama | Done — set keys in Settings or `backend/.env` |
-| Unified context (conversation, channels, files, RAG, time, weather, lyrics, Spotify, reminders) | Done |
-| Intent-based skills (only run what’s relevant; status in Telegram/WhatsApp) | Done |
-| Time & Weather (12h AM/PM, forecast; set location once) | Done |
-| Web search (DuckDuckGo, no key) | Done |
-| Lyrics (LRCLIB; “lyrics of X”, “song by Artist”) | Done |
-| Spotify (search + play on devices; OAuth in Settings) | Done |
-| Reminders (“wake me up at 7am”, “remind me tomorrow at 8am to …”) | Done |
-| Audio notes (upload/Telegram; progress bar; meeting notes saved for "last meeting?") | Done |
-| Learning / RAG (Ollama + Chroma; "learned knowledge") | Done |
-| WhatsApp bridge (whatsapp-web.js) | Done — run `services/whatsapp` or Docker profile `whatsapp` |
-| Telegram bot | Done — set `TELEGRAM_BOT_TOKEN` |
-| File management (allowed paths) | Done |
-| Google Drive | Stub (OAuth to be wired) |
-| Cross-platform | Docker + native; see `docs/INSTALL.md` |
+---
 
 ## Quick start
 
-**Docker (recommended)**
+**1. Clone and config**
 
 ```bash
-cp .env.example .env
-# Edit .env if you have API keys
-docker compose up -d
+git clone https://github.com/helloworldxdwastaken/asta.git
+cd asta
+cp .env.example backend/.env
+# Edit backend/.env with API keys (optional at first)
 ```
 
-- Panel: **http://localhost:5173**
-- API: **http://localhost:8000** · Docs: **http://localhost:8000/docs**
-
-**Native (dev)**
+**2. Backend + frontend (Linux / macOS)**
 
 ```bash
-cp .env.example backend/.env   # then edit backend/.env with your keys (optional at first)
-# Backend (from repo root you can use ./asta.sh start instead)
+./asta.sh start
+```
+
+Then open **http://localhost:5173** (panel) and **http://localhost:8000** (API docs).
+
+**3. Or run by hand**
+
+```bash
+# Backend
 cd backend && python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt && uvicorn app.main:app --reload --port 8000
+pip install -r requirements.txt
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 # Frontend (other terminal)
 cd frontend && npm install && npm run dev
 ```
 
-Then open **http://localhost:5173**. If the panel shows "API off", start the backend (see **Settings → Run the API** in the panel or **docs/INSTALL.md**). Full steps (Windows too): **docs/INSTALL.md**.
+Panel: **http://localhost:5173**. If it says “API off”, start the backend (or use **Settings → Run the API** in the panel).
+
+---
+
+## Control script (`asta.sh`)
+
+From the repo root (Linux / macOS):
+
+| Command | What it does |
+|--------|----------------|
+| `./asta.sh start` | Start backend + frontend (frees ports 8000 and 5173 first) |
+| `./asta.sh stop` | Stop both |
+| `./asta.sh restart` | Stop, then start both (e.g. after changing Telegram token) |
+| `./asta.sh status` | Show if backend and frontend are running |
+
+---
+
+## What’s in the panel
+
+- **Dashboard** — Overview and quick links  
+- **Chat** — Talk to Asta; skills (search, time, weather, lyrics, Spotify, reminders, audio notes, learning) run when relevant  
+- **Files** — Browse allowed paths (set `ASTA_ALLOWED_PATHS` in `backend/.env`)  
+- **Drive** — Google Drive (OAuth stub)  
+- **Learning** — RAG: “learn about X for 30 min”, ask later; semantic search so answers use only relevant learned bits  
+- **Audio notes** — Upload or paste a link; transcribe (local faster-whisper) and get meeting notes or summary; saved for “last meeting?”  
+- **Settings** — API keys (Groq, Gemini, Claude, Telegram, Spotify), default AI, skill toggles, “Run the API”, “Restart backend”  
+- **Skills** — Enable/disable time, weather, web search, lyrics, Spotify, reminders, audio notes, learning  
+
+**Telegram:** Set `TELEGRAM_BOT_TOKEN` in `backend/.env` or Settings; same user as the panel.  
+**WhatsApp:** Run `services/whatsapp` with `ASTA_API_URL=http://localhost:8000`; scan QR in Settings.
+
+---
 
 ## Docs
 
-- **`docs/INSTALL.md`** — Install on macOS, Linux, and Windows (Docker and native).
-- **`docs/SPEC.md`** — Product spec, architecture, and where to add features.
-- **`docs/SECURITY.md`** — Keep API keys and secrets out of GitHub (use `backend/.env` only).
+- **`docs/INSTALL.md`** — Full native install (macOS, Linux, Windows), env vars, troubleshooting.  
+- **`docs/SPEC.md`** — Product spec and where to add features.  
+- **`docs/SECURITY.md`** — Keep secrets in `backend/.env` only; never commit them.
 
-## Backend dependencies (key packages)
+---
 
-- **fastapi**, **uvicorn**, **python-multipart** — API and form/upload handling
-- **faster-whisper** — local audio transcription (Audio notes; no API key)
-- **apscheduler** — reminders and scheduled tasks (reloaded on startup)
-- **aiosqlite** — SQLite DB (conversations, reminders, settings, saved meeting notes)
-- See **`backend/requirements.txt`** for full list.
+## Easy install (planned)
+
+A single command that clones (or pulls) from GitHub and installs dependencies (venv, pip, npm) so you can run `./asta.sh start` — coming later.
+
+---
 
 ## Project layout
 
 ```
 asta/
-├── docs/              # INSTALL.md, SPEC.md, SECURITY.md
-├── backend/           # FastAPI (Python) — reads backend/.env; API keys also in Settings (DB)
-├── frontend/          # React + Vite (panel; includes Audio notes page)
+├── backend/           # FastAPI — backend/.env, API keys also in Settings (DB)
+├── frontend/          # React + Vite (panel)
 ├── services/whatsapp/ # WhatsApp bridge (Node)
-├── asta.sh            # Start/stop/restart backend (Linux/macOS)
-├── docker-compose.yml
-├── .env.example       # template; copy to backend/.env (native) or .env (Docker)
+├── docs/              # INSTALL.md, SPEC.md, SECURITY.md
+├── asta.sh            # Start/stop/restart backend + frontend
+├── .env.example       # Copy to backend/.env
 └── README.md
 ```
+
+---
 
 ## License
 
