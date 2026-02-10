@@ -19,8 +19,13 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: DB + reload reminders + Telegram bot in same event loop. Shutdown: stop bot cleanly."""
+    """Startup: DB + reload reminders + ensure User.md + Telegram bot. Shutdown: stop bot cleanly."""
     await get_db().connect()
+    try:
+        from app.memories import ensure_user_md
+        ensure_user_md("default")
+    except Exception as e:
+        logger.exception("Failed to ensure User.md: %s", e)
     try:
         from app.reminders import reload_pending_reminders
         await reload_pending_reminders()

@@ -26,6 +26,33 @@ def _user_md_path(user_id: str) -> Path:
     return user_dir / "User.md"
 
 
+USER_MD_TEMPLATE = """# About you
+
+- **Location:** 
+- **Preferred name:** 
+- **Important:**
+  - 
+"""
+
+
+def ensure_user_md(user_id: str) -> None:
+    """Create User.md with template if it doesn't exist."""
+    p = _user_md_path(user_id)
+    if not p.is_file():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(USER_MD_TEMPLATE.strip() + "\n", encoding="utf-8")
+
+
+def get_location_from_memories(user_id: str) -> str | None:
+    """Extract location string from User.md (e.g. 'Holon, Israel'). Returns None if not set."""
+    content = load_user_memories(user_id)
+    if not content:
+        return None
+    data = _parse_memories(content)
+    loc = (data.get("location") or "").strip()
+    return loc if loc else None
+
+
 def load_user_memories(user_id: str) -> str:
     """Load User.md content. Returns empty string if file doesn't exist."""
     p = _user_md_path(user_id)

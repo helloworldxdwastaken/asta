@@ -3,7 +3,7 @@
 One place to talk to AI, automate tasks, and stay in control: **web panel**, **Telegram**, and **WhatsApp**. One user, one context.
 
 **AI:** Groq, Google Gemini, Claude, Ollama — set your default in Settings.  
-**Skills:** Time & weather, web search, lyrics, Spotify (search + play on your devices), reminders (“wake me up at 7am”), audio notes (upload/voice → transcript + meeting notes), and **learn about X for Y minutes** (background learning + notify when done).  
+**Skills:** Time & weather, web search, lyrics, Spotify (search + play on your devices), reminders (“wake me up at 7am”, “alarm in 5 min to X”), audio notes (upload/voice → transcript + meeting notes), and **learn about X for Y minutes** (background learning + notify when done).  
 **Data:** Chat history, files (allowed paths), Google Drive (stub), and learned knowledge (RAG with Ollama + Chroma). No Docker — **native install** only.
 
 ---
@@ -61,7 +61,7 @@ From the repo root (Linux / macOS):
 
 - **Dashboard** — Overview and quick links  
 - **Chat** — Talk to Asta; skills (search, time, weather, lyrics, Spotify, reminders, audio notes, learning) run when relevant  
-- **Files** — Browse allowed paths (set `ASTA_ALLOWED_PATHS` in `backend/.env`)  
+- **Files** — Asta knowledge (docs), your memories (User.md: location, name, facts — editable), and allowed paths (`ASTA_ALLOWED_PATHS`)  
 - **Drive** — Google Drive (OAuth stub)  
 - **Learning** — RAG: “learn about X for 30 min”, ask later; semantic search so answers use only relevant learned bits  
 - **Audio notes** — Upload or paste a link; transcribe (local faster-whisper) and get meeting notes or summary; saved for “last meeting?”  

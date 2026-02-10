@@ -74,6 +74,17 @@ async def build_context(
     parts.append("Channels: " + ", ".join(channels))
     parts.append("")
 
+    # Ground truth: real state so AI doesn't hallucinate
+    pending = await db.get_pending_reminders_for_user(user_id, limit=10)
+    loc = await db.get_user_location(user_id)
+    loc_str = loc["location_name"] if loc else None
+    if not loc_str:
+        from app.memories import get_location_from_memories
+        loc_str = get_location_from_memories(user_id) or "not set"
+    parts.append("--- State (factual) ---")
+    parts.append(f"Pending reminders: {len(pending)}. Location: {loc_str}. Use this — do not invent reminders or location.")
+    parts.append("")
+
     # Only include context for skills that are enabled (user can turn off in Skills tab)
     files_enabled = await db.get_skill_enabled(user_id, "files")
     drive_enabled = await db.get_skill_enabled(user_id, "drive")
@@ -149,6 +160,23 @@ async def build_context(
         parts.append(extra["rag_summary"])
         parts.append("")
 
+    async def _get_effective_location():
+        """Get location from DB, or from User.md if DB is empty (geocode and persist)."""
+        loc = await db.get_user_location(user_id)
+        if loc:
+            return loc
+        from app.memories import get_location_from_memories
+        from app.time_weather import geocode
+        loc_str = get_location_from_memories(user_id)
+        if not loc_str:
+            return None
+        result = await geocode(loc_str)
+        if not result:
+            return None
+        lat, lon, name = result
+        await db.set_user_location(user_id, name, lat, lon)
+        return {"location_name": name, "latitude": lat, "longitude": lon}
+
     # Time (separate skill)
     if time_enabled and _use("time"):
         from datetime import datetime, timezone
@@ -158,7 +186,7 @@ async def build_context(
         # Always include UTC for reference
         parts.append("Current time (UTC, 12-hour): " + get_current_time_utc_12h())
         # And, when we know the user's location, compute their local time explicitly
-        loc = await db.get_user_location(user_id)
+        loc = await _get_effective_location()
         if loc:
             parts.append(f"User's location: {loc['location_name']}.")
             try:
@@ -188,7 +216,7 @@ async def build_context(
     if weather_enabled and _use("weather"):
         from app.time_weather import fetch_weather_with_forecast
         parts.append("--- Weather ---")
-        loc = await db.get_user_location(user_id)
+        loc = await _get_effective_location()
         if loc:
             forecast = await fetch_weather_with_forecast(loc["latitude"], loc["longitude"])
             parts.append(f"User's location: {loc['location_name']}.")
@@ -207,13 +235,14 @@ async def build_context(
 
     # Web search results (when skill enabled and we ran a search)
     if google_search_enabled and _use("google_search") and extra and extra.get("search_results"):
-        parts.append("--- Web search results ---")
+        parts.append("--- Web search results (you HAVE direct web access; use these) ---")
         for i, r in enumerate(extra["search_results"][:5], 1):
             title = (r.get("title") or "").strip()
             snippet = (r.get("snippet") or "").strip()
             url = (r.get("url") or "").strip()
             if title or snippet:
                 parts.append(f"{i}. {title}: {snippet[:300]}" + (f" ({url})" if url else ""))
+        parts.append("Answer from the above results. Do NOT say you cannot access the web or don't have internet—you do.")
         parts.append("")
 
     # Lyrics (when skill enabled and we ran a search)
@@ -286,7 +315,14 @@ async def build_context(
     # Reminders: user can ask to wake up or be reminded at a time
     if reminders_enabled and _use("reminders"):
         parts.append("--- Reminders ---")
-        parts.append("The user can say e.g. 'Wake me up tomorrow at 7am', 'Remind me at 6pm to call mom', 'Remind me in 30 min to take the cake out'. You will send them a message at that time on Telegram/WhatsApp or web. If they have set their location, times are in their timezone.")
+        if pending:
+            parts.append("Current pending reminders (real):")
+            for r in pending[:5]:
+                msg = (r.get("message") or "").strip() or "—"
+                run_at = r.get("run_at") or ""
+                parts.append(f"  - {msg} at {run_at}")
+            parts.append("Do NOT claim they have reminders not listed above.")
+        parts.append("Phrases: 'Wake me up at 7am', 'Remind me at 6pm to X', 'Remind me in 30 min to X', 'alarm in 5 min to X'. If location set, times are in their timezone.")
         parts.append("")
 
     if extra.get("reminder_scheduled"):

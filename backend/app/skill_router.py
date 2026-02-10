@@ -37,15 +37,19 @@ def get_skills_to_use(text: str, enabled_skill_ids: set[str]) -> set[str]:
         elif any(k in t for k in ("song by", " by ", "artist ", "singer ")) and len(t) > 5:
             out.add("lyrics")
 
-    # Reminders: wake me up, remind me at, alarm
+    # Reminders: wake me up, remind me at, alarm, timer
     if "reminders" in enabled_skill_ids:
-        if any(k in t for k in ("remind me", "wake me up", "wake up at", "alarm at", "wake up tomorrow", "remind me tomorrow")):
+        if any(k in t for k in ("remind me", "wake me up", "wake up at", "alarm at", "alarm in", "alarm or reminder", "alarm", "reminder", "timer", "wake up tomorrow", "remind me tomorrow", "min from now")):
             out.add("reminders")
 
-    # Web search: look up, search for (not spotify), what is, who is, when did, or question.
+    # Web search: look up, search for, check the web (not spotify), what is, who is, when did, or question.
     # If we're already handling an explicit time question, skip web search so time answers stay clean.
     if "google_search" in enabled_skill_ids and "spotify" not in out and "time" not in out:
-        if any(k in t for k in ("search for", "look up", "find out", "what is ", "who is ", "when did", "latest ", "current ")):
+        if any(k in t for k in (
+            "search for", "look up", "find out", "what is ", "who is ", "when did",
+            "latest ", "current ", "check the web", "search the web", "search online",
+            "look it up", "search for ", "google ", "look up "
+        )):
             out.add("google_search")
         elif "?" in t and len(t) > 10:  # general question
             out.add("google_search")

@@ -47,6 +47,11 @@ export const api = {
       "/files/list" + (directory ? `?directory=${encodeURIComponent(directory)}` : "")
     ),
   filesRead: (path: string) => req<{ path: string; content: string }>("/files/read?path=" + encodeURIComponent(path)),
+  filesWrite: (path: string, content: string) =>
+    req<{ path: string; ok: boolean }>("/files/write?path=" + encodeURIComponent(path), {
+      method: "PUT",
+      body: JSON.stringify({ content }),
+    }),
   driveStatus: () => req<{ connected: boolean; summary: string }>("/drive/status"),
   driveList: () => req<{ files: unknown[]; connected: boolean }>("/drive/list"),
   ragLearn: (topic: string, text: string) =>

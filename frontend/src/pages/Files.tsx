@@ -14,8 +14,12 @@ export default function Files() {
   const [currentRoot, setCurrentRoot] = useState<string>("");
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [content, setContent] = useState<string>("");
+  const [editContent, setEditContent] = useState<string>("");
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const isUserMd = (path: string | null) => path?.includes("user:memories") && path?.endsWith("User.md");
 
   const load = (dir?: string) => {
     setError(null);
@@ -56,7 +60,18 @@ export default function Files() {
   const openFile = (path: string) => {
     setSelectedFile(path);
     setContent("");
-    api.filesRead(path).then((r) => setContent(r.content)).catch((e) => setContent("Error: " + (e as Error).message));
+    setEditContent("");
+    api.filesRead(path).then((r) => { setContent(r.content); setEditContent(r.content); }).catch((e) => { const err = "Error: " + (e as Error).message; setContent(err); setEditContent(err); });
+  };
+
+  const saveUserMd = () => {
+    if (!selectedFile || !isUserMd(selectedFile)) return;
+    setSaving(true);
+    setError(null);
+    api
+      .filesWrite(selectedFile, editContent)
+      .then(() => { setContent(editContent); setSaving(false); })
+      .catch((e) => { setError((e as Error).message); setSaving(false); });
   };
 
   const rootLabel = (r: string) => ROOT_LABELS[r] || r;
@@ -141,20 +156,38 @@ export default function Files() {
           <div className="card">
             <div className="card-header">
               <div>
-                <h2 style={{ margin: 0 }}>Preview</h2>
+                <h2 style={{ margin: 0 }}>{isUserMd(selectedFile) ? "Edit" : "Preview"}</h2>
                 <p className="help" style={{ marginTop: "0.25rem" }}>
                   {selectedFile ? selectedFile : "Select a file to preview its contents."}
                 </p>
               </div>
               {selectedFile ? (
-                <button type="button" className="btn btn-secondary" onClick={() => openFile(selectedFile)}>
-                  Reload
-                </button>
+                <>
+                  {isUserMd(selectedFile) ? (
+                    <button type="button" className="btn btn-primary" onClick={saveUserMd} disabled={saving}>
+                      {saving ? "Saving…" : "Save"}
+                    </button>
+                  ) : (
+                    <button type="button" className="btn btn-secondary" onClick={() => openFile(selectedFile)}>
+                      Reload
+                    </button>
+                  )}
+                </>
               ) : null}
             </div>
 
             {selectedFile ? (
-              <pre className="file-preview">{content || "Loading…"}</pre>
+              isUserMd(selectedFile) ? (
+                <textarea
+                  className="file-preview"
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                  placeholder="Location, preferred name, important facts…"
+                  style={{ minHeight: "200px", fontFamily: "inherit", resize: "vertical" }}
+                />
+              ) : (
+                <pre className="file-preview">{content || "Loading…"}</pre>
+              )
             ) : (
               <div className="alert">
                 Tip: set <code>ASTA_ALLOWED_PATHS</code> in <code>backend/.env</code> to control what shows up here.

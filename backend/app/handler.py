@@ -106,26 +106,27 @@ async def handle_message(
     if extra.get("is_learning"):
         skills_to_use = skills_to_use | {"learn"}
 
-    # If user asks for time/weather but no city is saved yet, explicitly ask for their location instead
-    if ("time" in skills_to_use or "weather" in skills_to_use) and not await db.get_user_location(user_id):
-        t_lower = (text or "").strip().lower()
-        if True: # Logic simplified as location is parsed at start
+    # If user asks for time/weather but no location (DB or User.md), ask for their location
+    if "time" in skills_to_use or "weather" in skills_to_use:
+        from app.services.reminder_service import _get_effective_location
+        loc = await _get_effective_location(user_id)
+        if not loc:
+            t_lower = (text or "").strip().lower()
             if "time" in skills_to_use and any(
                 k in t_lower for k in ("what time", "what's the time", "what time is it", "current time", "time?")
             ):
                 await db.set_pending_location_request(user_id)
                 return (
-                    "I don't know your location yet, so I can't give your local time. "
-                    "I don't know your location yet, so I can't give your local time. "
-                    "Tell me your city and country once (for example: \"I'm in Holon, Israel\") and I'll remember it."
+                    "I don't know your location yet. Add it in Files → About you (User.md) under **Location:**, "
+                    "or tell me your city and country (e.g. \"I'm in Holon, Israel\")."
                 )
             if "weather" in skills_to_use and any(
                 k in t_lower for k in ("weather", "temperature", "forecast", "rain", "sunny", "tomorrow")
             ):
                 await db.set_pending_location_request(user_id)
                 return (
-                    "I don't know where you are yet, so I can't give the weather. "
-                    "Tell me your city and country (for example: \"I'm in Holon, Israel\") and I'll remember it."
+                    "I don't know where you are yet. Add it in Files → About you (User.md) under **Location:**, "
+                    "or tell me your city and country (e.g. \"I'm in Holon, Israel\")."
                 )
 
     # Status: only the skills we're actually using, with emojis
@@ -260,6 +261,12 @@ async def handle_message(
     for k, v in parse_save_instructions(reply):
         add_memory(user_id, k, v)
     reply = strip_save_instructions(reply)
+
+    # Post-reply validation: AI claimed it set a reminder but we didn't
+    if "reminders" in skills_to_use and not extra.get("reminder_scheduled"):
+        lower = reply.lower()
+        if any(p in lower for p in ("i've set a reminder", "i set a reminder", "reminder set", "i'll remind you", "i'll send you a message at")):
+            reply += "\n\n_I couldn't parse that reminder. Try: \"remind me in 5 min to X\" or \"alarm in 5 min to take a shower\"_"
 
     await db.add_message(cid, "user", text)
     if not (reply.strip().startswith("Error:") or reply.strip().startswith("No AI provider")):

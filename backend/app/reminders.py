@@ -16,6 +16,16 @@ RE_IN_MINUTES = re.compile(
     r"remind\s+me\s+in\s+(\d+)\s*(min(?:ute)?s?|hr?s?|hours?)\s+(?:to\s+)?(.+)",
     re.I,
 )
+# "alarm in 5 min to X", "put/set alarm in 5 min", "timer 10 min", "set timer for 2h"
+RE_ALARM_TIMER = re.compile(
+    r"(?:(?:put|set)\s+(?:a\s+)?)?(?:alarm|timer)\s+(?:in\s+)?(?:for\s+)?(\d+)\s*(min(?:ute)?s?|hr?s?|hours?|m|h)(?:\s+(?:to\s+)?(.+))?",
+    re.I,
+)
+# "5 min from now", "alarm 5 min from now", "reminder 5 minutes from now"
+RE_FROM_NOW = re.compile(
+    r"(?:(?:alarm|reminder|remind)\s+(?:me\s+)?)?(\d+)\s*(min(?:ute)?s?|hr?s?|hours?|m|h)\s+from\s+now(?:\s+(?:to\s+)?(.+))?",
+    re.I,
+)
 # "remind me at 6pm to X", "remind me at 18:00 to X", "remind me tomorrow at 8am to X"
 RE_REMIND_AT = re.compile(
     r"remind\s+me\s+(?:tomorrow\s+)?at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}:\d{2})\s+(?:to\s+)?(.+)",
@@ -61,15 +71,31 @@ def parse_reminder(text: str, tz_str: str | None = None) -> dict[str, Any] | Non
     now_utc = datetime.now(timezone.utc)
     ref_now = datetime.now(tz) if tz else now_utc
 
+    def _parse_delta(num: int, unit: str):
+        u = (unit or "").lower()
+        if "h" == u or "hr" in u or "hour" in u:
+            return timedelta(hours=num)
+        return timedelta(minutes=num)
+
     # "remind me in 30 min to do X"
     m = RE_IN_MINUTES.search(text)
     if m:
         num, unit, msg = int(m.group(1)), (m.group(2) or "").lower(), (m.group(3) or "").strip()
-        if "hr" in unit or "hour" in unit:
-            delta = timedelta(hours=num)
-        else:
-            delta = timedelta(minutes=num)
-        run_at = now_utc + delta
+        run_at = now_utc + _parse_delta(num, unit)
+        return {"message": msg or "Reminder", "run_at": run_at, "display_time": None}
+
+    # "alarm in 5 min to X", "put alarm in 5 min", "timer 10 min"
+    m = RE_ALARM_TIMER.search(text)
+    if m:
+        num, unit, msg = int(m.group(1)), (m.group(2) or "").lower(), (m.group(3) or "").strip()
+        run_at = now_utc + _parse_delta(num, unit)
+        return {"message": msg or "Reminder", "run_at": run_at, "display_time": None}
+
+    # "5 min from now", "alarm 5 min from now", "reminder 5 minutes from now"
+    m = RE_FROM_NOW.search(text)
+    if m:
+        num, unit, msg = int(m.group(1)), (m.group(2) or "").lower(), (m.group(3) or "").strip()
+        run_at = now_utc + _parse_delta(num, unit)
         return {"message": msg or "Reminder", "run_at": run_at, "display_time": None}
 
     # "wake me up at 7am" / "wake me up tomorrow at 7am" / "alarm at 7am"

@@ -389,6 +389,18 @@ class Db:
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
 
+    async def get_pending_reminders_for_user(self, user_id: str, limit: int = 5) -> list[dict[str, Any]]:
+        """Pending reminders for context (message, run_at)."""
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute(
+            """SELECT message, run_at FROM reminders WHERE user_id = ? AND status = 'pending'
+               ORDER BY run_at ASC LIMIT ?""",
+            (user_id, limit),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
     async def delete_reminder(self, reminder_id: int) -> bool:
         if not self._conn:
             await self.connect()

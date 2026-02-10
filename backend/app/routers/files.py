@@ -2,9 +2,14 @@
 import os
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 from app.config import get_settings
 
 router = APIRouter()
+
+
+class FileWriteIn(BaseModel):
+    content: str
 
 # Virtual roots for Asta knowledge and User memories
 ASTA_KNOWLEDGE = "asta:knowledge"
@@ -32,7 +37,8 @@ def _ensure_allowed(absolute: Path) -> None:
 
 
 def _asta_root() -> Path:
-    return Path(__file__).resolve().parent.parent.parent
+    """Asta project root (contains backend/, docs/, README.md)."""
+    return Path(__file__).resolve().parent.parent.parent.parent
 
 
 def _asta_docs() -> list[tuple[str, str]]:
@@ -60,7 +66,8 @@ async def list_files(directory: str = "", user_id: str = "default"):
         return {"root": ASTA_KNOWLEDGE, "entries": entries}
 
     if directory == USER_MEMORIES:
-        from app.memories import load_user_memories
+        from app.memories import ensure_user_md, load_user_memories
+        ensure_user_md(user_id)
         content = load_user_memories(user_id)
         entries = [{"name": "User.md", "path": f"{USER_MEMORIES}/User.md", "dir": False, "size": len(content.encode("utf-8"))}]
         return {"root": USER_MEMORIES, "entries": entries}
@@ -113,8 +120,9 @@ def _read_virtual(path: str, user_id: str) -> str:
             return fp.read_text(encoding="utf-8")
         raise HTTPException(404, "File not found")
     if path == f"{USER_MEMORIES}/User.md" or path == "user:memories/User.md":
-        from app.memories import load_user_memories
-        return load_user_memories(user_id) or "# About you\n\n(No memories yet. Tell Asta your name, location, or important facts.)"
+        from app.memories import ensure_user_md, load_user_memories
+        ensure_user_md(user_id)
+        return load_user_memories(user_id)
     raise HTTPException(404, "File not found")
 
 
@@ -131,3 +139,13 @@ async def read_file(path: str, user_id: str = "default"):
         raise HTTPException(404, "Not a file")
     content = p.read_text(encoding="utf-8", errors="replace")
     return {"path": path, "content": content}
+
+
+@router.put("/files/write")
+async def write_file(path: str, body: FileWriteIn, user_id: str = "default"):
+    """Write content to a virtual file. Only user:memories/User.md is writable."""
+    if path != f"{USER_MEMORIES}/User.md" and path != "user:memories/User.md":
+        raise HTTPException(403, "Only user:memories/User.md can be edited via the API")
+    from app.memories import save_user_memories
+    save_user_memories(user_id, body.content)
+    return {"path": path, "ok": True}

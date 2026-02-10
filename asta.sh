@@ -174,6 +174,13 @@ install_asta() {
     print_sub "Source: $source"
     print_sub "Target: $target"
     
+    # Create data/ and User.md if not present
+    mkdir -p "$SCRIPT_DIR/data"
+    if [ ! -f "$SCRIPT_DIR/data/User.md" ]; then
+        printf '%s\n' "# About you" "" "- **Location:** " "- **Preferred name:** " "- **Important:**" "  - " > "$SCRIPT_DIR/data/User.md"
+        print_sub "Created data/User.md"
+    fi
+    
     cmd="ln -sf \"$source\" \"$target\""
     
     if [ -w "/usr/local/bin" ]; then
