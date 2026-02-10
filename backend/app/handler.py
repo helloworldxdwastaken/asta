@@ -255,6 +255,12 @@ async def handle_message(
              else:
                  reply = reply.replace(match.group(0), "") # Remove tag if failed
 
+    # Extract and apply memories from [SAVE: key: value] in reply
+    from app.memories import parse_save_instructions, strip_save_instructions, add_memory
+    for k, v in parse_save_instructions(reply):
+        add_memory(user_id, k, v)
+    reply = strip_save_instructions(reply)
+
     await db.add_message(cid, "user", text)
     if not (reply.strip().startswith("Error:") or reply.strip().startswith("No AI provider")):
         await db.add_message(cid, "assistant", reply, provider.name)

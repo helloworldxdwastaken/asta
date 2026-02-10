@@ -3,6 +3,11 @@ import { api } from "../api/client";
 
 type Entry = { name: string; path: string; dir: boolean; size?: number };
 
+const ROOT_LABELS: Record<string, string> = {
+  "asta:knowledge": "Asta knowledge",
+  "user:memories": "About you (User.md)",
+};
+
 export default function Files() {
   const [roots, setRoots] = useState<string[]>([]);
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -54,42 +59,38 @@ export default function Files() {
     api.filesRead(path).then((r) => setContent(r.content)).catch((e) => setContent("Error: " + (e as Error).message));
   };
 
+  const rootLabel = (r: string) => ROOT_LABELS[r] || r;
+
   const crumbs = (() => {
     if (!currentRoot) return [];
-    const parts = currentRoot.split("/").filter(Boolean);
-    const acc: { label: string; path: string }[] = [];
-    let p = "";
-    for (const part of parts) {
-      p += "/" + part;
-      acc.push({ label: part, path: p });
-    }
-    return acc;
+    const label = ROOT_LABELS[currentRoot] || currentRoot;
+    return [{ label, path: currentRoot }];
   })();
 
   return (
     <div>
       <h1 className="page-title">Files</h1>
       <p className="page-description">
-        Browse allowed paths (set ASTA_ALLOWED_PATHS in .env). AI can use this context when you chat.
+        Asta knowledge (docs), your memories (User.md), and allowed paths. AI uses this context when you chat.
       </p>
       {error && <div className="alert alert-error">{error}</div>}
       {roots.length === 0 && !error && (
         <div className="card">
-          <p>No allowed paths configured. Add ASTA_ALLOWED_PATHS (comma-separated dirs) and restart.</p>
+          <p>No roots available. Add ASTA_ALLOWED_PATHS (comma-separated dirs) in backend/.env and restart.</p>
         </div>
       )}
       {roots.length > 0 && (
         <div className="card">
           <div className="field">
-            <div className="label">Roots</div>
+            <div className="label">Browse</div>
             <div className="actions">
               {roots.map((r) => (
                 <button key={r} type="button" onClick={() => openDir(r)} className="btn btn-secondary">
-                  {r}
+                  {rootLabel(r)}
                 </button>
               ))}
             </div>
-            <p className="help">Only these directories are visible to the panel/AI (configured in the backend).</p>
+            <p className="help">Asta knowledge = docs. About you = User.md memories. Add ASTA_ALLOWED_PATHS for more.</p>
           </div>
         </div>
       )}

@@ -82,6 +82,7 @@ async def build_context(
     weather_enabled = await db.get_skill_enabled(user_id, "weather")
     google_search_enabled = await db.get_skill_enabled(user_id, "google_search")
     spotify_enabled = await db.get_skill_enabled(user_id, "spotify")
+    lyrics_enabled = await db.get_skill_enabled(user_id, "lyrics")
     reminders_enabled = await db.get_skill_enabled(user_id, "reminders")
     self_awareness_enabled = await db.get_skill_enabled(user_id, "self_awareness")
 
@@ -98,6 +99,15 @@ async def build_context(
     if drive_enabled and _use("drive") and extra and extra.get("drive_summary"):
         parts.append("--- Google Drive ---")
         parts.append(extra["drive_summary"])
+        parts.append("")
+
+    # User memories (User.md: place, preferred name, max 10 important facts)
+    from app.memories import load_user_memories
+    mem_content = load_user_memories(user_id)
+    if mem_content:
+        parts.append("--- About you (memories) ---")
+        parts.append(mem_content)
+        parts.append("Use this when relevant. Do not contradict it. To add a memory, end your message with [SAVE: key: value]. Only save when the user explicitly shares something new and important. Max 10 important facts total.")
         parts.append("")
 
     # Self Awareness: Asta docs

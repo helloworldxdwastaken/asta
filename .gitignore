@@ -19,6 +19,7 @@ token.json
 # Backend (API keys, DB with chats/reminders/phone refs)
 backend/.env
 backend/asta.db
+data/
 .asta.pid
 .asta-frontend.pid
 backend/*.db

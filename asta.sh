@@ -420,9 +420,32 @@ case "$1" in
     version)
         print_asta_banner
         ;;
+    help|--help|-h)
+        print_asta_banner
+        echo -e "${WHITE}Commands:${NC}"
+        echo -e "  ${CYAN}start${NC}    Start backend + frontend"
+        echo -e "  ${CYAN}stop${NC}     Stop all services"
+        echo -e "  ${CYAN}restart${NC}  Restart all services"
+        echo -e "  ${CYAN}status${NC}   Show service status"
+        echo -e "  ${CYAN}update${NC}   Pull latest code and restart"
+        echo -e "  ${CYAN}install${NC}  Symlink asta to /usr/local/bin"
+        echo -e "  ${CYAN}version${NC}  Show version"
+        echo ""
+        echo -e "  ${GRAY}Run: ./asta.sh <command>${NC}"
+        exit 0
+        ;;
     *)
         print_asta_banner
-        echo "Usage: ./asta.sh {start|stop|restart|status|update|install|version}"
+        echo -e "${WHITE}Commands:${NC}"
+        echo -e "  ${CYAN}start${NC}    Start backend + frontend"
+        echo -e "  ${CYAN}stop${NC}     Stop all services"
+        echo -e "  ${CYAN}restart${NC}  Restart all services"
+        echo -e "  ${CYAN}status${NC}   Show service status"
+        echo -e "  ${CYAN}update${NC}   Pull latest code and restart"
+        echo -e "  ${CYAN}install${NC}  Symlink asta to /usr/local/bin"
+        echo -e "  ${CYAN}version${NC}  Show version"
+        echo ""
+        echo -e "  ${GRAY}Run: ./asta.sh <command>  or  asta help${NC}"
         exit 1
         ;;
 esac
