@@ -55,11 +55,12 @@ kill_port() {
     
     if [ -n "$pids" ]; then
         for pid in $pids; do
-            # Check process name to avoid killing sshd (port forwarding)
-            local pname
-            pname=$(ps -p "$pid" -o comm= 2>/dev/null)
-            if [ "$pname" == "sshd" ]; then
-                print_warning "Port $port is held by sshd (likely port forwarding). Skipping kill for PID $pid."
+            # Check process name/cmd to avoid killing sshd (port forwarding)
+            # Use -o args= to get the full command line, not just the name
+            local pcmd
+            pcmd=$(ps -p "$pid" -o args= 2>/dev/null)
+            if [[ "$pcmd" == *"sshd"* ]] || [[ "$pcmd" == *"ssh"* ]]; then
+                print_warning "Port $port is held by ssh/sshd (likely port forwarding). Skipping kill for PID $pid ($pcmd)."
                 continue
             fi
 
