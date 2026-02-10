@@ -380,6 +380,13 @@ show_status() {
 case "$1" in
     start)
         print_asta_banner
+        
+        # Check if installed globally
+        if ! command -v asta &> /dev/null; then
+             print_warning "Tip: Run './asta.sh install' to add 'asta' to your path and run it from anywhere."
+             echo ""
+        fi
+
         stop_all
         start_backend
         start_frontend

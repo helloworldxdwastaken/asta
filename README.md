@@ -22,7 +22,8 @@ cp .env.example backend/.env
 **2. Backend + frontend (Linux / macOS)**
 
 ```bash
-./asta.sh start
+./asta.sh install   # Optional: adds 'asta' to system path
+asta start          # Start AI + web panel
 ```
 
 Then open **http://localhost:5173** (panel) and **http://localhost:8010/docs** (API docs).
