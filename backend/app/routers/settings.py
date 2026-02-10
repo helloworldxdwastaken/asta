@@ -174,6 +174,8 @@ async def get_status(user_id: str = "default"):
         "lyrics": True,
         "spotify": await _spotify_configured(db),
         "audio_notes": True,
+        "self_awareness": True,
+        "silly_gif": api_status.get("giphy_api_key", False),
     }
     skills = []
     for sk in SKILLS:
@@ -324,6 +326,7 @@ async def get_skills(user_id: str = "default"):
     await db.connect()
     s = get_settings()
     toggles = await db.get_all_skill_toggles(user_id)
+    api_status = await db.get_api_keys_status()
     skills_available = {
         "files": bool(s.asta_allowed_paths and s.asta_allowed_paths.strip()),
         "drive": True,
@@ -335,6 +338,8 @@ async def get_skills(user_id: str = "default"):
         "lyrics": True,
         "spotify": await _spotify_configured(db),
         "audio_notes": True,
+        "self_awareness": True,
+        "silly_gif": api_status.get("giphy_api_key", False),
     }
     out = []
     for sk in SKILLS:
