@@ -8,6 +8,7 @@ const KEY_LABELS: Record<string, string> = {
   anthropic_api_key: "Anthropic (Claude)",
   openai_api_key: "OpenAI",
   openrouter_api_key: "OpenRouter",
+  giphy_api_key: "Giphy (for silly GIF skill)",
 };
 
 const PROVIDER_LABELS: Record<string, string> = {

@@ -10,6 +10,7 @@ from app.time_weather import geocode, parse_location_from_message
 from app.services.spotify_service import SpotifyService
 from app.services.reminder_service import ReminderService
 from app.services.learning_service import LearningService
+from app.services.giphy_service import GiphyService
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +94,7 @@ async def handle_message(
     # Intent-based skill selection: only run and show skills relevant to this message (saves tokens)
     from app.skill_router import get_skills_to_use, SKILL_STATUS_LABELS
     enabled = set()
-    for sid in ("time", "weather", "files", "drive", "rag", "google_search", "lyrics", "spotify", "reminders", "audio_notes"):
+    for sid in ("time", "weather", "files", "drive", "rag", "google_search", "lyrics", "spotify", "reminders", "audio_notes", "silly_gif", "self_awareness"):
         if await db.get_skill_enabled(user_id, sid):
             enabled.add(sid)
     
@@ -158,6 +159,35 @@ async def handle_message(
             extra["lyrics_searched_query"] = q
             extra["lyrics_result"] = await fetch_lyrics(q)
 
+    # Self Awareness: Asta documentation (README.md + docs/*.md)
+    if "self_awareness" in skills_to_use:
+        t_lower = text.lower()
+        if any(k in t_lower for k in ("asta", "help", "documentation", "manual", "how to use", "what is this", "what can you do", "features", "capabilities", "yourself", "who are you")):
+            try:
+                import os
+                import glob
+                # backend/app/handler.py -> ... -> asta root
+                root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+                docs = []
+                
+                # 1. README.md
+                readme_path = os.path.join(root, "README.md")
+                if os.path.exists(readme_path):
+                    docs.append(f"--- README.md ---\n{open(readme_path, encoding='utf-8').read()}")
+                
+                # 2. docs/*.md
+                docs_dir = os.path.join(root, "docs")
+                if os.path.exists(docs_dir):
+                    for f in sorted(glob.glob(os.path.join(docs_dir, "*.md"))):
+                        name = os.path.basename(f)
+                        content = open(f, encoding='utf-8').read()
+                        docs.append(f"--- docs/{name} ---\n{content}")
+                
+                if docs:
+                    extra["asta_docs"] = "\n\n".join(docs)
+            except Exception as e:
+                logger.error(f"Failed to read docs: {e}")
+
     # Past meetings: when user asks about "last meeting" / "remember the meeting" etc., inject saved meeting notes
     if "audio_notes" in enabled:
         t_lower = (text or "").strip().lower()
@@ -178,6 +208,14 @@ async def handle_message(
     
     # Build context (only sections for skills_in_use to save tokens)
     context = await build_context(db, user_id, cid, extra, skills_in_use=skills_to_use)
+    
+    # Silly GIF skill: Proactive instruction (not intent-based)
+    if "silly_gif" in enabled:
+        context += (
+            "\n\n[SKILL: SILLY GIF ENABLED]\n"
+            "You can occasionally (10-20% chance) send a relevant GIF by adding `[gif: search term]` at the end of your message. "
+            "Only do this when the mood is friendly or fun. Example: 'That's awesome! [gif: happy dance]'"
+        )
     # Load recent messages; skip old assistant error messages so the model doesn't repeat "check your API key"
     recent = await db.get_recent_messages(cid, limit=20)
 
@@ -204,6 +242,19 @@ async def handle_message(
         return f"No AI provider found for '{provider_name}'. Check your provider settings."
     user_model = await db.get_user_provider_model(user_id, provider.name)
     reply = await provider.chat(messages, context=context, model=user_model or None)
+    
+    # Expand GIF tags
+    if "[gif:" in reply:
+        import re
+        match = re.search(r"\[gif:\s*(.+?)\]", reply, re.IGNORECASE)
+        if match:
+             query = match.group(1).strip()
+             gif_markdown = await GiphyService.get_gif(query)
+             if gif_markdown:
+                 reply = reply.replace(match.group(0), "\n" + gif_markdown)
+             else:
+                 reply = reply.replace(match.group(0), "") # Remove tag if failed
+
     await db.add_message(cid, "user", text)
     if not (reply.strip().startswith("Error:") or reply.strip().startswith("No AI provider")):
         await db.add_message(cid, "assistant", reply, provider.name)

@@ -66,10 +66,15 @@ def get_skills_to_use(text: str, enabled_skill_ids: set[str]) -> set[str]:
         out.discard("google_search")
         out.discard("rag")
 
-    # Files: file, document, folder, path
+    # Files: file, document, folder, path, directory
     if "files" in enabled_skill_ids:
         if any(k in t for k in ("file", "files", "document", "folder", "path", "directory")):
             out.add("files")
+            
+    # Self Awareness: Asta documentation/help
+    if "self_awareness" in enabled_skill_ids:
+        if any(k in t for k in ("asta", "help", "documentation", "manual", "how to use", "what is this", "what can you do", "features", "capabilities", "yourself", "who are you")):
+            out.add("self_awareness")
 
     # Drive: drive, google drive
     if "drive" in enabled_skill_ids:
@@ -92,4 +97,6 @@ SKILL_STATUS_LABELS: dict[str, str] = {
     "spotify": "🎧 Searching Spotify…",
     "reminders": "⏰ Setting reminder…",
     "audio_notes": "🎤 Processing audio…",
+    "self_awareness": "🧠 Checking self-knowledge…",
+    "silly_gif": "🎬 Searching Giphy…",
 }

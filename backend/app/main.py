@@ -51,10 +51,17 @@ async def lifespan(app: FastAPI):
             logger.exception("Telegram bot shutdown: %s", e)
 
 
+# Read version from file (root/VERSION)
+try:
+    with open(Path(__file__).resolve().parent.parent.parent / "VERSION", "r") as f:
+        VERSION = f.read().strip()
+except Exception:
+    VERSION = "0.0.0"
+
 app = FastAPI(
     title="Asta",
     description="Asta: personal control plane — AI, WhatsApp, Telegram, files, Drive, RAG.",
-    version="0.1.0",
+    version=VERSION,
     lifespan=lifespan,
 )
 
@@ -87,7 +94,7 @@ app.include_router(settings_router.router, tags=["settings"])
 def root():
     return {
         "app": settings.app_name,
-        "version": "0.1.0",
+        "version": VERSION,
         "docs": "/docs",
         "status": "ok",
     }
@@ -96,7 +103,7 @@ def root():
 @app.get("/health")
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "app": settings.app_name, "version": "0.1.0"}
+    return {"status": "ok", "app": settings.app_name, "version": VERSION}
 
 
 @app.get("/api/restart")

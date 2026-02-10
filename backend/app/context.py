@@ -81,9 +81,9 @@ async def build_context(
     time_enabled = await db.get_skill_enabled(user_id, "time")
     weather_enabled = await db.get_skill_enabled(user_id, "weather")
     google_search_enabled = await db.get_skill_enabled(user_id, "google_search")
-    lyrics_enabled = await db.get_skill_enabled(user_id, "lyrics")
     spotify_enabled = await db.get_skill_enabled(user_id, "spotify")
     reminders_enabled = await db.get_skill_enabled(user_id, "reminders")
+    self_awareness_enabled = await db.get_skill_enabled(user_id, "self_awareness")
 
     # Files summary (allowed paths)
     if files_enabled and _use("files") and s.asta_allowed_paths:
@@ -98,6 +98,14 @@ async def build_context(
     if drive_enabled and _use("drive") and extra and extra.get("drive_summary"):
         parts.append("--- Google Drive ---")
         parts.append(extra["drive_summary"])
+        parts.append("")
+
+    # Self Awareness: Asta docs
+    if self_awareness_enabled and _use("self_awareness") and extra and extra.get("asta_docs"):
+        parts.append("--- Asta Documentation (Source Code & Manual) ---")
+        parts.append(extra["asta_docs"])
+        parts.append("")
+        parts.append("Use the documentation above to answer questions about Asta's features, installation, or configuration. Be helpful and specific.")
         parts.append("")
 
     # Past meetings (saved when user chose "meeting notes"; user can ask "last meeting?" etc.)

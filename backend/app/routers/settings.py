@@ -41,12 +41,14 @@ SKILLS = [
     {"id": "spotify", "name": "Spotify", "description": "Search songs on Spotify. Set Client ID and Secret in Settings → Spotify (or in backend/.env). Playback on your devices (with device picker) coming soon."},
     {"id": "reminders", "name": "Reminders", "description": "Wake me up or remind me at a time. Set your location so times are in your timezone. E.g. 'Wake me up tomorrow at 7am' or 'Remind me at 6pm to call mom'."},
     {"id": "audio_notes", "name": "Audio notes", "description": "Upload audio (meetings, calls, voice memos); Asta transcribes and formats as meeting notes, action items, or conversation summary. No API key for transcription (runs locally)."},
+    {"id": "silly_gif", "name": "Silly GIF", "description": "Occasionally replies with a relevant GIF in friendly chats. Requires Giphy API key."},
+    {"id": "self_awareness", "name": "Self Awareness", "description": "Allows Asta to read its own documentation and source code context when asked about itself."},
 ]
 
 ALLOWED_API_KEY_NAMES = frozenset({
     "groq_api_key", "gemini_api_key", "google_ai_key",
     "anthropic_api_key", "openai_api_key", "openrouter_api_key",
-    "telegram_bot_token",
+    "telegram_bot_token", "giphy_api_key",
     "spotify_client_id", "spotify_client_secret",
 })
 
@@ -211,6 +213,7 @@ class ApiKeysIn(BaseModel):
     openai_api_key: str | None = None
     openrouter_api_key: str | None = None
     telegram_bot_token: str | None = None
+    giphy_api_key: str | None = None
     spotify_client_id: str | None = None
     spotify_client_secret: str | None = None
 

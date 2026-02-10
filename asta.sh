@@ -25,6 +25,14 @@ WHITE='\033[38;5;255m'
 BOLD='\033[1m'
 NC='\033[0m'
 
+get_version() {
+    if [ -f "$SCRIPT_DIR/VERSION" ]; then
+        cat "$SCRIPT_DIR/VERSION" | tr -d '\n'
+    else
+        echo "0.1.0"
+    fi
+}
+
 print_asta_banner() {
     echo -e "${MAGENTA}${BOLD}"
     echo "    ▄▄▄       ██████ ▄▄▄█████▓ ▄▄▄      "
@@ -34,7 +42,7 @@ print_asta_banner() {
     echo "    ▓█   ▓██▒██████▒▒  ▒██▒ ░  ▓█   ▓██▒"
     echo "    ▒▒   ▓▒█▒ ▒▓▒ ▒ ░  ▒ ░░    ▒▒   ▓▒█░"
     echo -e "     ░   ▒▒ ░ ░▒  ░ ░    ░      ░   ▒▒ ░${NC}"
-    echo -e "     ${CYAN}  AI Control Plane ${GRAY}:: ${WHITE}v0.1.0${NC}\n"
+    echo -e "     ${CYAN}  AI Control Plane ${GRAY}:: ${WHITE}v$(get_version)${NC}\n"
 }
 
 print_status() { echo -e "${CYAN}➜${NC} $1"; }
@@ -122,6 +130,53 @@ safe_kill_pid() {
         kill -9 "$pid" 2>/dev/null
     fi
     return 0
+}
+
+update_asta() {
+    print_status "Updating Asta..."
+    cd "$SCRIPT_DIR" || exit 1
+    
+    if ! command -v git &> /dev/null; then
+        print_error "Git not found. Cannot update."
+        return 1
+    fi
+    
+    if [ ! -d ".git" ]; then
+        print_error "Not a git repository. Cannot update."
+        return 1
+    fi
+    
+    print_sub "Pulling from origin..."
+    if git pull; then
+        print_success "Code updated. Restarting services..."
+        stop_all
+        start_backend
+        start_frontend
+        show_status
+    else
+        print_error "Git pull failed."
+        return 1
+    fi
+}
+
+install_asta() {
+    print_status "Installing 'asta' command to system..."
+    local target="/usr/local/bin/asta"
+    local source="$SCRIPT_DIR/asta.sh"
+    
+    print_sub "Source: $source"
+    print_sub "Target: $target"
+    
+    cmd="ln -sf \"$source\" \"$target\""
+    
+    if [ -w "/usr/local/bin" ]; then
+        eval "$cmd"
+        print_success "Installed! You can now run 'asta' from anywhere."
+    else
+        print_warning "Need sudo permissions to write to /usr/local/bin."
+        echo -e "Run this command manually:\n"
+        echo -e "    ${WHITE}sudo $cmd${NC}\n"
+    fi
 }
 
 stop_backend() {
@@ -340,9 +395,20 @@ case "$1" in
         print_asta_banner
         show_status
         ;;
+    update)
+        print_asta_banner
+        update_asta
+        ;;
+    install)
+        print_asta_banner
+        install_asta
+        ;;
+    version)
+        print_asta_banner
+        ;;
     *)
         print_asta_banner
-        echo "Usage: ./asta.sh {start|stop|restart|status}"
+        echo "Usage: ./asta.sh {start|stop|restart|status|update|install|version}"
         exit 1
         ;;
 esac
