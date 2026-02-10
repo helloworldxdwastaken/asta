@@ -36,13 +36,37 @@ async def handle_message(
         provider_name = await db.get_user_default_ai(user_id)
 
     # If user is setting their location (for time/weather skill), save it now
+    # 1. Explicit syntax "I'm in Paris"
     location_place = parse_location_from_message(text)
+    
+    # 2. Check if we *asked* for location recently (pending request)
+    if not location_place:
+        if await db.get_pending_location_request(user_id):
+            # Treat the entire text as a potential location (e.g. "Holon, Israel")
+            # But skip if it's too long or looks like a command
+            clean_text = text.strip()
+            if len(clean_text) < 100 and " " in clean_text: # Simple heuristic: cities usually have short names, maybe allow single words too?
+                 # Actually single word cities exist "London". Let's allow anything short enough.
+                 location_place = clean_text
+            elif len(clean_text) < 50:
+                 location_place = clean_text
+    
     if location_place:
         result = await geocode(location_place)
         if result:
             lat, lon, name = result
             await db.set_user_location(user_id, name, lat, lon)
+            await db.clear_pending_location_request(user_id) # Clear flag
             extra["location_just_set"] = name
+            # If we just set location, we might want to ACK it here or let the context know
+        else:
+            # If we were pending and failed to geocode, maybe we shouldn't clear? 
+            # Or maybe we should to avoid getting stuck. Let's clear if it was an explicit "I'm in X" 
+            # but if it was pending, maybe they said "No thanks". 
+            # For now, let's just log and move on.
+            if await db.get_pending_location_request(user_id):
+                 await db.clear_pending_location_request(user_id) # Assume they replied something else
+
 
     # --- SERVICE CALLS ---
 
@@ -88,13 +112,16 @@ async def handle_message(
             if "time" in skills_to_use and any(
                 k in t_lower for k in ("what time", "what's the time", "what time is it", "current time", "time?")
             ):
+                await db.set_pending_location_request(user_id)
                 return (
+                    "I don't know your location yet, so I can't give your local time. "
                     "I don't know your location yet, so I can't give your local time. "
                     "Tell me your city and country once (for example: \"I'm in Holon, Israel\") and I'll remember it."
                 )
             if "weather" in skills_to_use and any(
                 k in t_lower for k in ("weather", "temperature", "forecast", "rain", "sunny", "tomorrow")
             ):
+                await db.set_pending_location_request(user_id)
                 return (
                     "I don't know where you are yet, so I can't give the weather. "
                     "Tell me your city and country (for example: \"I'm in Holon, Israel\") and I'll remember it."

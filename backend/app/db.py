@@ -131,6 +131,15 @@ class Db:
             except Exception as e:
                 self.logger.exception("Failed to add default_ai_provider column: %s", e)
 
+        if "pending_location_request" not in columns:
+            try:
+                await self._conn.execute(
+                    "ALTER TABLE user_settings ADD COLUMN pending_location_request TEXT"
+                )
+                await self._conn.commit()
+            except Exception as e:
+                self.logger.exception("Failed to add pending_location_request column: %s", e)
+
     async def get_or_create_conversation(self, user_id: str, channel: str) -> str:
         if not self._conn:
             await self.connect()
@@ -518,6 +527,37 @@ class Db:
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+
+    async def set_pending_location_request(self, user_id: str) -> None:
+        if not self._conn:
+            await self.connect()
+        await self._conn.execute(
+            """INSERT INTO user_settings (user_id, mood, default_ai_provider, pending_location_request, updated_at)
+               VALUES (?, 'normal', 'groq', datetime('now'), datetime('now'))
+               ON CONFLICT(user_id) DO UPDATE SET pending_location_request = datetime('now'), updated_at = datetime('now')""",
+            (user_id,),
+        )
+        await self._conn.commit()
+
+    async def get_pending_location_request(self, user_id: str, max_age_minutes: int = 5) -> bool:
+        """Return True if we asked for location recently."""
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute(
+            "SELECT pending_location_request FROM user_settings WHERE user_id = ? AND datetime(pending_location_request) >= datetime('now', ?)",
+            (user_id, f"-{max_age_minutes} minutes"),
+        )
+        row = await cursor.fetchone()
+        return bool(row["pending_location_request"]) if row else False
+
+    async def clear_pending_location_request(self, user_id: str) -> None:
+        if not self._conn:
+            await self.connect()
+        await self._conn.execute(
+            "UPDATE user_settings SET pending_location_request = NULL WHERE user_id = ?",
+            (user_id,),
+        )
+        await self._conn.commit()
 
     async def close(self) -> None:
         if self._conn:

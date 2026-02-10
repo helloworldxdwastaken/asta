@@ -56,11 +56,17 @@ kill_port() {
     if [ -n "$pids" ]; then
         for pid in $pids; do
             # Check process name/cmd to avoid killing sshd (port forwarding)
-            # Use -o args= to get the full command line, not just the name
+            # Use -o args= to get the full command line
             local pcmd
             pcmd=$(ps -p "$pid" -o args= 2>/dev/null)
-            if [[ "$pcmd" == *"sshd"* ]] || [[ "$pcmd" == *"ssh"* ]]; then
-                print_warning "Port $port is held by ssh/sshd (likely port forwarding). Skipping kill for PID $pid ($pcmd)."
+            
+            # Whitelist approach: Only kill if it looks like our app
+            # If it's sshd, bash, zsh, etc., we skip it.
+            if [[ "$pcmd" =~ "python" ]] || [[ "$pcmd" =~ "uvicorn" ]] || [[ "$pcmd" =~ "node" ]] || [[ "$pcmd" =~ "vite" ]] || [[ "$pcmd" =~ "npm" ]]; then
+                # Safe to kill
+                 :
+            else
+                print_warning "Port $port is held by unknown process (PID $pid: $pcmd). Skipping kill to protect SSH/System."
                 continue
             fi
 
