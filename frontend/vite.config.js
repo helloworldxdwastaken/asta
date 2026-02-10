@@ -10,7 +10,8 @@ export default defineConfig({
         port: 5173,
         proxy: {
             "/api": {
-                target: process.env.VITE_API_URL || "http://localhost:8000",
+                // Default backend port 8010 (configurable via VITE_API_URL)
+                target: process.env.VITE_API_URL || "http://localhost:8010",
                 changeOrigin: true,
             },
         },

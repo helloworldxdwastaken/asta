@@ -178,7 +178,7 @@ async def handle_message(
             except Exception:
                 pass
 
-    # Spotify: search or play
+    # Spotify: search, play, and basic controls (skip, volume)
     if "spotify" in skills_to_use:
         from app.spotify_client import (
             spotify_search_if_configured,
@@ -187,9 +187,49 @@ async def handle_message(
             get_user_access_token,
             list_user_devices,
             start_playback,
+            extract_playlist_uri,
+            parse_volume_percent,
+            skip_next_track,
+            set_volume_percent,
         )
+        t_lower = (text or "").strip().lower()
+
+        # Skip / next track
+        if any(k in t_lower for k in ("skip", "next song", "next track")):
+            ok = await skip_next_track(user_id)
+            extra["spotify_play_connected"] = True
+            extra["spotify_skipped"] = ok
+
+        # Volume control: set to N%
+        vol = parse_volume_percent(text) if "volume" in t_lower or "turn it up" in t_lower or "turn it down" in t_lower else None
+        if vol is not None:
+            ok = await set_volume_percent(user_id, vol)
+            extra["spotify_play_connected"] = True
+            extra["spotify_volume_set"] = ok
+            extra["spotify_volume_value"] = vol
+
+        # Playlist play (when a playlist URI / URL is present)
+        playlist_uri = extract_playlist_uri(text)
         play_query = play_query_from_message(text)
-        if play_query:
+        if playlist_uri:
+            token = await get_user_access_token(user_id)
+            if not token:
+                row = await db.get_spotify_tokens(user_id)
+                if row:
+                    extra["spotify_reconnect_needed"] = True
+                else:
+                    extra["spotify_play_connected"] = False
+            else:
+                extra["spotify_play_connected"] = True
+                # Play playlist context on active device
+                ok = await start_playback(user_id, None, context_uri=playlist_uri)
+                if ok:
+                    extra["spotify_played_on"] = "active device"
+                else:
+                    extra["spotify_play_failed"] = True
+                    extra["spotify_play_failed_device"] = "active device"
+
+        elif play_query:
             token = await get_user_access_token(user_id)
             if not token:
                 # Distinguish "never connected" vs "had tokens but refresh failed / credentials missing"

@@ -1,9 +1,9 @@
 # Asta — Test Results
 
-Run the API smoke tests (with backend at http://localhost:8000):
+Run the API smoke tests (with backend at http://localhost:8010):
 
 ```bash
-./test_api.sh http://localhost:8000/api
+./test_api.sh http://localhost:8010/api
 ```
 
 ## API tests (run 2026-02-10)

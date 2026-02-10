@@ -16,7 +16,7 @@ export default function Dashboard() {
     api
       .status()
       .then((s) => { setStatus(s); setError(null); })
-      .catch(() => setError("Cannot reach Asta API. Is the backend running on port 8000?"));
+      .catch(() => setError("Cannot reach Asta API. Is the backend running on port 8010?"));
   }, []);
 
   useEffect(() => {
@@ -66,7 +66,7 @@ export default function Dashboard() {
                 Frontend cannot reach the API. Start the backend:
               </p>
               <code className="card-backend-code">
-                cd backend && uvicorn app.main:app --port 8000
+                cd backend && uvicorn app.main:app --port 8010
               </code>
               <button type="button" onClick={refresh} className="btn btn-secondary" style={{ marginTop: "0.75rem" }}>
                 Retry
@@ -80,7 +80,7 @@ export default function Dashboard() {
             <p className="muted">Checking…</p>
           )}
           <p className="card-backend-hint muted">
-            If the browser shows a sign-in prompt, click Cancel — only run the Asta backend on 8000.
+            If the browser shows a sign-in prompt, click Cancel — only run the Asta backend on your chosen API port (default 8010).
           </p>
         </div>
       </section>

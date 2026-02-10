@@ -15,7 +15,7 @@ cp .env.example backend/.env
 ./asta.sh start
 ```
 
-Open **http://localhost:5173** (panel) and **http://localhost:8000** (API docs).
+Open **http://localhost:5173** (panel) and **http://localhost:8010/docs** (API docs).
 
 ---
 
@@ -32,7 +32,7 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8010
 ```
 
 ### 3. Frontend (new terminal)
@@ -46,7 +46,7 @@ npm run dev
 ### 4. Open
 
 - Panel: **http://localhost:5173**
-- API docs: **http://localhost:8000/docs**
+- API docs: **http://localhost:8010/docs**
 
 ### 5. Optional
 
@@ -64,7 +64,7 @@ In the panel: **Settings** → add API keys (Groq, Gemini, Claude, Telegram, Spo
    python -m venv .venv
    .\.venv\Scripts\Activate.ps1
    pip install -r requirements.txt
-   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+   uvicorn app.main:app --reload --host 0.0.0.0 --port 8010
    ```
 
 3. **Frontend** (new terminal):
@@ -75,7 +75,7 @@ In the panel: **Settings** → add API keys (Groq, Gemini, Claude, Telegram, Spo
    npm run dev
    ```
 
-4. Open **http://localhost:5173** and **http://localhost:8000/docs**.
+4. Open **http://localhost:5173** and **http://localhost:8010/docs**.
 
 ---
 
@@ -120,15 +120,15 @@ Many keys can also be set in **Settings → API keys** or **Settings → Spotify
 If the panel shows **“API off”**:
 
 1. **Linux / macOS:** From repo root run `./asta.sh start` (or `./asta.sh restart`).
-2. **Or manually:** `cd backend`, activate venv, then `uvicorn app.main:app --host 0.0.0.0 --port 8000`.
+2. **Or manually:** `cd backend`, activate venv, then `uvicorn app.main:app --host 0.0.0.0 --port 8010`.
 3. **Settings → Run the API** in the panel shows the exact commands.
 
 ---
 
 ## Troubleshooting
 
-- **“Address already in use” (8000 or 5173)** — Run `./asta.sh restart` to free ports and start fresh. Or use another port, e.g. `uvicorn app.main:app --reload --port 8001`.
-- **“Cannot reach Asta API” / “API off”** — Start the backend: `./asta.sh start` or run uvicorn as above. Panel proxies `/api` to `http://localhost:8000`.
+- **“Address already in use” (8010 or 5173)** — Run `./asta.sh restart` to free ports and start fresh. Or use another port, e.g. `uvicorn app.main:app --reload --port 8001` and update `VITE_API_URL` / `ASTA_API_URL` accordingly.
+- **“Cannot reach Asta API” / “API off”** — Start the backend: `./asta.sh start` or run uvicorn as above. Panel talks to `http://localhost:8010/api` by default.
 - **“No AI provider available”** — Add at least one of: `GROQ_API_KEY`, `GEMINI_API_KEY`, or run Ollama and set `OLLAMA_BASE_URL`.
 - **Backend can’t find .env** — Backend reads **`backend/.env`** only. Run `cp .env.example backend/.env` from the repo root.
 - **Lyrics / Spotify / Reminders** — Enable the skill in **Settings → Skills**. For Spotify, add Client ID and Secret in Settings → Spotify; for reminders, set location in Chat.

@@ -30,7 +30,7 @@ function RestartBackendButton() {
     setIsError(false);
     try {
       await api.restartBackend();
-      setDone("Backend has stopped. Start it again in your terminal (e.g. cd backend && uvicorn app.main:app --port 8000) — the indicator above will turn green when it’s back.");
+      setDone("Backend has stopped. Start it again in your terminal (e.g. cd backend && uvicorn app.main:app --port 8010) — the indicator above will turn green when it’s back.");
     } catch (e) {
       setIsError(true);
       setDone("Request failed: " + ((e as Error).message || String(e)).slice(0, 80) + " — If backend is running, you should see Restart requested in the terminal when it works.");
@@ -411,7 +411,7 @@ export default function Settings() {
       const err = e as Error & { status?: number };
       let msg = err.message || String(e);
       if (msg.includes("Not Found") || msg.includes("404")) {
-        msg = "API not found. Is the backend running? Start it with: cd backend && source .venv/bin/activate && uvicorn app.main:app --port 8000. If you use port 8001, run: VITE_API_URL=http://localhost:8001 npm run dev";
+        msg = "API not found. Is the backend running? Start it with: cd backend && source .venv/bin/activate && uvicorn app.main:app --port 8010. If you use another port, run: VITE_API_URL=http://localhost:YOUR_PORT npm run dev";
       }
       setMessage("Error: " + msg);
     } finally {

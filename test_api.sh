@@ -1,7 +1,7 @@
 #!/bin/bash
-# Quick API smoke tests for Asta backend (expect backend at http://localhost:8000)
+# Quick API smoke tests for Asta backend (default backend http://localhost:8010)
 set -e
-BASE="${1:-http://localhost:8000/api}"
+BASE="${1:-http://localhost:8010/api}"
 echo "Testing base: $BASE"
 echo ""
 

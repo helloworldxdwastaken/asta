@@ -13,6 +13,8 @@ AUTH_URL = "https://accounts.spotify.com/authorize"
 SEARCH_URL = "https://api.spotify.com/v1/search"
 DEVICES_URL = "https://api.spotify.com/v1/me/player/devices"
 PLAY_URL = "https://api.spotify.com/v1/me/player/play"
+NEXT_URL = "https://api.spotify.com/v1/me/player/next"
+VOLUME_URL = "https://api.spotify.com/v1/me/player/volume"
 
 
 def _is_music_search(text: str) -> bool:
@@ -191,19 +193,30 @@ async def list_user_devices(user_id: str) -> list[dict[str, Any]]:
         return []
 
 
-async def start_playback(user_id: str, device_id: str | None, track_uri: str) -> bool:
-    """Start playing a track on the given device (or active device if device_id is None)."""
+async def start_playback(user_id: str, device_id: str | None, track_uri: str | None = None, context_uri: str | None = None) -> bool:
+    """Start playback on the given device (or active device).
+
+    - If context_uri is set (e.g. playlist/album URI), Spotify will play that context.
+    - Else, if track_uri is set, it plays that single track.
+    """
     token = await get_user_access_token(user_id)
     if not token:
+        return False
+    if not context_uri and not track_uri:
         return False
     params = {}
     if device_id:
         params["device_id"] = device_id
     try:
         async with httpx.AsyncClient() as client:
+            body: dict[str, Any] = {}
+            if context_uri:
+                body["context_uri"] = context_uri
+            elif track_uri:
+                body["uris"] = [track_uri]
             r = await client.put(
                 PLAY_URL + (f"?{urlencode(params)}" if params else ""),
-                json={"uris": [track_uri]},
+                json=body,
                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
                 timeout=10.0,
             )
@@ -242,3 +255,90 @@ def play_query_from_message(text: str) -> str | None:
     if rest.lower().endswith(" on spotify"):
         rest = rest[: -10].strip()
     return rest if rest else None
+
+
+def extract_playlist_uri(text: str) -> str | None:
+    """Extract a Spotify playlist URI from text (spotify:playlist:ID or https://open.spotify.com/playlist/ID...)."""
+    t = (text or "").strip()
+    lower = t.lower()
+    if "spotify.com/playlist/" in lower:
+        start = lower.index("spotify.com/playlist/") + len("spotify.com/playlist/")
+        end = start
+        while end < len(lower) and lower[end] not in ("?", " ", "\n", "\t"):
+            end += 1
+        playlist_id = lower[start:end]
+        if playlist_id:
+            return f"spotify:playlist:{playlist_id}"
+    if "spotify:playlist:" in lower:
+        start = lower.index("spotify:playlist:") + len("spotify:playlist:")
+        end = start
+        while end < len(lower) and lower[end] not in ("?", " ", "\n", "\t"):
+            end += 1
+        playlist_id = lower[start:end]
+        if playlist_id:
+            return f"spotify:playlist:{playlist_id}"
+    return None
+
+
+def parse_volume_percent(text: str) -> int | None:
+    """Parse volume percentage from text like 'set volume to 30%', 'volume 50'."""
+    import re
+
+    nums = re.findall(r"\b(\d{1,3})\b", text or "")
+    if not nums:
+        return None
+    try:
+        val = int(nums[0])
+    except ValueError:
+        return None
+    if val < 0:
+        val = 0
+    if val > 100:
+        val = 100
+    return val
+
+
+async def skip_next_track(user_id: str) -> bool:
+    """Skip to the next track on the active device."""
+    token = await get_user_access_token(user_id)
+    if not token:
+        return False
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                NEXT_URL,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10.0,
+            )
+            if r.status_code in (200, 204):
+                return True
+            logger.warning("Spotify skip failed: %s %s", r.status_code, r.text[:200])
+            return False
+    except Exception as e:
+        logger.warning("Spotify skip failed: %s", e)
+        return False
+
+
+async def set_volume_percent(user_id: str, volume_percent: int) -> bool:
+    """Set playback volume (0–100) on the active device."""
+    token = await get_user_access_token(user_id)
+    if not token:
+        return False
+    if volume_percent < 0:
+        volume_percent = 0
+    if volume_percent > 100:
+        volume_percent = 100
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.put(
+                VOLUME_URL + f"?{urlencode({'volume_percent': volume_percent})}",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10.0,
+            )
+            if r.status_code in (200, 204):
+                return True
+            logger.warning("Spotify volume failed: %s %s", r.status_code, r.text[:200])
+            return False
+    except Exception as e:
+        logger.warning("Spotify volume failed: %s", e)
+        return False

@@ -2,7 +2,7 @@
  * Asta WhatsApp bridge (whatsapp-web.js).
  * Receives messages, POSTs to Asta backend /api/incoming/whatsapp, sends reply.
  * Exposes GET /qr so the Asta panel can show a QR code to connect WhatsApp.
- * Set ASTA_API_URL (e.g. http://localhost:8000) and run: node index.js
+ * Set ASTA_API_URL (e.g. http://localhost:8010) and run: node index.js
  */
 import pkg from "whatsapp-web.js";
 const { Client, LocalAuth } = pkg;
@@ -10,7 +10,7 @@ import qrcodeTerminal from "qrcode-terminal";
 import qrcode from "qrcode";
 import express from "express";
 
-const ASTA_API_URL = process.env.ASTA_API_URL || "http://localhost:8000";
+const ASTA_API_URL = process.env.ASTA_API_URL || "http://localhost:8010";
 const PORT = parseInt(process.env.PORT || "3001", 10);
 
 let lastQr = null;

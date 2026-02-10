@@ -25,7 +25,7 @@ cp .env.example backend/.env
 ./asta.sh start
 ```
 
-Then open **http://localhost:5173** (panel) and **http://localhost:8000** (API docs).
+Then open **http://localhost:5173** (panel) and **http://localhost:8010/docs** (API docs).
 
 **3. Or run by hand**
 
@@ -33,7 +33,7 @@ Then open **http://localhost:5173** (panel) and **http://localhost:8000** (API d
 # Backend
 cd backend && python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+uvicorn app.main:app --host 0.0.0.0 --port 8010
 
 # Frontend (other terminal)
 cd frontend && npm install && npm run dev
@@ -49,7 +49,7 @@ From the repo root (Linux / macOS):
 
 | Command | What it does |
 |--------|----------------|
-| `./asta.sh start` | Start backend + frontend (frees ports 8000 and 5173 first) |
+| `./asta.sh start` | Start backend + frontend (frees ports 8010 and 5173 first) |
 | `./asta.sh stop` | Stop both |
 | `./asta.sh restart` | Stop, then start both (e.g. after changing Telegram token) |
 | `./asta.sh status` | Show if backend and frontend are running |
@@ -68,7 +68,7 @@ From the repo root (Linux / macOS):
 - **Skills** — Enable/disable time, weather, web search, lyrics, Spotify, reminders, audio notes, learning  
 
 **Telegram:** Set `TELEGRAM_BOT_TOKEN` in `backend/.env` or Settings; same user as the panel.  
-**WhatsApp:** Run `services/whatsapp` with `ASTA_API_URL=http://localhost:8000`; scan QR in Settings.
+**WhatsApp:** Run `services/whatsapp` with `ASTA_API_URL=http://localhost:8010`; scan QR in Settings.
 
 ---
 

@@ -219,6 +219,18 @@ async def build_context(
             parts.append("--- Spotify play ---")
             parts.append(f"Playing on {extra['spotify_played_on']}. Confirm briefly (e.g. 'Playing on {extra['spotify_played_on']}!').")
             parts.append("")
+        if extra.get("spotify_skipped"):
+            parts.append("--- Spotify control ---")
+            parts.append("You skipped to the next track successfully. Briefly confirm (e.g. 'Skipped to the next track.').")
+            parts.append("")
+        if extra.get("spotify_volume_set"):
+            parts.append("--- Spotify control ---")
+            vol = extra.get("spotify_volume_value")
+            if isinstance(vol, int):
+                parts.append(f"You set the Spotify volume to {vol}%. Briefly confirm (e.g. 'Volume set to {vol}%.').")
+            else:
+                parts.append("You adjusted the Spotify volume successfully. Confirm briefly.")
+            parts.append("")
         elif extra.get("spotify_devices") and len(extra["spotify_devices"]) >= 1:
             parts.append("--- Spotify play ---")
             dev_list = ", ".join(f"{i+1}. {d.get('name', 'Device')}" for i, d in enumerate(extra["spotify_devices"]))
