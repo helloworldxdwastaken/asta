@@ -1,5 +1,6 @@
 """Telegram bot: receive messages, call handler, reply. Runs in FastAPI event loop (no thread)."""
 import logging
+import re
 from urllib.parse import urlparse
 
 import httpx
@@ -127,9 +128,31 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             user_id, "telegram", text, provider_name="default",
             channel_target=chat_id,
         )
-        out = (reply or "").strip()[:TELEGRAM_MAX_MESSAGE_LENGTH] or "No response."
-        await update.message.reply_text(out)
-        logger.info("Telegram reply sent to %s", user_id)
+        
+        # Check for markdown GIF (Giphy or .gif) and send as animation
+        # Regex matches ![alt](url) where url contains giphy.com or ends in .gif
+        gif_match = re.search(r"!\[.*?\]\((https?://(?:media\d?\.giphy\.com/media/|.*\.gif).*?)\)", reply)
+        
+        if gif_match:
+            gif_url = gif_match.group(1)
+            # Remove the markdown image from the text to avoid duplicate/ugly link
+            text_reply = reply.replace(gif_match.group(0), "").strip()
+            
+            if text_reply:
+                await update.message.reply_text(text_reply[:TELEGRAM_MAX_MESSAGE_LENGTH])
+            
+            try:
+                await update.message.reply_animation(gif_url)
+                logger.info("Telegram reply sent to %s (with animation)", user_id)
+            except Exception as e:
+                logger.warning("Failed to send animation to %s: %s", user_id, e)
+                # Fallback: if we haven't sent text yet (e.g. only gif), send the link
+                if not text_reply:
+                    await update.message.reply_text(gif_url)
+        else:
+            out = (reply or "").strip()[:TELEGRAM_MAX_MESSAGE_LENGTH] or "No response."
+            await update.message.reply_text(out)
+            logger.info("Telegram reply sent to %s", user_id)
     except Exception as e:
         logger.exception("Telegram handler error")
         await update.message.reply_text(f"Error: {str(e)[:500]}")
