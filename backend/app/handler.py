@@ -17,7 +17,7 @@ async def handle_message(
     user_id: str,
     channel: str,
     text: str,
-    provider_name: str = "groq",
+    provider_name: str = "default",
     conversation_id: str | None = None,
     extra_context: dict | None = None,
     channel_target: str = "",
@@ -199,9 +199,9 @@ async def handle_message(
         if not (m["role"] == "assistant" and is_error_reply(m["content"]))
     ]
     messages.append({"role": "user", "content": text})
-    provider = get_provider(provider_name) or get_provider("groq") or get_provider("ollama")
+    provider = get_provider(provider_name)
     if not provider:
-        return "No AI provider available. Set GROQ_API_KEY or run Ollama."
+        return f"No AI provider found for '{provider_name}'. Check your provider settings."
     user_model = await db.get_user_provider_model(user_id, provider.name)
     reply = await provider.chat(messages, context=context, model=user_model or None)
     await db.add_message(cid, "user", text)

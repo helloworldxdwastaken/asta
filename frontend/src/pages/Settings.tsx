@@ -8,7 +8,6 @@ const KEY_LABELS: Record<string, string> = {
   anthropic_api_key: "Anthropic (Claude)",
   openai_api_key: "OpenAI",
   openrouter_api_key: "OpenRouter",
-  telegram_bot_token: "Telegram Bot (from @BotFather)",
 };
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -104,7 +103,7 @@ const DEFAULT_AI_LABELS: Record<string, string> = {
 };
 
 function DefaultAiSelect() {
-  const [provider, setProvider] = useState("groq");
+  const [provider, setProvider] = useState("");
   const [loading, setLoading] = useState(true);
   const [connected, setConnected] = useState<Record<string, boolean>>({});
   useEffect(() => {
@@ -115,14 +114,14 @@ function DefaultAiSelect() {
     });
   }, []);
   useEffect(() => {
-    if (loading || Object.keys(connected).length === 0) return;
+    if (loading || !provider || Object.keys(connected).length === 0) return;
     const connectedIds = (["groq", "google", "claude", "ollama", "openai", "openrouter"] as const).filter(
       (id) => connected[PROVIDER_STATUS_KEYS[id]]
     );
     if (connectedIds.length > 0 && !connectedIds.includes(provider as typeof connectedIds[number])) {
       const fallback = connectedIds[0];
       setProvider(fallback);
-      api.setDefaultAi(fallback).catch(() => {});
+      api.setDefaultAi(fallback).catch(() => { });
     }
   }, [loading, connected, provider]);
   const change = (p: string) => {
@@ -331,6 +330,51 @@ function SpotifySetup({ keysStatus, onSaved }: { keysStatus: Record<string, bool
   );
 }
 
+function TelegramTokenField({ keysStatus, onSaved }: { keysStatus: Record<string, boolean>; onSaved: () => void }) {
+  const [token, setToken] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const isSet = keysStatus["telegram_bot_token"];
+  const save = async () => {
+    if (!token.trim()) return;
+    setSaving(true);
+    setMsg(null);
+    try {
+      await api.setSettingsKeys({ telegram_bot_token: token.trim() });
+      onSaved();
+      setToken("");
+      setMsg("Token saved. Restart the backend for the bot to connect.");
+    } catch (e) {
+      setMsg("Error: " + ((e as Error).message || String(e)));
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <div className="field">
+      <div className="field-row">
+        <label className="label" htmlFor="telegram-token">Bot token</label>
+        {isSet && <span className="status-ok">Set</span>}
+      </div>
+      <input
+        id="telegram-token"
+        type="password"
+        placeholder={isSet ? "Leave blank to keep current" : "Paste token from @BotFather"}
+        value={token}
+        onChange={(e) => setToken(e.target.value)}
+        className="input"
+        style={{ maxWidth: 520 }}
+      />
+      <div className="actions" style={{ marginTop: "0.5rem" }}>
+        <button type="button" onClick={save} disabled={saving || !token.trim()} className="btn btn-primary">
+          {saving ? "Saving…" : "Save token"}
+        </button>
+      </div>
+      {msg && <div className={msg.startsWith("Error:") ? "alert alert-error" : "alert"} style={{ marginTop: "0.75rem" }}>{msg}</div>}
+    </div>
+  );
+}
+
 function ModelsForm() {
   const [models, setModels] = useState<Record<string, string>>({});
   const [defaults, setDefaults] = useState<Record<string, string>>({});
@@ -367,7 +411,7 @@ function ModelsForm() {
           <input
             id={"model-" + provider}
             type="text"
-            placeholder={provider === "openrouter" ? "e.g. arcee-ai/trinity-large-preview:free (see openrouter.ai/models)" : (defaults[provider] ?? "e.g. llama-3.3-70b-versatile")}
+            placeholder={provider === "openrouter" ? "main-model, fallback1, fallback2 (comma-separated)" : (defaults[provider] ?? "e.g. llama-3.3-70b-versatile")}
             value={models[provider] ?? ""}
             onChange={(e) => setModels((m) => ({ ...m, [provider]: e.target.value }))}
             className="input"
@@ -427,7 +471,7 @@ export default function Settings() {
         <details open>
           <summary>
             <span>API keys</span>
-            <span className="acc-meta">Groq, Gemini, Claude, Telegram…</span>
+            <span className="acc-meta">Groq, Gemini, Claude, OpenRouter…</span>
           </summary>
           <div className="acc-body">
             <p className="help">
@@ -490,6 +534,7 @@ export default function Settings() {
             <p className="help">
               Leave blank to use defaults. For <strong>OpenRouter</strong>, use a model ID (browse at{" "}
               <a href="https://openrouter.ai/models" target="_blank" rel="noreferrer" className="link">openrouter.ai/models</a>).
+              You can add <strong>fallback models</strong> separated by commas — if the first model fails, the next one is tried automatically.
             </p>
             <ModelsForm />
           </div>
@@ -504,8 +549,9 @@ export default function Settings() {
             <h3 style={{ marginTop: 0 }}>Telegram</h3>
             <p className="help">
               Create a bot at <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="link">t.me/BotFather</a>,
-              paste the token above, save, then restart the backend.
+              paste the token below, save, then restart the backend.
             </p>
+            <TelegramTokenField keysStatus={keysStatus} onSaved={() => api.getSettingsKeys().then(setKeysStatus)} />
 
             <h3>WhatsApp</h3>
             <WhatsAppQr />
@@ -533,7 +579,7 @@ export default function Settings() {
           <div className="acc-body">
             <p className="help">Start the backend from the project root (default port: 8010):</p>
             <pre className="file-preview" style={{ maxWidth: 820 }}>
-{`# Linux / macOS
+              {`# Linux / macOS
 ./asta.sh start
 
 # Or manually:

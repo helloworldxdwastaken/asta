@@ -60,10 +60,14 @@ kill_port() {
             local pcmd
             pcmd=$(ps -p "$pid" -o args= 2>/dev/null)
             
-            # Whitelist approach: Only kill if it looks like our app
-            # If it's sshd, bash, zsh, etc., we skip it.
-            if [[ "$pcmd" =~ "python" ]] || [[ "$pcmd" =~ "uvicorn" ]] || [[ "$pcmd" =~ "node" ]] || [[ "$pcmd" =~ "vite" ]] || [[ "$pcmd" =~ "npm" ]]; then
-                # Safe to kill
+            # Whitelist approach: Only kill if it looks like OUR specific app
+            # Generic "node" or "python" is too broad — could match IDE/editor processes
+            if [[ "$pcmd" == *"uvicorn"*"app.main"* ]] || \
+               [[ "$pcmd" == *"vite"* ]] || \
+               [[ "$pcmd" == *"npm run dev"* ]] || \
+               [[ "$pcmd" == *"$BACKEND_DIR"* ]] || \
+               [[ "$pcmd" == *"$FRONTEND_DIR"* ]]; then
+                # Safe to kill — matches our app
                  :
             else
                 print_warning "Port $port is held by unknown process (PID $pid: $pcmd). Skipping kill to protect SSH/System."
@@ -82,19 +86,61 @@ kill_port() {
     return 1
 }
 
+# Helper: safely kill a PID only if its command matches an allowed pattern
+safe_kill_pid() {
+    local pid=$1
+    shift
+    local patterns=("$@")  # allowed command substrings
+
+    if ! kill -0 "$pid" 2>/dev/null; then
+        return 1  # not running
+    fi
+
+    local pcmd
+    pcmd=$(ps -p "$pid" -o args= 2>/dev/null)
+    if [ -z "$pcmd" ]; then
+        return 1
+    fi
+
+    local matched=false
+    for pat in "${patterns[@]}"; do
+        if [[ "$pcmd" == *"$pat"* ]]; then
+            matched=true
+            break
+        fi
+    done
+
+    if ! $matched; then
+        print_warning "PID $pid doesn't look like our app ($pcmd). Skipping to protect SSH."
+        return 1
+    fi
+
+    # Graceful stop first, then force
+    kill -15 "$pid" 2>/dev/null
+    sleep 0.5
+    if kill -0 "$pid" 2>/dev/null; then
+        kill -9 "$pid" 2>/dev/null
+    fi
+    return 0
+}
+
 stop_backend() {
     print_status "Stopping Backend..."
     
     if [ -f "$PID_FILE" ]; then
         pid=$(cat "$PID_FILE")
-        if kill -0 "$pid" 2>/dev/null; then
-            kill -9 "$pid" 2>/dev/null
+        if safe_kill_pid "$pid" "python" "uvicorn"; then
             print_sub "Killed process (PID: $pid)"
         fi
         rm -f "$PID_FILE"
     fi
 
-    pkill -9 -f "uvicorn.*app.main:app" 2>/dev/null
+    # Safely kill any remaining uvicorn processes (validate each PID)
+    local uv_pids
+    uv_pids=$(pgrep -f "uvicorn.*app.main:app" 2>/dev/null)
+    for p in $uv_pids; do
+        safe_kill_pid "$p" "python" "uvicorn"
+    done
 
     if kill_port "$BACKEND_PORT"; then
         print_sub "Freed port $BACKEND_PORT"
@@ -113,14 +159,18 @@ stop_frontend() {
 
     if [ -f "$FRONTEND_PID_FILE" ]; then
         pid=$(cat "$FRONTEND_PID_FILE")
-        if kill -0 "$pid" 2>/dev/null; then
-            kill -9 "$pid" 2>/dev/null
+        if safe_kill_pid "$pid" "node" "vite" "npm"; then
             print_sub "Killed process (PID: $pid)"
         fi
         rm -f "$FRONTEND_PID_FILE"
     fi
 
-    pkill -9 -f "vite.*$FRONTEND_DIR" 2>/dev/null
+    # Safely kill any remaining vite processes (validate each PID)
+    local vite_pids
+    vite_pids=$(pgrep -f "vite.*$FRONTEND_DIR" 2>/dev/null)
+    for p in $vite_pids; do
+        safe_kill_pid "$p" "node" "vite" "npm"
+    done
 
     if kill_port "$FRONTEND_PORT"; then
         print_sub "Freed port $FRONTEND_PORT"
@@ -211,6 +261,18 @@ start_frontend() {
     sleep 1
 
     cd "$FRONTEND_DIR" || return 0
+
+    # Auto-install dependencies if missing
+    if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
+        print_sub "Installing frontend dependencies..."
+        npm install >> "$FRONTEND_LOG_FILE" 2>&1
+        if [ $? -ne 0 ]; then
+            print_error "npm install failed. Check $FRONTEND_LOG_FILE"
+            return 1
+        fi
+        print_sub "Dependencies installed"
+    fi
+
     echo "--- Restart: $(date) ---" >> "$FRONTEND_LOG_FILE"
 
     nohup npm run dev >> "$FRONTEND_LOG_FILE" 2>&1 &

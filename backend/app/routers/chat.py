@@ -11,7 +11,7 @@ router = APIRouter()
 
 class ChatIn(BaseModel):
     text: str
-    provider: str = "groq"
+    provider: str = "default"
     user_id: str = "default"
     conversation_id: str | None = None
     mood: str | None = None  # serious | friendly | normal

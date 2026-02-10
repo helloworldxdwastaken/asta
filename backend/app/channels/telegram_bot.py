@@ -122,6 +122,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     logger.info("Telegram message from %s: %s", user_id, (text[:80] + "…") if len(text) > 80 else text)
     try:
+        await update.message.chat.send_action("typing")
         reply = await handle_message(
             user_id, "telegram", text, provider_name="default",
             channel_target=chat_id,
