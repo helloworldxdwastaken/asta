@@ -3,9 +3,13 @@ import { Link } from "react-router-dom";
 import type { Status } from "../api/client";
 import { api } from "../api/client";
 
+type NotificationItem = { id: number; message: string; run_at: string; status: string; channel: string; created_at: string };
+
 export default function Dashboard() {
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [defaultAi, setDefaultAi] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     setError(null);
@@ -20,6 +24,16 @@ export default function Dashboard() {
     const t = setInterval(refresh, 5000);
     return () => clearInterval(t);
   }, [refresh]);
+
+  useEffect(() => {
+    if (error) return;
+    api.getNotifications(10).then((r) => setNotifications(r.notifications || [])).catch(() => setNotifications([]));
+  }, [error, status]);
+
+  useEffect(() => {
+    if (error) return;
+    api.getDefaultAi().then((r) => setDefaultAi(r.provider)).catch(() => setDefaultAi(null));
+  }, [error, status]);
 
   const apis = status?.apis ?? {};
   const integrations = status?.integrations ?? {};
@@ -87,6 +101,7 @@ export default function Dashboard() {
                     { key: "gemini", label: "Gemini" },
                     { key: "claude", label: "Claude" },
                     { key: "openai", label: "OpenAI" },
+                    { key: "openrouter", label: "OpenRouter" },
                     { key: "ollama", label: "Ollama" },
                   ].map(({ key, label }) => (
                     <div key={key} className="status-item">
@@ -97,6 +112,17 @@ export default function Dashboard() {
                     </div>
                   ))}
                 </div>
+              </div>
+
+              <div className="card">
+                <h2>Default AI</h2>
+                <p className="muted" style={{ marginBottom: "0.75rem", fontSize: "0.9rem" }}>
+                  {defaultAi ? (
+                    <>Chat uses <strong>{defaultAi === "openrouter" ? "OpenRouter" : defaultAi === "openai" ? "OpenAI" : defaultAi === "groq" ? "Groq" : defaultAi}</strong>. Change in <Link to="/settings" className="link">Settings</Link>.</>
+                  ) : (
+                    "Set in Settings."
+                  )}
+                </p>
               </div>
 
               <div className="card">
@@ -148,11 +174,30 @@ export default function Dashboard() {
             </div>
           </section>
 
+          {notifications.length > 0 && (
+            <section className="dashboard-section">
+              <div className="card">
+                <h2>Recent reminders</h2>
+                <p className="muted" style={{ marginBottom: "0.75rem", fontSize: "0.9rem" }}>
+                  Alarms and reminders you set. When the time comes, you get the message here (and on Telegram/WhatsApp if connected).
+                </p>
+                <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                  {notifications.slice(0, 10).map((n) => (
+                    <li key={n.id} style={{ padding: "0.35rem 0", borderBottom: "1px solid var(--border)", fontSize: "0.9rem" }}>
+                      <span className={n.status === "sent" ? "status-ok" : "status-pending"}>{n.status === "sent" ? "✓" : "⏳"}</span>{" "}
+                      {n.message} — {new Date(n.run_at).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </section>
+          )}
+
           <section className="dashboard-section">
             <div className="card card-about">
               <h2>About Asta</h2>
               <p>
-                Asta is your agent. It uses the AI you set (Groq, Gemini, Claude, Ollama) for Chat, WhatsApp, and Telegram. Set API keys and default AI in <Link to="/settings" className="link">Settings</Link>; enable or disable skills in the <Link to="/skills" className="link">Skills</Link> tab.
+                Asta is your agent. It uses the AI you set (Groq, OpenRouter, OpenAI, etc.) for Chat, WhatsApp, and Telegram. Set API keys and default AI in <Link to="/settings" className="link">Settings</Link>; enable or disable skills in the <Link to="/skills" className="link">Skills</Link> tab.
               </p>
             </div>
           </section>

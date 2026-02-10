@@ -8,6 +8,7 @@ _ENV_KEYS = {
     "google_ai_key": "google_ai_key",
     "anthropic_api_key": "anthropic_api_key",
     "openai_api_key": "openai_api_key",
+    "openrouter_api_key": "openrouter_api_key",
     "telegram_bot_token": "telegram_bot_token",
     "spotify_client_id": "spotify_client_id",
     "spotify_client_secret": "spotify_client_secret",

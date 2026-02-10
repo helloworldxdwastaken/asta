@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from app.db import get_db
 from app.keys import get_api_key
 from app.spotify_client import get_user_access_token, list_user_devices, start_playback
+from app.routers.settings import _spotify_redirect_uri
 
 
 class PlayIn(BaseModel):
@@ -29,8 +30,8 @@ async def spotify_connect(request: Request, user_id: str = "default"):
     cid = cid.strip()
     if not cid:
         return {"error": "Spotify Client ID not set. Add it in Settings → Spotify."}
-    base = os.environ.get("ASTA_BASE_URL", "").strip() or str(request.base_url).rstrip("/")
-    redirect_uri = f"{base}/api/spotify/callback"
+    # Use the same redirect URI helper as the Settings UI so it always matches
+    redirect_uri = _spotify_redirect_uri(request)
     params = {
         "client_id": cid,
         "response_type": "code",
@@ -61,8 +62,8 @@ async def spotify_callback(request: Request, code: str | None = None, state: str
     if not cid or not secret:
         return RedirectResponse(url=f"{frontend_origin}/settings?spotify=error&msg=credentials")
     import httpx
-    base = os.environ.get("ASTA_BASE_URL", "").strip() or str(request.base_url).rstrip("/")
-    redirect_uri = f"{base}/api/spotify/callback"
+    # Must match the redirect URI used when sending the user to Spotify
+    redirect_uri = _spotify_redirect_uri(request)
     try:
         async with httpx.AsyncClient() as client:
             r = await client.post(

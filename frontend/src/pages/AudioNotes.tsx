@@ -61,7 +61,7 @@ export default function AudioNotes() {
         return;
       }
       if ("transcript" in r && "formatted" in r) {
-        setResult({ transcript: r.transcript, formatted: r.formatted });
+        setResult({ transcript: r.transcript ?? "", formatted: r.formatted ?? "" });
       }
       setLoading(false);
     } catch (e) {
@@ -79,46 +79,51 @@ export default function AudioNotes() {
 
       <div className="card">
         <h2>Upload audio</h2>
-        <p style={{ color: "var(--muted)", fontSize: "0.9rem", marginBottom: "0.75rem" }}>
+        <p className="help" style={{ marginBottom: "0.75rem" }}>
           Supported: MP3, WAV, M4A, OGG, WebM, FLAC. Max 50 MB.
         </p>
-        <input
-          ref={inputRef}
-          type="file"
-          accept="audio/*,video/*,.mp3,.wav,.m4a,.ogg,.webm,.flac"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            setFile(f || null);
-            setResult(null);
-            setError(null);
-          }}
-          style={{ marginBottom: "1rem" }}
-        />
+        <div className="field">
+          <label className="label" htmlFor="audio-file">File</label>
+          <input
+            id="audio-file"
+            ref={inputRef}
+            type="file"
+            accept="audio/*,video/*,.mp3,.wav,.m4a,.ogg,.webm,.flac"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              setFile(f || null);
+              setResult(null);
+              setError(null);
+            }}
+          />
+        </div>
         {file && (
-          <p style={{ color: "var(--text-secondary)", marginBottom: "1rem" }}>
-            Selected: <strong>{file.name}</strong> ({(file.size / 1024).toFixed(1)} KB)
-          </p>
+          <div className="alert" style={{ marginBottom: "1rem" }}>
+            Selected: <strong>{file.name}</strong> ({(file.size / (1024 * 1024)).toFixed(2)} MB)
+          </div>
         )}
 
-        <h3 style={{ marginBottom: "0.5rem" }}>Transcription quality</h3>
-        <p style={{ color: "var(--muted)", fontSize: "0.9rem", marginBottom: "0.5rem" }}>
+        <h3 style={{ marginBottom: "0.35rem" }}>Transcription quality</h3>
+        <p className="help" style={{ marginBottom: "0.5rem" }}>
           More accurate models take longer. &quot;Meeting notes&quot; are saved so you can ask later: &quot;What was the last meeting about?&quot;
         </p>
         <select
           value={whisperModel}
           onChange={(e) => setWhisperModel(e.target.value)}
-          style={{ width: "100%", marginBottom: "1rem", padding: "0.5rem" }}
+          className="select"
+          style={{ marginBottom: "1rem" }}
         >
           {WHISPER_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>
 
-        <h3 style={{ marginBottom: "0.5rem" }}>What should Asta do?</h3>
+        <h3 style={{ marginBottom: "0.35rem" }}>What should Asta do?</h3>
         <select
           value={presetValue}
           onChange={(e) => setPresetValue(e.target.value)}
-          style={{ width: "100%", marginBottom: "0.5rem", padding: "0.5rem" }}
+          className="select"
+          style={{ marginBottom: "0.5rem" }}
         >
           {PRESETS.map((p) => (
             <option key={p.label} value={p.value}>
@@ -132,72 +137,62 @@ export default function AudioNotes() {
             value={customInstruction}
             onChange={(e) => setCustomInstruction(e.target.value)}
             rows={2}
-            style={{ width: "100%", marginBottom: "1rem", padding: "0.5rem" }}
+            className="textarea"
+            style={{ marginBottom: "1rem" }}
           />
         )}
 
-        <button
-          type="button"
-          onClick={submit}
-          disabled={!file || loading}
-          style={{ marginRight: "0.5rem" }}
-        >
-          {loading ? (progressStage === "formatting" ? "Formatting…" : "Transcribing…") : "Transcribe & format"}
-        </button>
+        <div className="actions">
+          <button type="button" className="btn btn-primary" onClick={submit} disabled={!file || loading}>
+            {loading ? (progressStage === "formatting" ? "Formatting…" : "Transcribing…") : "Transcribe & format"}
+          </button>
+          {file ? (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                setFile(null);
+                setResult(null);
+                setError(null);
+                setProgressStage(null);
+                if (inputRef.current) inputRef.current.value = "";
+              }}
+              disabled={loading}
+            >
+              Clear
+            </button>
+          ) : null}
+        </div>
         {loading && (
           <div style={{ marginTop: "1rem" }}>
-            <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.35rem", fontSize: "0.9rem" }}>
-              <span style={{ color: progressStage === "transcribing" ? "var(--accent)" : "var(--muted)" }}>1. Transcribing</span>
-              <span style={{ color: "var(--muted)" }}>→</span>
-              <span style={{ color: progressStage === "formatting" ? "var(--accent)" : "var(--muted)" }}>2. Formatting</span>
+            <div className="help" style={{ marginBottom: "0.35rem" }}>
+              <span style={{ color: progressStage === "transcribing" ? "var(--accent)" : "var(--muted)", fontWeight: 700 }}>1. Transcribing</span>{" "}
+              <span className="muted">→</span>{" "}
+              <span style={{ color: progressStage === "formatting" ? "var(--accent)" : "var(--muted)", fontWeight: 700 }}>2. Formatting</span>
             </div>
-            <div style={{ height: 6, background: "var(--surface)", borderRadius: 3, overflow: "hidden" }}>
-              <div
-                style={{
-                  height: "100%",
-                  width: progressStage === "formatting" ? "100%" : "50%",
-                  background: "var(--accent)",
-                  borderRadius: 3,
-                  transition: "width 0.3s ease",
-                }}
-              />
+            <div className="progress">
+              <span style={{ width: progressStage === "formatting" ? "100%" : "55%" }} />
             </div>
           </div>
         )}
-        {error && <p style={{ color: "var(--error)", marginTop: "0.75rem" }}>{error}</p>}
+        {error && <div className="alert alert-error" style={{ marginTop: "0.75rem" }}>{error}</div>}
       </div>
 
       {result && (
         <div className="card" style={{ marginTop: "1rem" }}>
-          <h2>Transcript</h2>
-          <pre
-            style={{
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              background: "var(--surface)",
-              padding: "1rem",
-              borderRadius: "var(--radius-sm)",
-              fontSize: "0.9rem",
-              maxHeight: "200px",
-              overflow: "auto",
-              marginBottom: "1rem",
-            }}
-          >
-            {result.transcript}
-          </pre>
-          <h2>Formatted</h2>
-          <div
-            style={{
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-word",
-              background: "var(--surface)",
-              padding: "1rem",
-              borderRadius: "var(--radius-sm)",
-              fontSize: "0.95rem",
-              lineHeight: 1.6,
-            }}
-          >
-            {result.formatted}
+          <div className="split">
+            <div>
+              <h2>Transcript</h2>
+              <pre className="file-preview" style={{ maxHeight: 260 }}>
+                {result.transcript}
+              </pre>
+            </div>
+            <div>
+              <h2>Formatted</h2>
+              <div className="file-preview" style={{ maxHeight: 260 }}>
+                {result.formatted}
+              </div>
+            </div>
           </div>
         </div>
       )}

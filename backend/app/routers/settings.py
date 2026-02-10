@@ -45,7 +45,7 @@ SKILLS = [
 
 ALLOWED_API_KEY_NAMES = frozenset({
     "groq_api_key", "gemini_api_key", "google_ai_key",
-    "anthropic_api_key", "openai_api_key",
+    "anthropic_api_key", "openai_api_key", "openrouter_api_key",
     "telegram_bot_token",
     "spotify_client_id", "spotify_client_secret",
 })
@@ -56,7 +56,7 @@ class MoodIn(BaseModel):
 
 
 class DefaultAiIn(BaseModel):
-    provider: str  # groq | google | claude | ollama
+    provider: str  # groq | google | claude | ollama | openrouter
 
 
 @router.get("/settings/default-ai")
@@ -69,8 +69,8 @@ async def get_default_ai(user_id: str = "default"):
 
 @router.put("/settings/default-ai")
 async def set_default_ai(body: DefaultAiIn, user_id: str = "default"):
-    if body.provider not in ("groq", "google", "claude", "ollama"):
-        return {"error": "provider must be groq, google, claude, or ollama"}
+    if body.provider not in ("groq", "google", "claude", "ollama", "openai", "openrouter"):
+        return {"error": "provider must be groq, google, claude, ollama, openai, or openrouter"}
     db = get_db()
     await db.connect()
     await db.set_user_default_ai(user_id, body.provider)
@@ -83,6 +83,8 @@ DEFAULT_MODELS = {
     "google": "gemini-1.5-flash",
     "claude": "claude-3-5-sonnet-20241022",
     "ollama": "llama3.2",
+    "openai": "gpt-4o-mini",
+    "openrouter": "arcee-ai/trinity-large-preview:free",
 }
 
 
@@ -96,7 +98,7 @@ async def get_models(user_id: str = "default"):
     return {
         "models": {
             p: custom.get(p) or ""
-            for p in ("groq", "google", "claude", "ollama")
+            for p in ("groq", "google", "claude", "ollama", "openai", "openrouter")
         },
         "defaults": DEFAULT_MODELS,
     }
@@ -111,8 +113,8 @@ class ModelIn(BaseModel):
 @router.put("/api/settings/models")
 async def set_model(body: ModelIn, user_id: str = "default"):
     """Set which model to use for a provider. Leave model empty to use provider default."""
-    if body.provider not in ("groq", "google", "claude", "ollama"):
-        return {"error": "provider must be groq, google, claude, or ollama"}
+    if body.provider not in ("groq", "google", "claude", "ollama", "openai", "openrouter"):
+        return {"error": "provider must be groq, google, claude, ollama, openai, or openrouter"}
     db = get_db()
     await db.connect()
     await db.set_user_provider_model(user_id, body.provider, body.model.strip())
@@ -151,6 +153,7 @@ async def get_status(user_id: str = "default"):
         "gemini": api_status.get("gemini_api_key", False) or api_status.get("google_ai_key", False),
         "claude": api_status.get("anthropic_api_key", False),
         "openai": api_status.get("openai_api_key", False),
+        "openrouter": api_status.get("openrouter_api_key", False),
         "ollama": ollama_ok,
     }
     integrations = {
@@ -206,6 +209,7 @@ class ApiKeysIn(BaseModel):
     google_ai_key: str | None = None
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
+    openrouter_api_key: str | None = None
     telegram_bot_token: str | None = None
     spotify_client_id: str | None = None
     spotify_client_secret: str | None = None
@@ -244,25 +248,64 @@ async def test_api_key(provider: str = "groq"):
         except Exception as e:
             return {"ok": False, "error": (str(e).strip() or repr(e))[:500]}
 
-    if provider != "groq":
-        return {"ok": False, "error": f"Test not implemented for {provider}. Use groq or spotify."}
-    key = await get_api_key("groq_api_key")
-    if not key:
-        return {"ok": False, "error": "No Groq API key set. Add one in Settings and save first."}
-    try:
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=key, base_url="https://api.groq.com/openai/v1")
-        r = await client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": "Say OK"}],
-            max_tokens=10,
-        )
-        if r.choices and r.choices[0].message.content:
-            return {"ok": True, "message": "Groq key works."}
-        return {"ok": True}
-    except Exception as e:
-        msg = str(e).strip() or repr(e)
-        return {"ok": False, "error": msg[:500]}
+    if provider == "groq":
+        key = await get_api_key("groq_api_key")
+        if not key:
+            return {"ok": False, "error": "No Groq API key set. Add one in Settings and save first."}
+        try:
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(api_key=key, base_url="https://api.groq.com/openai/v1")
+            r = await client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": "Say OK"}],
+                max_tokens=10,
+            )
+            if r.choices and r.choices[0].message.content:
+                return {"ok": True, "message": "Groq key works."}
+            return {"ok": True}
+        except Exception as e:
+            msg = str(e).strip() or repr(e)
+            return {"ok": False, "error": msg[:500]}
+
+    if provider == "openai":
+        key = await get_api_key("openai_api_key")
+        if not key:
+            return {"ok": False, "error": "No OpenAI API key set. Add one in Settings and save first."}
+        try:
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(api_key=key)
+            r = await client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "Say OK"}],
+                max_tokens=10,
+            )
+            if r.choices and r.choices[0].message.content:
+                return {"ok": True, "message": "OpenAI key works."}
+            return {"ok": True}
+        except Exception as e:
+            msg = str(e).strip() or repr(e)
+            return {"ok": False, "error": msg[:500]}
+
+    if provider == "openrouter":
+        key = await get_api_key("openrouter_api_key")
+        if not key:
+            return {"ok": False, "error": "No OpenRouter API key set. Add one in Settings and save first. Get a key at https://openrouter.ai/keys"}
+        try:
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(api_key=key, base_url="https://openrouter.ai/api/v1")
+            r = await client.chat.completions.create(
+                model="arcee-ai/trinity-large-preview:free",
+                messages=[{"role": "user", "content": "Say OK"}],
+                max_tokens=10,
+            )
+            if r.choices and r.choices[0].message.content:
+                return {"ok": True, "message": "OpenRouter key works."}
+            return {"ok": True}
+        except Exception as e:
+            msg = str(e).strip() or repr(e)
+            return {"ok": False, "error": msg[:500]}
+
+    return {"ok": False, "error": f"Test not implemented for {provider}. Use groq, openai, openrouter, or spotify."}
 
 
 class SkillToggleIn(BaseModel):
@@ -315,8 +358,16 @@ async def set_skill_toggle(body: SkillToggleIn, user_id: str = "default"):
 
 
 def _spotify_redirect_uri(request: Request | None = None) -> str:
-    """Redirect URI for Spotify OAuth (used in dashboard and connect URL)."""
-    base = os.environ.get("ASTA_BASE_URL", "").strip() or (str(request.base_url).rstrip("/") if request else "http://localhost:8000")
+    """Redirect URI for Spotify OAuth (used in dashboard and connect URL).
+
+    Spotify no longer accepts http://localhost/... redirect URIs.
+    For local development, they recommend using the loopback address:
+    http://127.0.0.1:<port>/callback instead.
+    """
+    base = os.environ.get("ASTA_BASE_URL", "").strip() or (str(request.base_url).rstrip("/") if request else "http://127.0.0.1:8010")
+    # For local dev, prefer 127.0.0.1 over localhost so it matches Spotify's rules
+    if base.startswith("http://localhost"):
+        base = base.replace("http://localhost", "http://127.0.0.1", 1)
     return f"{base}/api/spotify/callback"
 
 
@@ -337,6 +388,7 @@ async def get_spotify_setup(request: Request):
 
 
 @router.get("/notifications")
+@router.get("/api/notifications")
 async def get_notifications(user_id: str = "default", limit: int = 50):
     """List reminders/notifications for the user (for panel)."""
     db = get_db()

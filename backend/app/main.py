@@ -26,14 +26,17 @@ async def lifespan(app: FastAPI):
         await reload_pending_reminders()
     except Exception as e:
         logger.exception("Failed to reload pending reminders: %s", e)
+    # Telegram bot: do NOT block API startup if Telegram is unreachable or misconfigured.
     token = await get_db().get_stored_api_key("telegram_bot_token") or get_settings().telegram_bot_token
+    app.state.telegram_app = None
     if token:
-        from app.channels.telegram_bot import build_telegram_app, start_telegram_bot_in_loop
-        tg_app = build_telegram_app(token)
-        await start_telegram_bot_in_loop(tg_app)
-        app.state.telegram_app = tg_app
-    else:
-        app.state.telegram_app = None
+        try:
+            from app.channels.telegram_bot import build_telegram_app, start_telegram_bot_in_loop
+            tg_app = build_telegram_app(token)
+            await start_telegram_bot_in_loop(tg_app)
+            app.state.telegram_app = tg_app
+        except Exception as e:
+            logger.exception("Failed to start Telegram bot; continuing without it: %s", e)
     yield
     # Shutdown: stop Telegram bot
     if getattr(app.state, "telegram_app", None):

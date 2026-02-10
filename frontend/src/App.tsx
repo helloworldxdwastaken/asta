@@ -25,7 +25,11 @@ function BackendIndicator() {
   return (
     <span
       className={"nav-api-status " + (connected ? "ok" : "off")}
-      title={connected ? "Backend connected" : "Backend disconnected — start it in your terminal"}
+      title={
+        connected
+          ? "Backend connected"
+          : "Backend not reachable. Open this app at http://localhost:5173 and run ./asta.sh start (backend on port 8010)."
+      }
     >
       ● {connected ? "API" : "API off"}
     </span>
@@ -33,21 +37,56 @@ function BackendIndicator() {
 }
 
 export default function App() {
+  const [navOpen, setNavOpen] = useState(false);
+
   return (
     <BrowserRouter>
       <div className="app">
         <nav className="nav">
-          <Link to="/" className="brand">
-            Asta
-          </Link>
-          <NavLink to="/" end>Dashboard</NavLink>
-          <NavLink to="/chat">Chat</NavLink>
-          <NavLink to="/files">Files</NavLink>
-          <NavLink to="/drive">Drive</NavLink>
-          <NavLink to="/learning">Learning</NavLink>
-          <NavLink to="/audio-notes">Audio notes</NavLink>
-          <NavLink to="/skills">Skills</NavLink>
-          <NavLink to="/settings">Settings</NavLink>
+          <div className="nav-left">
+            <button
+              type="button"
+              className="nav-toggle"
+              aria-label={navOpen ? "Close navigation menu" : "Open navigation menu"}
+              aria-expanded={navOpen}
+              onClick={() => setNavOpen((v) => !v)}
+            >
+              <span className="nav-toggle-bars" aria-hidden />
+            </button>
+
+            <Link to="/" className="brand" onClick={() => setNavOpen(false)}>
+              Asta
+            </Link>
+          </div>
+
+          <div className={"nav-links " + (navOpen ? "open" : "")}>
+            <NavLink to="/" end onClick={() => setNavOpen(false)}>
+              Dashboard
+            </NavLink>
+            <NavLink to="/chat" onClick={() => setNavOpen(false)}>
+              Chat
+            </NavLink>
+            <NavLink to="/files" onClick={() => setNavOpen(false)}>
+              Files
+            </NavLink>
+            <NavLink to="/drive" onClick={() => setNavOpen(false)}>
+              Drive
+            </NavLink>
+            <NavLink to="/learning" onClick={() => setNavOpen(false)}>
+              Learning
+            </NavLink>
+            <NavLink to="/audio-notes" onClick={() => setNavOpen(false)}>
+              Audio notes
+            </NavLink>
+            <span className="nav-divider" aria-hidden />
+            <NavLink to="/skills" onClick={() => setNavOpen(false)}>
+              Skills
+            </NavLink>
+            <NavLink to="/settings" onClick={() => setNavOpen(false)}>
+              Settings
+            </NavLink>
+          </div>
+
           <BackendIndicator />
         </nav>
         <main className="main">

@@ -70,7 +70,10 @@ def _run_learning_job_sync(
                     snippet = (r.get("snippet") or "").strip()
                     if snippet and len(snippet) > 80:
                         doc_id = f"{job_id}_{idx}_{added}"
-                        rag.add(topic, snippet[:4000], doc_id=doc_id)
+                        async def _add_chunk():
+                            r = get_rag()
+                            await r.add(topic, snippet[:4000], doc_id=doc_id)
+                        asyncio.run(_add_chunk())
                         added += 1
             except Exception as e:
                 logger.warning("Learn search/add failed for %s: %s", query[:50], e)
@@ -99,12 +102,14 @@ def schedule_learning_job(
     job_id = f"learn_{user_id}_{topic.replace(' ', '_')[:30]}_{int(time.time())}"
     if sources:
         # Optional: ingest provided text immediately
-        try:
+        async def _add_sources():
             from app.rag.service import get_rag
             rag = get_rag()
             for s in sources:
                 if (s or "").strip():
-                    rag.add(topic, (s or "")[:5000], doc_id=f"{job_id}_src")
+                    await rag.add(topic, (s or "")[:5000], doc_id=f"{job_id}_src")
+        try:
+            asyncio.run(_add_sources())
         except Exception as e:
             logger.warning("Could not add provided sources to RAG: %s", e)
     from datetime import datetime, timezone

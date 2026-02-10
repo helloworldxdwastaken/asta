@@ -1,4 +1,5 @@
 """Parse reminder intent, schedule, and send notifications (WhatsApp, Telegram, web)."""
+import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
@@ -6,6 +7,8 @@ from zoneinfo import ZoneInfo
 from typing import Any
 
 from app.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 # "remind me in 30 min to do X", "remind me in 2 hours to X"
@@ -180,18 +183,21 @@ async def reload_pending_reminders() -> None:
             if run_at.tzinfo is None:
                 run_at = run_at.replace(tzinfo=timezone.utc)
             if run_at <= now_utc:
-                continue  # already past, skip (or could mark sent)
+                # Past-due: fire now so user still gets the message (e.g. after server restart)
+                try:
+                    await _fire_reminder_async(rid)
+                except Exception as e:
+                    logger.warning("Could not fire past-due reminder %s: %s", rid, e)
+                continue
             job_id = f"rem_{rid}"
             if sch.get_job(job_id):
                 continue
             sch.add_job(_fire_reminder, "date", run_date=run_at, args=[rid], id=job_id)
             loaded += 1
         except (ValueError, TypeError) as e:
-            import logging
-            logging.getLogger(__name__).warning("Could not reschedule reminder %s: %s", rid, e)
+            logger.warning("Could not reschedule reminder %s: %s", rid, e)
     if loaded:
-        import logging
-        logging.getLogger(__name__).info("Reloaded %d pending reminder(s) into scheduler", loaded)
+        logger.info("Reloaded %d pending reminder(s) into scheduler", loaded)
 
 
 def _fire_reminder(reminder_id: int) -> None:

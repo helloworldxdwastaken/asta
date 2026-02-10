@@ -55,7 +55,7 @@ def get_skills_to_use(text: str, enabled_skill_ids: set[str]) -> set[str]:
             out.add("learn")
     # RAG (notes/learned): remember, notes, saved, learned, or question about knowledge
     if "rag" in enabled_skill_ids:
-        if any(k in t for k in ("remember", "notes", "saved", "learned", "what did i", "my notes")):
+        if any(k in t for k in ("remember", "notes", "saved", "learned", "what did i", "my notes", "what did you learn", "what have you learned", "what do you know about")):
             out.add("rag")
         elif "?" in t and len(t) > 15:
             out.add("rag")

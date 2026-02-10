@@ -113,7 +113,19 @@ async def build_context(
         parts.append("Use the above when the user asks about the last meeting, a previous meeting, or what was discussed. Answer from this context.")
         parts.append("")
 
-    # RAG / learned knowledge summary
+    # Actual topics in RAG store — prevent the model from claiming it learned about topics that are not stored
+    if rag_enabled and _use("rag") and extra and "learned_topics" in extra:
+        topics_list = extra.get("learned_topics") or []
+        parts.append("--- Topics actually learned (RAG store) ---")
+        if topics_list:
+            names = [t.get("topic", "") for t in topics_list if t.get("topic")]
+            parts.append("The only topics you have learned (stored in RAG) are: " + (", ".join(names) if names else "none") + ".")
+        else:
+            parts.append("You have not learned any topics yet (RAG store is empty).")
+        parts.append("When the user asks what you have learned, what you know about, or what topics you learned: ONLY mention the topics listed above. Do NOT claim to have learned about BPA, eSIM, or any other topic not in this list. If the list is empty or 'none', say you have not learned any topics yet.")
+        parts.append("")
+
+    # RAG / learned knowledge summary (retrieved chunks for this question)
     if rag_enabled and _use("rag") and extra and extra.get("rag_summary"):
         parts.append("--- Relevant learned knowledge ---")
         parts.append(extra["rag_summary"])
@@ -182,9 +194,17 @@ async def build_context(
 
     # Spotify: search results or play (devices / connected status)
     if spotify_enabled and _use("spotify") and extra:
-        if extra.get("spotify_play_connected") is False:
+        if extra.get("spotify_reconnect_needed"):
+            parts.append("--- Spotify play ---")
+            parts.append("The user asked to play something. They had connected Spotify before but the connection is no longer valid (e.g. session expired or app credentials changed). Reply with ONE short sentence: tell them to go to Settings → Spotify and click 'Connect Spotify' again to re-authorize. Do NOT say they have never connected.")
+            parts.append("")
+        elif extra.get("spotify_play_connected") is False:
             parts.append("--- Spotify play ---")
             parts.append("The user asked to play something but has not connected their Spotify account. Reply with ONE short sentence: tell them to go to Settings → Spotify and click 'Connect Spotify' (one-time). After they connect, Asta WILL start playback on their devices — do NOT say you cannot control Spotify or that you can only give commands.")
+            parts.append("")
+        elif extra.get("spotify_play_connected") is True:
+            parts.append("--- Spotify play ---")
+            parts.append("The user HAS connected their Spotify account for playback. Do NOT tell them to connect or reconnect. Instead, either list devices to choose from or confirm playback started, based on the context above.")
             parts.append("")
         elif extra.get("spotify_devices") is not None and len(extra.get("spotify_devices", [])) == 0 and extra.get("spotify_play_track_uri"):
             parts.append("--- Spotify play ---")

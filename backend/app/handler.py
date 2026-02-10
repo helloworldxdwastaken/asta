@@ -134,16 +134,17 @@ async def handle_message(
     if skill_labels and channel in ("telegram", "whatsapp") and channel_target:
         await send_skill_status(channel, channel_target, skill_labels)
 
-    # RAG: only when relevant
+    # RAG: only when relevant — retrieve context and actual learned topics (so the model cannot claim it learned things it didn't)
     if "rag" in skills_to_use:
         try:
             from app.rag.service import get_rag
             rag = get_rag()
-            rag_summary = rag.query(text, k=5)
+            rag_summary = await rag.query(text, k=5)
             if rag_summary:
                 extra["rag_summary"] = rag_summary
+            extra["learned_topics"] = rag.list_topics()
         except Exception:
-            pass
+            extra["learned_topics"] = []
 
     # Web search: only when relevant
     if "google_search" in skills_to_use:
@@ -191,8 +192,15 @@ async def handle_message(
         if play_query:
             token = await get_user_access_token(user_id)
             if not token:
-                extra["spotify_play_connected"] = False
+                # Distinguish "never connected" vs "had tokens but refresh failed / credentials missing"
+                row = await db.get_spotify_tokens(user_id)
+                if row:
+                    extra["spotify_reconnect_needed"] = True
+                else:
+                    extra["spotify_play_connected"] = False
             else:
+                # User has a valid Spotify connection for playback
+                extra["spotify_play_connected"] = True
                 results = await spotify_search_if_configured(play_query)
                 if not results or not results[0].get("uri"):
                     extra["spotify_results"] = []
@@ -200,10 +208,20 @@ async def handle_message(
                     track_uri = results[0]["uri"]
                     devices = await list_user_devices(user_id)
                     if not devices:
+                        # No active devices – tell the model to ask user to open Spotify somewhere.
                         extra["spotify_devices"] = []
                         extra["spotify_play_track_uri"] = track_uri
+                    elif len(devices) == 1:
+                        # Exactly one device: play there automatically, no device picker.
+                        dev = devices[0]
+                        ok = await start_playback(user_id, dev.get("id"), track_uri)
+                        if ok:
+                            extra["spotify_played_on"] = dev.get("name") or "device"
+                        else:
+                            extra["spotify_play_failed"] = True
+                            extra["spotify_play_failed_device"] = dev.get("name") or "device"
                     else:
-                        # Always show device list and let user pick (even if only one device)
+                        # Multiple devices: store pending choice and let the model ask which one.
                         await db.set_pending_spotify_play(user_id, track_uri, json.dumps(devices))
                         extra["spotify_devices"] = devices
                         extra["spotify_pending_track_uri"] = track_uri
@@ -224,6 +242,9 @@ async def handle_message(
         if "invalid or expired" in s and "API key" in s:
             return True
         if "API key" in s and ("check" in s.lower() or "update" in s.lower() or "renew" in s.lower()):
+            return True
+        # Treat outdated Spotify connection prompts as transient guidance; don't persist them in history.
+        if "Connect Spotify" in s or "connect your Spotify account" in s:
             return True
         return False
 

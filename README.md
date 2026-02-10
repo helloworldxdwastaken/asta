@@ -72,6 +72,19 @@ From the repo root (Linux / macOS):
 
 ---
 
+## Learning / RAG (Ollama or API)
+
+For **Learning** (“learn about X”, paste text, schedule jobs), Asta needs embeddings. It tries **Ollama** first, then **OpenAI**, then **Google** (Gemini). To use Ollama and pull the small RAG model:
+
+```bash
+./scripts/setup_ollama_rag.sh        # Pull nomic-embed-text (Ollama must be installed)
+./scripts/setup_ollama_rag.sh -i     # Install Ollama first (Linux), then pull model
+```
+
+Then start Ollama if not running: `ollama serve` (or open the Ollama app). If you don’t use Ollama, set an **OpenAI** or **Gemini** key in Settings and RAG will use that instead.
+
+---
+
 ## Docs
 
 - **`docs/INSTALL.md`** — Full native install (macOS, Linux, Windows), env vars, troubleshooting.  
@@ -93,6 +106,7 @@ asta/
 ├── backend/           # FastAPI — backend/.env, API keys also in Settings (DB)
 ├── frontend/          # React + Vite (panel)
 ├── services/whatsapp/ # WhatsApp bridge (Node)
+├── scripts/           # setup_ollama_rag.sh — install Ollama + pull RAG embedding model
 ├── docs/              # INSTALL.md, SPEC.md, SECURITY.md
 ├── asta.sh            # Start/stop/restart backend + frontend
 ├── .env.example       # Copy to backend/.env

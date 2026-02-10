@@ -20,7 +20,7 @@ PID_FILE="$SCRIPT_DIR/.asta.pid"
 FRONTEND_PID_FILE="$SCRIPT_DIR/.asta-frontend.pid"
 LOG_FILE="$SCRIPT_DIR/backend.log"
 FRONTEND_LOG_FILE="$SCRIPT_DIR/frontend.log"
-BACKEND_PORT=8000
+BACKEND_PORT=8010
 FRONTEND_PORT=5173
 
 RED='\033[0;31m'
@@ -134,12 +134,12 @@ start_backend() {
         if lsof -Pi ":$BACKEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1 || (command -v fuser >/dev/null 2>&1 && fuser "$BACKEND_PORT/tcp" >/dev/null 2>&1); then
             print_warning "Port $BACKEND_PORT in use; freeing it..."
             kill_port "$BACKEND_PORT"
-            sleep 2
+            sleep 3
         else
             break
         fi
     done
-    sleep 1
+    sleep 2
 
     cd "$BACKEND_DIR" || return 1
     if [ -f "$LOG_FILE" ]; then
@@ -153,12 +153,18 @@ start_backend() {
     echo "Asta backend starting: $(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
     echo "========================================" >> "$LOG_FILE"
 
-    nohup bash -c "source .venv/bin/activate && exec uvicorn app.main:app --host 0.0.0.0 --port $BACKEND_PORT" >> "$LOG_FILE" 2>&1 &
+    # Always use backend's venv (ignore any venv active in the calling shell)
+    nohup bash -c "source '$BACKEND_DIR/.venv/bin/activate' && cd '$BACKEND_DIR' && exec uvicorn app.main:app --host 0.0.0.0 --port $BACKEND_PORT" >> "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
     pid=$(cat "$PID_FILE")
 
     print_status "Waiting for backend..."
-    sleep 4
+    for _ in 1 2 3 4 5 6; do
+        sleep 2
+        if lsof -Pi ":$BACKEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
+            break
+        fi
+    done
 
     if lsof -Pi ":$BACKEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
         print_success "Backend started (PID: $pid, port: $BACKEND_PORT)"
@@ -256,7 +262,7 @@ case "$1" in
     restart)
         print_asta_banner
         stop_all
-        sleep 2
+        sleep 3
         start_backend
         start_frontend
         show_status

@@ -1,7 +1,9 @@
-const API = "/api";
+// Local dev: talk directly to Asta backend on port 8010.
+// This avoids conflicts with other services (e.g. Tailscale) that may also use 8000.
+const API_BASE = "http://localhost:8010/api";
 
 async function req<T>(path: string, options?: RequestInit): Promise<T> {
-  const r = await fetch(API + path, {
+  const r = await fetch(API_BASE + path, {
     ...options,
     headers: { "Content-Type": "application/json", ...options?.headers },
   });
@@ -52,6 +54,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ topic, text }),
     }),
+  ragLearned: () =>
+    req<{ has_learned: boolean; topics: { topic: string; chunks_count: number }[] }>("/rag/learned"),
   ragAsk: (question: string, topic?: string) =>
     req<{ summary: string }>("/rag/ask", {
       method: "POST",
@@ -99,7 +103,7 @@ export const api = {
     form.append("user_id", user_id);
     form.append("whisper_model", whisperModel);
     form.append("async_mode", "1");
-    const r = await fetch(API + "/audio/process", {
+    const r = await fetch(API_BASE + "/audio/process", {
       method: "POST",
       body: form,
       credentials: "include",
@@ -111,4 +115,8 @@ export const api = {
   },
   audioStatus: (jobId: string) =>
     req<{ stage: string; transcript?: string; formatted?: string; error?: string }>("/audio/status/" + encodeURIComponent(jobId)),
+  getNotifications: (limit = 20) =>
+    req<{ notifications: { id: number; message: string; run_at: string; status: string; channel: string; created_at: string }[] }>(
+      "/notifications?limit=" + limit
+    ),
 };

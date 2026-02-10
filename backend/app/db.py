@@ -448,6 +448,13 @@ class Db:
         )
         await self._conn.commit()
 
+    async def clear_spotify_tokens(self, user_id: str) -> None:
+        """Remove stored Spotify OAuth tokens (e.g. after invalid_grant)."""
+        if not self._conn:
+            await self.connect()
+        await self._conn.execute("DELETE FROM spotify_user_tokens WHERE user_id = ?", (user_id,))
+        await self._conn.commit()
+
     async def get_pending_spotify_play(self, user_id: str) -> dict[str, Any] | None:
         if not self._conn:
             await self.connect()

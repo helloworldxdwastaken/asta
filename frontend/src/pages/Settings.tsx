@@ -7,6 +7,7 @@ const KEY_LABELS: Record<string, string> = {
   google_ai_key: "Google AI (alternative)",
   anthropic_api_key: "Anthropic (Claude)",
   openai_api_key: "OpenAI",
+  openrouter_api_key: "OpenRouter",
   telegram_bot_token: "Telegram Bot (from @BotFather)",
 };
 
@@ -15,6 +16,8 @@ const PROVIDER_LABELS: Record<string, string> = {
   google: "Google (Gemini)",
   claude: "Claude",
   ollama: "Ollama",
+  openai: "OpenAI",
+  openrouter: "OpenRouter",
 };
 
 function RestartBackendButton() {
@@ -36,17 +39,19 @@ function RestartBackendButton() {
     }
   };
   return (
-    <p style={{ marginBottom: "1rem" }}>
-      <button
-        type="button"
-        onClick={run}
-        disabled={loading}
-        style={{ padding: "0.35rem 0.75rem", fontSize: "0.9rem", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 8, cursor: loading ? "not-allowed" : "pointer" }}
-      >
-        {loading ? "Stopping…" : "Stop backend (start again in terminal)"}
-      </button>
-      {done && <span style={{ marginLeft: "0.5rem", color: isError ? "var(--accent)" : "var(--muted)", fontSize: "0.9rem" }}>{done}</span>}
-    </p>
+    <div className="field">
+      <div className="actions">
+        <button type="button" onClick={run} disabled={loading} className="btn btn-danger">
+          {loading ? "Stopping…" : "Stop backend"}
+        </button>
+      </div>
+      {done && (
+        <div className={isError ? "alert alert-error" : "alert"} style={{ marginTop: "0.75rem" }}>
+          {done}
+        </div>
+      )}
+      <p className="help">This sends a stop request to the backend process. Start it again in your terminal afterwards.</p>
+    </div>
   );
 }
 
@@ -70,46 +75,85 @@ function TestGroqButton() {
     }
   };
   return (
-    <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-      <button
-        type="button"
-        onClick={run}
-        disabled={testing}
-        style={{ padding: "0.35rem 0.75rem", fontSize: "0.9rem", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text)", cursor: testing ? "not-allowed" : "pointer" }}
-      >
+    <span className="actions">
+      <button type="button" onClick={run} disabled={testing} className="btn btn-secondary">
         {testing ? "Testing…" : "Test"}
       </button>
-      {result && (
-        <span className={result === "Key works." ? "status-ok" : "status-pending"} style={{ fontSize: "0.9rem" }}>
-          {result}
-        </span>
-      )}
+      {result && <span className={result === "Key works." ? "status-ok" : "status-pending"}>{result}</span>}
     </span>
   );
 }
 
+// Provider id -> status key (backend status uses "gemini" for Google)
+const PROVIDER_STATUS_KEYS: Record<string, string> = {
+  groq: "groq",
+  google: "gemini",
+  claude: "claude",
+  ollama: "ollama",
+  openai: "openai",
+  openrouter: "openrouter",
+};
+
+const DEFAULT_AI_LABELS: Record<string, string> = {
+  groq: "Groq",
+  google: "Google (Gemini)",
+  claude: "Claude",
+  ollama: "Ollama",
+  openai: "OpenAI",
+  openrouter: "OpenRouter",
+};
+
 function DefaultAiSelect() {
   const [provider, setProvider] = useState("groq");
   const [loading, setLoading] = useState(true);
+  const [connected, setConnected] = useState<Record<string, boolean>>({});
   useEffect(() => {
-    api.getDefaultAi().then((r) => { setProvider(r.provider); setLoading(false); });
+    Promise.all([api.getDefaultAi(), api.status()]).then(([r, status]) => {
+      setConnected(status.apis ?? {});
+      setLoading(false);
+      setProvider(r.provider);
+    });
   }, []);
+  useEffect(() => {
+    if (loading || Object.keys(connected).length === 0) return;
+    const connectedIds = (["groq", "google", "claude", "ollama", "openai", "openrouter"] as const).filter(
+      (id) => connected[PROVIDER_STATUS_KEYS[id]]
+    );
+    if (connectedIds.length > 0 && !connectedIds.includes(provider as typeof connectedIds[number])) {
+      const fallback = connectedIds[0];
+      setProvider(fallback);
+      api.setDefaultAi(fallback).catch(() => {});
+    }
+  }, [loading, connected, provider]);
   const change = (p: string) => {
     setProvider(p);
     api.setDefaultAi(p).catch(() => setProvider(provider));
   };
+  const connectedProviders = (["groq", "google", "claude", "ollama", "openai", "openrouter"] as const).filter(
+    (id) => connected[PROVIDER_STATUS_KEYS[id]]
+  );
   if (loading) return <p style={{ color: "var(--muted)" }}>Loading…</p>;
+  if (connectedProviders.length === 0) {
+    return (
+      <p className="help">
+        No API connected yet. Add at least one key above (Groq, OpenRouter, etc.) and save, then choose the default AI here. Set the model name in &quot;Model per provider&quot; below.
+      </p>
+    );
+  }
+  const value = connectedProviders.includes(provider as typeof connectedProviders[number]) ? provider : connectedProviders[0];
   return (
-    <select
-      value={provider}
-      onChange={(e) => change(e.target.value)}
-      style={{ padding: "0.5rem", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text)" }}
-    >
-      <option value="groq">Groq</option>
-      <option value="google">Google (Gemini)</option>
-      <option value="claude">Claude (Anthropic)</option>
-      <option value="ollama">Ollama (local)</option>
-    </select>
+    <div className="field">
+      <select value={value} onChange={(e) => change(e.target.value)} className="select" style={{ maxWidth: 320 }}>
+        {connectedProviders.map((id) => (
+          <option key={id} value={id}>
+            {DEFAULT_AI_LABELS[id]}
+          </option>
+        ))}
+      </select>
+      <p className="help" style={{ marginTop: "0.35rem" }}>
+        Choose which connected API to use by default. Set the model name in &quot;Model per provider&quot; below (e.g. for OpenRouter: any model from openrouter.ai/models).
+      </p>
+    </div>
   );
 }
 
@@ -127,9 +171,9 @@ function WhatsAppQr() {
   }, [fetchQr]);
   if (state?.error && !state?.qr) {
     return (
-      <p style={{ color: "var(--muted)", fontSize: "0.9rem" }}>
-        {state.error} Then run: <code>cd services/whatsapp && npm install && npm run start</code>
-      </p>
+      <div className="alert alert-error">
+        {state.error} Then run: <code>cd services/whatsapp &amp;&amp; npm install &amp;&amp; npm run start</code>
+      </div>
     );
   }
   if (state?.connected) {
@@ -138,14 +182,14 @@ function WhatsAppQr() {
   if (state?.qr) {
     return (
       <div>
-        <p style={{ color: "var(--muted)", fontSize: "0.9rem", marginBottom: "0.5rem" }}>
+        <p className="help" style={{ marginBottom: "0.5rem" }}>
           Scan with WhatsApp (Linked Devices): open WhatsApp → Settings → Linked devices → Link a device.
         </p>
         <img src={state.qr} alt="WhatsApp QR" style={{ maxWidth: 256, height: "auto", border: "1px solid var(--border)", borderRadius: 8 }} />
       </div>
     );
   }
-  return <p style={{ color: "var(--muted)", fontSize: "0.9rem" }}>Loading… Start the WhatsApp bridge if you have not.</p>;
+  return <p className="help">Loading… Start the WhatsApp bridge if you have not.</p>;
 }
 
 function TestSpotifyButton() {
@@ -168,19 +212,12 @@ function TestSpotifyButton() {
     }
   };
   return (
-    <span style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-      <button
-        type="button"
-        onClick={run}
-        disabled={testing}
-        style={{ padding: "0.35rem 0.75rem", fontSize: "0.9rem", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text)", cursor: testing ? "not-allowed" : "pointer" }}
-      >
+    <span className="actions">
+      <button type="button" onClick={run} disabled={testing} className="btn btn-secondary">
         {testing ? "Testing…" : "Test credentials"}
       </button>
       {result && (
-        <span className={result.ok ? "status-ok" : "status-pending"} style={{ fontSize: "0.9rem" }}>
-          {result.text}
-        </span>
+        <span className={result.ok ? "status-ok" : "status-pending"}>{result.text}</span>
       )}
     </span>
   );
@@ -221,65 +258,72 @@ function SpotifySetup({ keysStatus, onSaved }: { keysStatus: Record<string, bool
   return (
     <div>
       {setup && (
-        <div style={{ marginBottom: "1rem", padding: "0.75rem", background: "var(--surface)", borderRadius: 8, border: "1px solid var(--border)" }}>
+        <div className="alert" style={{ marginBottom: "1rem" }}>
           <p style={{ marginTop: 0, marginBottom: "0.5rem" }}>
-            <a href={setup.dashboard_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>Spotify Developer Dashboard</a>
+            <a href={setup.dashboard_url} target="_blank" rel="noreferrer" className="link">Spotify Developer Dashboard</a>
             {" · "}
-            <a href={setup.docs_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>Web API docs</a>
+            <a href={setup.docs_url} target="_blank" rel="noreferrer" className="link">Web API docs</a>
           </p>
-          <ol style={{ margin: 0, paddingLeft: "1.25rem", color: "var(--muted)", fontSize: "0.9rem" }}>
+          <ol style={{ margin: 0, paddingLeft: "1.25rem" }} className="help">
             {setup.steps.map((step, i) => (
-              <li key={i} style={{ marginBottom: "0.35rem" }} dangerouslySetInnerHTML={{ __html: step.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>") }} />
+              <li
+                key={i}
+                style={{ marginBottom: "0.35rem" }}
+                dangerouslySetInnerHTML={{ __html: step.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>") }}
+              />
             ))}
+            {spotifyConnected !== true && setup.connect_url && (
+              <li style={{ marginBottom: "0.35rem" }}>
+                To play on your devices (phone, speaker, etc.), connect your Spotify account once:{" "}
+                <a href={setup.connect_url} className="link">Connect Spotify</a>
+              </li>
+            )}
           </ol>
         </div>
       )}
-      <div style={{ marginBottom: "0.75rem" }}>
-        <label style={{ display: "block", marginBottom: "0.25rem" }}>
-          Client ID
-          {idSet && <span className="status-ok" style={{ marginLeft: "0.5rem" }}>· Set</span>}
-        </label>
+      <div className="field">
+        <div className="field-row">
+          <label className="label" htmlFor="spotify-client-id">Client ID</label>
+          {idSet && <span className="status-ok">Set</span>}
+        </div>
         <input
+          id="spotify-client-id"
           type="password"
           placeholder={idSet ? "Leave blank to keep current" : "Paste Client ID"}
           value={clientId}
           onChange={(e) => setClientId(e.target.value)}
-          style={{ width: "100%", maxWidth: 400, padding: "0.5rem", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text)" }}
+          className="input"
+          style={{ maxWidth: 420 }}
         />
       </div>
-      <div style={{ marginBottom: "0.75rem" }}>
-        <label style={{ display: "block", marginBottom: "0.25rem" }}>
-          Client secret
-          {secretSet && <span className="status-ok" style={{ marginLeft: "0.5rem" }}>· Set</span>}
-        </label>
+      <div className="field">
+        <div className="field-row">
+          <label className="label" htmlFor="spotify-client-secret">Client secret</label>
+          {secretSet && <span className="status-ok">Set</span>}
+        </div>
         <input
+          id="spotify-client-secret"
           type="password"
           placeholder={secretSet ? "Leave blank to keep current" : "Paste Client secret"}
           value={clientSecret}
           onChange={(e) => setClientSecret(e.target.value)}
-          style={{ width: "100%", maxWidth: 400, padding: "0.5rem", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text)" }}
+          className="input"
+          style={{ maxWidth: 420 }}
         />
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
-        <button type="button" onClick={save} disabled={saving} style={{ padding: "0.5rem 1rem", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 8, cursor: "pointer" }}>
+      <div className="actions">
+        <button type="button" onClick={save} disabled={saving} className="btn btn-primary">
           {saving ? "Saving…" : "Save Spotify credentials"}
         </button>
         <TestSpotifyButton />
       </div>
-      {msg && <p style={{ marginTop: "0.75rem", color: "var(--muted)", fontSize: "0.9rem" }}>{msg}</p>}
-      <div style={{ marginTop: "1rem", paddingTop: "1rem", borderTop: "1px solid var(--border)" }}>
-        <p style={{ marginBottom: "0.5rem" }}>
+      {msg && <div className="alert" style={{ marginTop: "0.75rem" }}>{msg}</div>}
+      <div style={{ marginTop: "1rem" }}>
+        <p className="help" style={{ marginBottom: "0.5rem" }}>
           {spotifyConnected === true ? (
             <span className="status-ok">Spotify connected for playback. You can say &quot;play X on Spotify&quot; in Chat and choose a device.</span>
           ) : (
-            <>
-              To play on your devices (phone, speaker, etc.), connect your Spotify account once:{" "}
-              {setup?.connect_url ? (
-                <a href={setup.connect_url} style={{ color: "var(--accent)" }}>Connect Spotify</a>
-              ) : (
-                <span className="muted">Load setup to get link</span>
-              )}
-            </>
+            <span className="muted">Spotify not connected for playback yet.</span>
           )}
         </p>
       </div>
@@ -302,7 +346,7 @@ function ModelsForm() {
   const save = async () => {
     setSaving(true);
     try {
-      for (const provider of ["groq", "google", "claude", "ollama"]) {
+      for (const provider of ["groq", "google", "claude", "ollama", "openai", "openrouter"]) {
         await api.setModel(provider, models[provider] ?? "");
       }
     } finally {
@@ -312,24 +356,26 @@ function ModelsForm() {
   if (loading) return <p style={{ color: "var(--muted)" }}>Loading…</p>;
   return (
     <div>
-      {(["groq", "google", "claude", "ollama"] as const).map((provider) => (
-        <div key={provider} style={{ marginBottom: "0.75rem" }}>
-          <label style={{ display: "block", marginBottom: "0.25rem" }}>
-            {PROVIDER_LABELS[provider]}
-            <span className="muted" style={{ marginLeft: "0.5rem", fontSize: "0.9rem" }}>
-              default: {defaults[provider] ?? "—"}
-            </span>
-          </label>
+      {(["groq", "google", "claude", "ollama", "openai", "openrouter"] as const).map((provider) => (
+        <div key={provider} className="field">
+          <div className="field-row">
+            <label className="label" htmlFor={"model-" + provider}>
+              {PROVIDER_LABELS[provider]}
+            </label>
+            <span className="help">default: {defaults[provider] ?? "—"}</span>
+          </div>
           <input
+            id={"model-" + provider}
             type="text"
-            placeholder={defaults[provider] ?? "e.g. llama-3.3-70b-versatile"}
+            placeholder={provider === "openrouter" ? "e.g. arcee-ai/trinity-large-preview:free (see openrouter.ai/models)" : (defaults[provider] ?? "e.g. llama-3.3-70b-versatile")}
             value={models[provider] ?? ""}
             onChange={(e) => setModels((m) => ({ ...m, [provider]: e.target.value }))}
-            style={{ width: "100%", maxWidth: 400, padding: "0.5rem", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text)" }}
+            className="input"
+            style={{ maxWidth: 520 }}
           />
         </div>
       ))}
-      <button type="button" onClick={save} disabled={saving} style={{ marginTop: "0.5rem", padding: "0.5rem 1rem", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 8, cursor: "pointer" }}>
+      <button type="button" onClick={save} disabled={saving} className="btn btn-primary">
         {saving ? "Saving…" : "Save models"}
       </button>
     </div>
@@ -377,114 +423,149 @@ export default function Settings() {
     <div>
       <h1 className="page-title">Settings</h1>
 
-      <div className="card">
-        <h2>API keys</h2>
-        <p style={{ color: "var(--muted)", marginBottom: "1rem" }}>
-          Add your keys here to use Chat with Groq, Gemini, Claude, etc. Keys are stored in your local database (backend/asta.db) and are never committed to git.
-        </p>
-        <p style={{ color: "var(--muted)", fontSize: "0.9rem", marginBottom: "0.5rem" }}>
-          After saving, <strong>restart the backend</strong> if you added or changed the Telegram bot token so the bot can connect. AI keys (Groq, Gemini, Claude) work right away.
-        </p>
-        <RestartBackendButton />
-        {Object.entries(KEY_LABELS).map(([keyName, label]) => (
-          <div key={keyName} style={{ marginBottom: "0.75rem" }}>
-            <label style={{ display: "block", marginBottom: "0.25rem" }}>
-              {label}
-              {keysStatus[keyName] && <span className="status-ok" style={{ marginLeft: "0.5rem" }}>· Set</span>}
-            </label>
-            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
-              <input
-                type="password"
-                placeholder={keysStatus[keyName] ? "Leave blank to keep current" : "Paste key"}
-                value={keys[keyName] ?? ""}
-                onChange={(e) => setKeys((k) => ({ ...k, [keyName]: e.target.value }))}
-                style={{ width: "100%", maxWidth: 400, padding: "0.5rem", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text)" }}
-              />
-              {keyName === "groq_api_key" && (
-                <TestGroqButton />
-              )}
+      <div className="accordion">
+        <details open>
+          <summary>
+            <span>API keys</span>
+            <span className="acc-meta">Groq, Gemini, Claude, Telegram…</span>
+          </summary>
+          <div className="acc-body">
+            <p className="help">
+              Keys are stored in your local database (<code>backend/asta.db</code>) and are never committed to git. Restart the backend if you change the Telegram token.
+            </p>
+
+            <RestartBackendButton />
+
+            {Object.entries(KEY_LABELS).map(([keyName, label]) => (
+              <div key={keyName} className="field">
+                <div className="field-row">
+                  <label className="label" htmlFor={keyName}>{label}</label>
+                  {keysStatus[keyName] && <span className="status-ok">Set</span>}
+                </div>
+                <div className="actions">
+                  <input
+                    id={keyName}
+                    type="password"
+                    placeholder={keysStatus[keyName] ? "Leave blank to keep current" : "Paste key"}
+                    value={keys[keyName] ?? ""}
+                    onChange={(e) => setKeys((k) => ({ ...k, [keyName]: e.target.value }))}
+                    className="input"
+                    style={{ maxWidth: 520 }}
+                  />
+                  {keyName === "groq_api_key" ? <TestGroqButton /> : null}
+                </div>
+              </div>
+            ))}
+
+            <div className="actions">
+              <button type="button" onClick={handleSaveKeys} disabled={saving} className="btn btn-primary">
+                {saving ? "Saving…" : "Save API keys"}
+              </button>
             </div>
+            {message && (
+              <div className={message.startsWith("Error:") ? "alert alert-error" : "alert"} style={{ marginTop: "0.75rem" }}>
+                {message}
+              </div>
+            )}
           </div>
-        ))}
-        <button type="button" onClick={handleSaveKeys} disabled={saving} style={{ marginTop: "0.5rem", padding: "0.5rem 1rem", background: "var(--accent)", color: "var(--bg)", border: "none", borderRadius: 8, cursor: "pointer" }}>
-          {saving ? "Saving…" : "Save API keys"}
-        </button>
-        {message && <p style={{ marginTop: "0.75rem", color: "var(--muted)" }}>{message}</p>}
-      </div>
+        </details>
 
-      <div className="card">
-        <h2>Asta&apos;s default AI</h2>
-        <p style={{ color: "var(--muted)", marginBottom: "0.5rem" }}>
-          The agent Asta uses this AI for Chat, WhatsApp, and Telegram unless you pick another in Chat.
-        </p>
-        <DefaultAiSelect />
-      </div>
+        <details>
+          <summary>
+            <span>Default AI</span>
+            <span className="acc-meta">Used across chat + channels</span>
+          </summary>
+          <div className="acc-body">
+            <p className="help">Asta uses this provider by default for Chat, WhatsApp, and Telegram.</p>
+            <DefaultAiSelect />
+          </div>
+        </details>
 
-      <div className="card">
-        <h2>Model per provider</h2>
-        <p style={{ color: "var(--muted)", marginBottom: "1rem" }}>
-          Choose which model to use for each provider. Leave blank to use the built-in default (e.g. Groq: llama-3.3-70b-versatile).
-        </p>
-        <ModelsForm />
-      </div>
+        <details>
+          <summary>
+            <span>Models per provider</span>
+            <span className="acc-meta">Optional overrides</span>
+          </summary>
+          <div className="acc-body">
+            <p className="help">
+              Leave blank to use defaults. For <strong>OpenRouter</strong>, use a model ID (browse at{" "}
+              <a href="https://openrouter.ai/models" target="_blank" rel="noreferrer" className="link">openrouter.ai/models</a>).
+            </p>
+            <ModelsForm />
+          </div>
+        </details>
 
-      <div className="card">
-        <h2>AI providers</h2>
-        <p>Available for Asta: {providers.join(", ")}. Add keys above to enable each.</p>
-        <p style={{ color: "var(--muted)", fontSize: "0.9rem" }}>Ollama needs no key; set OLLAMA_BASE_URL in backend/.env if not default.</p>
-      </div>
+        <details>
+          <summary>
+            <span>Channels</span>
+            <span className="acc-meta">Telegram + WhatsApp</span>
+          </summary>
+          <div className="acc-body">
+            <h3 style={{ marginTop: 0 }}>Telegram</h3>
+            <p className="help">
+              Create a bot at <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="link">t.me/BotFather</a>,
+              paste the token above, save, then restart the backend.
+            </p>
 
-      <div className="card">
-        <h2>Channels</h2>
-        <p style={{ color: "var(--muted)", marginBottom: "1rem" }}>
-          Connect Telegram and WhatsApp so Asta can reply from the panel and on your phone.
-        </p>
-        <h3 style={{ fontSize: "0.95rem", marginBottom: "0.35rem" }}>Telegram</h3>
-        <p style={{ color: "var(--muted)", fontSize: "0.9rem", marginBottom: "1rem" }}>
-          Set your bot token above under <strong>API keys → Telegram Bot (from @BotFather)</strong>. Create a bot at <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>t.me/BotFather</a>, then paste the token and save. Restart the backend to connect.
-        </p>
-        <h3 style={{ fontSize: "0.95rem", marginBottom: "0.35rem" }}>WhatsApp</h3>
-        <WhatsAppQr />
-      </div>
+            <h3>WhatsApp</h3>
+            <WhatsAppQr />
+          </div>
+        </details>
 
-      <div className="card">
-        <h2>Spotify</h2>
-        <p style={{ color: "var(--muted)", marginBottom: "1rem" }}>
-          Set your Spotify app credentials so Asta can search songs (and later play on your devices). You can paste them here or set SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in backend/.env.
-        </p>
-        <SpotifySetup keysStatus={keysStatus} onSaved={() => api.getSettingsKeys().then(setKeysStatus)} />
-      </div>
+        <details>
+          <summary>
+            <span>Spotify</span>
+            <span className="acc-meta">Search + playback</span>
+          </summary>
+          <div className="acc-body">
+            <p className="help">
+              Set your Spotify app credentials so Asta can search songs and (optionally) control playback on your devices.
+            </p>
+            <SpotifySetup keysStatus={keysStatus} onSaved={() => api.getSettingsKeys().then(setKeysStatus)} />
+          </div>
+        </details>
 
-      <div className="card">
-        <h2>Audio notes</h2>
-        <p style={{ color: "var(--muted)", marginBottom: "0.5rem" }}>
-          Upload meetings or voice memos; Asta transcribes and formats as meeting notes or conversation summary. <strong>No API key for transcription</strong> — it runs locally (faster-whisper). Formatting uses your default AI above (Groq, Gemini, etc.).
-        </p>
-        <p style={{ fontSize: "0.9rem", marginBottom: "0" }}>
-          Enable the skill in <strong>Skills</strong>, then use <a href="/audio-notes" style={{ color: "var(--accent)" }}>Audio notes</a> to upload and process.
-        </p>
-      </div>
-
-      <div className="card">
-        <h2>Run the API</h2>
-        <p style={{ color: "var(--muted)", marginBottom: "0.75rem" }}>
-          If the panel shows &quot;API off&quot;, start the backend in a terminal from the project root:
-        </p>
-        <pre style={{ background: "var(--surface)", padding: "1rem", borderRadius: 8, overflow: "auto", fontSize: "0.85rem", marginBottom: "0.5rem", whiteSpace: "pre-wrap" }}>
-          {`# Linux / macOS
+        <details>
+          <summary>
+            <span>Run the API</span>
+            <span className="acc-meta">When “API off” shows</span>
+          </summary>
+          <div className="acc-body">
+            <p className="help">Start the backend from the project root (default port: 8010):</p>
+            <pre className="file-preview" style={{ maxWidth: 820 }}>
+{`# Linux / macOS
 ./asta.sh start
 
 # Or manually:
-cd backend && source .venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8000`}
-        </pre>
-        <p style={{ color: "var(--muted)", fontSize: "0.9rem", marginBottom: "0" }}>
-          API will be at <strong>http://localhost:8000</strong>; panel at <strong>http://localhost:5173</strong>. Use <code>./asta.sh status</code> to check, <code>./asta.sh restart</code> to restart.
-        </p>
-      </div>
+cd backend && source .venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8010`}
+            </pre>
+            <p className="help">
+              API is <strong>http://localhost:8010</strong> (or the URL in <code>VITE_API_URL</code>); panel is{" "}
+              <strong>http://localhost:5173</strong>.
+            </p>
+          </div>
+        </details>
 
-      <div className="card">
-        <h2>Files</h2>
-        <p>ASTA_ALLOWED_PATHS in backend/.env — comma-separated directories the AI and panel can read.</p>
+        <details>
+          <summary>
+            <span>About providers & files</span>
+            <span className="acc-meta">Quick reference</span>
+          </summary>
+          <div className="acc-body">
+            <h3 style={{ marginTop: 0 }}>AI providers</h3>
+            <p className="help">
+              Available for Asta: {providers.join(", ")}. Ollama needs no key; set <code>OLLAMA_BASE_URL</code> in <code>backend/.env</code> if needed.
+            </p>
+
+            <h3>Files</h3>
+            <p className="help">
+              <code>ASTA_ALLOWED_PATHS</code> in <code>backend/.env</code> controls which directories the panel/AI can read.
+            </p>
+
+            <h3>Audio notes</h3>
+            <p className="help">Transcription runs locally (faster-whisper). Formatting uses your default AI.</p>
+          </div>
+        </details>
       </div>
     </div>
   );

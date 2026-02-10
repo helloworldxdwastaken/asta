@@ -4,12 +4,16 @@ from app.providers.ollama import OllamaProvider
 from app.providers.groq import GroqProvider
 from app.providers.google import GoogleProvider
 from app.providers.claude import ClaudeProvider
+from app.providers.openai import OpenAIProvider
+from app.providers.openrouter import OpenRouterProvider
 
 _providers: dict[str, BaseProvider] = {
     "ollama": OllamaProvider(),
     "groq": GroqProvider(),
     "google": GoogleProvider(),
     "claude": ClaudeProvider(),
+    "openai": OpenAIProvider(),
+    "openrouter": OpenRouterProvider(),
 }
 
 

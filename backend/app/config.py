@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     groq_api_key: str | None = None
     anthropic_api_key: str | None = None
+    openrouter_api_key: str | None = None  # OpenRouter (300+ models)
     ollama_base_url: str = "http://localhost:11434"
 
     # Channels

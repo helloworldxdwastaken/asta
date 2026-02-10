@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 
@@ -153,6 +154,16 @@ async def get_user_access_token(user_id: str) -> str | None:
         return access_token
     except Exception as e:
         logger.warning("Spotify refresh token failed: %s", e)
+        # If refresh token was revoked (400 invalid_grant), clear stored tokens so status shows disconnected
+        resp = getattr(e, "response", None)
+        if resp is not None and getattr(resp, "status_code", None) == 400:
+            try:
+                err_body = resp.json()
+                if err_body.get("error") == "invalid_grant":
+                    await db.clear_spotify_tokens(user_id)
+                    return None
+            except Exception:
+                pass
         return access_token  # try existing
 
 
@@ -191,7 +202,7 @@ async def start_playback(user_id: str, device_id: str | None, track_uri: str) ->
     try:
         async with httpx.AsyncClient() as client:
             r = await client.put(
-                PLAY_URL + ("?" + __import__("urllib.parse").urlencode(params) if params else ""),
+                PLAY_URL + (f"?{urlencode(params)}" if params else ""),
                 json={"uris": [track_uri]},
                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
                 timeout=10.0,
