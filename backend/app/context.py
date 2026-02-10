@@ -233,16 +233,25 @@ async def build_context(
             parts.append(f"(User just set location to: {extra['location_just_set']}. Confirm briefly.)")
         parts.append("")
 
-    # Web search results (when skill enabled and we ran a search)
-    if google_search_enabled and _use("google_search") and extra and extra.get("search_results"):
-        parts.append("--- Web search results (you HAVE direct web access; use these) ---")
-        for i, r in enumerate(extra["search_results"][:5], 1):
-            title = (r.get("title") or "").strip()
-            snippet = (r.get("snippet") or "").strip()
-            url = (r.get("url") or "").strip()
-            if title or snippet:
-                parts.append(f"{i}. {title}: {snippet[:300]}" + (f" ({url})" if url else ""))
-        parts.append("Answer from the above results. Do NOT say you cannot access the web or don't have internet—you do.")
+    # Web search (when skill enabled and we ran a search)
+    if google_search_enabled and _use("google_search") and extra and "search_results" in extra:
+        results = extra.get("search_results") or []
+        err = extra.get("search_error")
+        if results:
+            parts.append("--- Web search results (you HAVE direct web access; use these) ---")
+            for i, r in enumerate(results[:5], 1):
+                title = (r.get("title") or "").strip()
+                snippet = (r.get("snippet") or "").strip()
+                url = (r.get("url") or "").strip()
+                if title or snippet:
+                    parts.append(f"{i}. {title}: {snippet[:300]}" + (f" ({url})" if url else ""))
+            parts.append("Answer from the above results. Do NOT say you cannot access the web or don't have internet—you do.")
+        elif err:
+            parts.append("--- Web search ---")
+            parts.append(f"Search failed: {err}. Tell the user the search errored. Do NOT say you cannot access the web—Asta can search; the API failed.")
+        else:
+            parts.append("--- Web search ---")
+            parts.append("Search ran but returned no results. Tell the user nothing was found or suggest rephrasing. Do NOT say you cannot access the web—Asta can search.")
         parts.append("")
 
     # Lyrics (when skill enabled and we ran a search)

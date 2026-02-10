@@ -150,7 +150,9 @@ async def handle_message(
     if "google_search" in skills_to_use:
         import asyncio
         from app.search_web import search_web
-        extra["search_results"] = await asyncio.to_thread(search_web, text, 5)
+        results, err = await asyncio.to_thread(search_web, text, 5)
+        extra["search_results"] = results
+        extra["search_error"] = err
 
     # Lyrics: only when relevant
     if "lyrics" in skills_to_use:

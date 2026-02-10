@@ -65,7 +65,7 @@ def _run_learning_job_sync(
                 time.sleep(15)
                 continue
             try:
-                results = search_web(query, max_results=5)
+                results, _ = search_web(query, max_results=5)
                 for r in (results or []):
                     snippet = (r.get("snippet") or "").strip()
                     if snippet and len(snippet) > 80:

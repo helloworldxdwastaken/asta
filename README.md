@@ -89,6 +89,7 @@ Then start Ollama if not running: `ollama serve` (or open the Ollama app). If yo
 ## Docs
 
 - **`docs/INSTALL.md`** — Full native install (macOS, Linux, Windows), env vars, troubleshooting.  
+- **`docs/ERRORS.md`** — Common errors and solutions (startup, API, skills, web search, reminders, etc.).  
 - **`docs/SPEC.md`** — Product spec and where to add features.  
 - **`docs/SECURITY.md`** — Keep secrets in `backend/.env` only; never commit them.
 

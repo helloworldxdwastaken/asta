@@ -127,6 +127,8 @@ If the panel shows **“API off”**:
 
 ## Troubleshooting
 
+See **docs/ERRORS.md** for a full list of common errors and fixes. Quick checks:
+
 - **“Address already in use” (8010 or 5173)** — Run `./asta.sh restart` to free ports and start fresh. Or use another port, e.g. `uvicorn app.main:app --reload --port 8001` and update `VITE_API_URL` / `ASTA_API_URL` accordingly.
 - **“Cannot reach Asta API” / “API off”** — Start the backend: `./asta.sh start` or run uvicorn as above. Panel talks to `http://localhost:8010/api` by default.
 - **“No AI provider available”** — Add at least one of: `GROQ_API_KEY`, `GEMINI_API_KEY`, or run Ollama and set `OLLAMA_BASE_URL`.
