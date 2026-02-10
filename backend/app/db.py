@@ -119,14 +119,17 @@ class Db:
             CREATE INDEX IF NOT EXISTS idx_reminders_run ON reminders(run_at);
         """)
         await self._conn.commit()
-        try:
-            await self._conn.execute(
-                "ALTER TABLE user_settings ADD COLUMN default_ai_provider TEXT NOT NULL DEFAULT 'groq'"
-            )
-            await self._conn.commit()
-        except Exception as e:
-            self.logger.exception("Failed to add default_ai_provider column: %s", e)
-            pass
+        # Check if column exists before adding
+        cursor = await self._conn.execute("PRAGMA table_info(user_settings)")
+        columns = [row["name"] for row in await cursor.fetchall()]
+        if "default_ai_provider" not in columns:
+            try:
+                await self._conn.execute(
+                    "ALTER TABLE user_settings ADD COLUMN default_ai_provider TEXT NOT NULL DEFAULT 'groq'"
+                )
+                await self._conn.commit()
+            except Exception as e:
+                self.logger.exception("Failed to add default_ai_provider column: %s", e)
 
     async def get_or_create_conversation(self, user_id: str, channel: str) -> str:
         if not self._conn:
@@ -376,6 +379,13 @@ class Db:
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+
+    async def delete_reminder(self, reminder_id: int) -> bool:
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
+        await self._conn.commit()
+        return cursor.rowcount > 0
 
     async def set_pending_learn_about(self, user_id: str, topic: str) -> None:
         if not self._conn:

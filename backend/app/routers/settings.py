@@ -395,3 +395,20 @@ async def get_notifications(user_id: str = "default", limit: int = 50):
     await db.connect()
     items = await db.get_notifications(user_id, limit=limit)
     return {"notifications": items}
+
+
+@router.delete("/notifications/{id}")
+@router.delete("/api/notifications/{id}")
+async def delete_notification(id: int, user_id: str = "default"):
+    """Delete a reminder/notification."""
+    db = get_db()
+    await db.connect()
+    # Remove from DB
+    deleted = await db.delete_reminder(id)
+    # Also try to remove from scheduler if it's pending
+    from app.tasks.scheduler import get_scheduler
+    sch = get_scheduler()
+    job_id = f"rem_{id}"
+    if sch.get_job(job_id):
+        sch.remove_job(job_id)
+    return {"ok": deleted, "id": id}

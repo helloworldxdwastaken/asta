@@ -17,6 +17,8 @@ export default function Dashboard() {
       .status()
       .then((s) => { setStatus(s); setError(null); })
       .catch(() => setError("Cannot reach Asta API. Is the backend running on port 8010?"));
+    api.getNotifications(50).then((r) => setNotifications(r.notifications || [])).catch(() => setNotifications([]));
+    api.getDefaultAi().then((r) => setDefaultAi(r.provider)).catch(() => setDefaultAi(null));
   }, []);
 
   useEffect(() => {
@@ -25,20 +27,23 @@ export default function Dashboard() {
     return () => clearInterval(t);
   }, [refresh]);
 
-  useEffect(() => {
-    if (error) return;
-    api.getNotifications(10).then((r) => setNotifications(r.notifications || [])).catch(() => setNotifications([]));
-  }, [error, status]);
-
-  useEffect(() => {
-    if (error) return;
-    api.getDefaultAi().then((r) => setDefaultAi(r.provider)).catch(() => setDefaultAi(null));
-  }, [error, status]);
+  const handleDeleteNotification = async (id: number) => {
+    if (!confirm("Delete this reminder?")) return;
+    try {
+      await api.deleteNotification(id);
+      setNotifications((prev) => prev.filter((n) => n.id !== id));
+    } catch (e) {
+      alert("Failed to delete: " + e);
+    }
+  };
 
   const apis = status?.apis ?? {};
   const integrations = status?.integrations ?? {};
   const skills = status?.skills ?? [];
   const connected = !error && status;
+
+  const pendingReminders = notifications.filter(n => n.status === 'pending');
+  const pastReminders = notifications.filter(n => n.status !== 'pending');
 
   return (
     <div className="dashboard">
@@ -52,49 +57,90 @@ export default function Dashboard() {
       <section className="dashboard-section">
         <div className={`card card-backend ${error ? "card-error" : connected ? "card-success" : ""}`}>
           <div className="card-backend-header">
-            <h2>Backend</h2>
-            {connected && (
-              <span className="backend-badge status-ok">Connected</span>
-            )}
-            {error && (
-              <span className="backend-badge status-pending">Disconnected</span>
-            )}
+            <h2>Backend Status</h2>
+            {connected && <span className="backend-badge status-ok">Connected</span>}
+            {error && <span className="backend-badge status-pending">Disconnected</span>}
           </div>
           {error ? (
             <>
-              <p className="card-backend-message">
-                Frontend cannot reach the API. Start the backend:
-              </p>
-              <code className="card-backend-code">
-                cd backend && uvicorn app.main:app --port 8010
-              </code>
-              <button type="button" onClick={refresh} className="btn btn-secondary" style={{ marginTop: "0.75rem" }}>
-                Retry
-              </button>
+              <p className="card-backend-message">Frontend cannot reach the API. Start the backend:</p>
+              <code className="card-backend-code">cd backend && uvicorn app.main:app --port 8010</code>
+              <button type="button" onClick={refresh} className="btn btn-secondary" style={{ marginTop: "0.75rem" }}>Retry</button>
             </>
           ) : status ? (
-            <p className="card-backend-message">
-              Asta {status.app} v{status.version}. Frontend and backend are talking.
-            </p>
+            <p className="card-backend-message">Asta {status.app} v{status.version} is running.</p>
           ) : (
             <p className="muted">Checking…</p>
           )}
-          <p className="card-backend-hint muted">
-            If the browser shows a sign-in prompt, click Cancel — only run the Asta backend on your chosen API port (default 8010).
-          </p>
         </div>
       </section>
 
       {status && (
         <>
+          {/* ─── REMINDERS SECTION ─── */}
           <section className="dashboard-section">
-            <h2 className="dashboard-section-title">Status</h2>
+            <h2 className="dashboard-section-title">Reminders</h2>
+            <div className="dashboard-grid">
+
+              {/* UPCOMING */}
+              <div className="card">
+                <h2>Upcoming</h2>
+                {pendingReminders.length === 0 ? (
+                  <p className="muted">No upcoming reminders.</p>
+                ) : (
+                  <ul className="reminders-list">
+                    {pendingReminders.map((n) => (
+                      <li key={n.id} className="reminder-item">
+                        <div className="reminder-info">
+                          <span className="reminder-time">
+                            {new Date(n.run_at).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}
+                          </span>
+                          <span className="reminder-msg">{n.message}</span>
+                        </div>
+                        <button
+                          className="btn-quiet btn-sm"
+                          onClick={() => handleDeleteNotification(n.id)}
+                          title="Delete reminder"
+                        >
+                          ✕
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              {/* HISTORY */}
+              <div className="card">
+                <h2>History</h2>
+                {pastReminders.length === 0 ? (
+                  <p className="muted">No past reminders.</p>
+                ) : (
+                  <ul className="reminders-list">
+                    {pastReminders.slice(0, 5).map((n) => (
+                      <li key={n.id} className="reminder-item opacity-50">
+                        <div className="reminder-info">
+                          <span className="reminder-status">✓</span>
+                          <span className="reminder-msg">{n.message}</span>
+                        </div>
+                        <span className="reminder-time-sm">
+                          {new Date(n.run_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {pastReminders.length > 5 && <p className="muted" style={{ fontSize: "0.8rem", marginTop: "0.5rem" }}>+ {pastReminders.length - 5} more</p>}
+              </div>
+
+            </div>
+          </section>
+
+          <section className="dashboard-section">
+            <h2 className="dashboard-section-title">System Status</h2>
             <div className="dashboard-grid">
               <div className="card">
-                <h2>API providers</h2>
-                <p className="muted" style={{ marginBottom: "0.75rem", fontSize: "0.9rem" }}>
-                  AI providers with keys set
-                </p>
+                <h2>API Providers</h2>
                 <div className="status-grid">
                   {[
                     { key: "groq", label: "Groq" },
@@ -105,43 +151,23 @@ export default function Dashboard() {
                     { key: "ollama", label: "Ollama" },
                   ].map(({ key, label }) => (
                     <div key={key} className="status-item">
-                      <span className={apis[key] ? "status-ok" : "status-pending"}>
-                        {apis[key] ? "On" : "Off"}
-                      </span>
-                      <span className="muted">— {label}</span>
+                      <span className={apis[key] ? "status-ok" : "status-pending"}>●</span>
+                      <span className={apis[key] ? "" : "muted"}>{label}</span>
                     </div>
                   ))}
                 </div>
               </div>
 
               <div className="card">
-                <h2>Default AI</h2>
-                <p className="muted" style={{ marginBottom: "0.75rem", fontSize: "0.9rem" }}>
-                  {defaultAi ? (
-                    <>Chat uses <strong>{defaultAi === "openrouter" ? "OpenRouter" : defaultAi === "openai" ? "OpenAI" : defaultAi === "groq" ? "Groq" : defaultAi}</strong>. Change in <Link to="/settings" className="link">Settings</Link>.</>
-                  ) : (
-                    "Set in Settings."
-                  )}
-                </p>
-              </div>
-
-              <div className="card">
                 <h2>Channels</h2>
-                <p className="muted" style={{ marginBottom: "0.75rem", fontSize: "0.9rem" }}>
-                  Telegram & WhatsApp
-                </p>
                 <div className="status-grid">
                   <div className="status-item">
-                    <span className={integrations.telegram ? "status-ok" : "status-pending"}>
-                      {integrations.telegram ? "On" : "Off"}
-                    </span>
-                    <span className="muted">— Telegram</span>
+                    <span className={integrations.telegram ? "status-ok" : "status-pending"}>●</span>
+                    <span>Telegram</span>
                   </div>
                   <div className="status-item">
-                    <span className={integrations.whatsapp ? "status-ok" : "status-pending"}>
-                      {integrations.whatsapp ? "On" : "Off"}
-                    </span>
-                    <span className="muted">— WhatsApp</span>
+                    <span className={integrations.whatsapp ? "status-ok" : "status-pending"}>●</span>
+                    <span>WhatsApp</span>
                   </div>
                 </div>
               </div>
@@ -151,56 +177,18 @@ export default function Dashboard() {
           <section className="dashboard-section">
             <div className="card">
               <div className="card-skills-header">
-                <h2>Skills</h2>
-                <Link to="/skills" className="btn btn-link">
-                  Manage in Skills →
-                </Link>
+                <h2>Active Skills</h2>
+                <Link to="/skills" className="btn btn-link">Manage →</Link>
               </div>
-              <p className="muted" style={{ marginBottom: "1rem", fontSize: "0.9rem" }}>
-                What the AI can use. Turn skills on or off in the Skills tab.
-              </p>
               <div className="skills-chips">
-                {skills.map((s) => (
-                  <span
-                    key={s.id}
-                    className={`skill-chip ${s.enabled ? "skill-chip-on" : "skill-chip-off"} ${!s.available ? "skill-chip-unavailable" : ""}`}
-                    title={!s.available ? "Not configured" : undefined}
-                  >
-                    {s.name}
-                    {!s.available && " · —"}
-                  </span>
+                {skills.filter(s => s.enabled).map((s) => (
+                  <span key={s.id} className="skill-chip skill-chip-on">{s.name}</span>
                 ))}
+                {skills.every(s => !s.enabled) && <span className="muted">No skills enabled.</span>}
               </div>
             </div>
           </section>
 
-          {notifications.length > 0 && (
-            <section className="dashboard-section">
-              <div className="card">
-                <h2>Recent reminders</h2>
-                <p className="muted" style={{ marginBottom: "0.75rem", fontSize: "0.9rem" }}>
-                  Alarms and reminders you set. When the time comes, you get the message here (and on Telegram/WhatsApp if connected).
-                </p>
-                <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-                  {notifications.slice(0, 10).map((n) => (
-                    <li key={n.id} style={{ padding: "0.35rem 0", borderBottom: "1px solid var(--border)", fontSize: "0.9rem" }}>
-                      <span className={n.status === "sent" ? "status-ok" : "status-pending"}>{n.status === "sent" ? "✓" : "⏳"}</span>{" "}
-                      {n.message} — {new Date(n.run_at).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </section>
-          )}
-
-          <section className="dashboard-section">
-            <div className="card card-about">
-              <h2>About Asta</h2>
-              <p>
-                Asta is your agent. It uses the AI you set (Groq, OpenRouter, OpenAI, etc.) for Chat, WhatsApp, and Telegram. Set API keys and default AI in <Link to="/settings" className="link">Settings</Link>; enable or disable skills in the <Link to="/skills" className="link">Skills</Link> tab.
-              </p>
-            </div>
-          </section>
         </>
       )}
 

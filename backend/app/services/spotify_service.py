@@ -20,10 +20,10 @@ logger = logging.getLogger(__name__)
 
 class SpotifyService:
     @staticmethod
-    async def handle_message(user_id: str, text: str, extra_context: dict) -> bool:
+    async def handle_message(user_id: str, text: str, extra_context: dict) -> str | None:
         """
         Process user text for specific Spotify commands.
-        Returns True if a Spotify action was triggered/handled, False otherwise.
+        Returns a reply string if handled (short-circuiting the LLM), or None if not handled/needs LLM.
         Updates extra_context in-place.
         """
         t_lower = (text or "").strip().lower()
@@ -49,17 +49,16 @@ class SpotifyService:
                         if choice in (d.get("name") or "").lower():
                             device_id = d.get("id")
                             device_name = d.get("name")
+                            # Don't break immediately if multiple match? First match is fine.
                             break
                 
                 if device_id:
                     ok = await start_playback(user_id, device_id, pending["track_uri"])
                     await db.clear_pending_spotify_play(user_id)
                     if ok:
-                        extra_context["spotify_played_on"] = device_name or "device"
+                        return f"Playing on {device_name or 'device'}."
                     else:
-                        extra_context["spotify_play_failed"] = True
-                        extra_context["spotify_play_failed_device"] = device_name or "device"
-                    return True # Handled pending choice
+                        return f"Failed to play on {device_name or 'device'}."
             except (json.JSONDecodeError, ValueError, KeyError) as e:
                 logger.warning(f"Failed to parse pending spotify choice: {e}")
                 pass
@@ -67,18 +66,17 @@ class SpotifyService:
         # 2. Skip / Next
         if any(k in t_lower for k in ("skip", "next song", "next track")):
             ok = await skip_next_track(user_id)
-            extra_context["spotify_play_connected"] = True
-            extra_context["spotify_skipped"] = ok
-            return True
+            if ok:
+                return "Skipped."
+            return "Failed to skip (is Spotify playing?)."
 
         # 3. Volume
         vol = parse_volume_percent(text) if "volume" in t_lower or "turn it up" in t_lower or "turn it down" in t_lower else None
         if vol is not None:
             ok = await set_volume_percent(user_id, vol)
-            extra_context["spotify_play_connected"] = True
-            extra_context["spotify_volume_set"] = ok
-            extra_context["spotify_volume_value"] = vol
-            return True
+            if ok:
+                return f"Volume set to {vol}%."
+            return "Failed to set volume."
 
         # 4. Playlist URI / Link
         playlist_uri = extract_playlist_uri(text)
@@ -87,18 +85,14 @@ class SpotifyService:
             if not token:
                 row = await db.get_spotify_tokens(user_id)
                 if row:
-                    extra_context["spotify_reconnect_needed"] = True
+                    return "I need to reconnect to Spotify. Please check Settings."
                 else:
-                    extra_context["spotify_play_connected"] = False
+                    return "Spotify is not connected. Go to Settings > Spotify to connect."
             else:
-                extra_context["spotify_play_connected"] = True
                 ok = await start_playback(user_id, None, context_uri=playlist_uri)
                 if ok:
-                    extra_context["spotify_played_on"] = "active device"
-                else:
-                    extra_context["spotify_play_failed"] = True
-                    extra_context["spotify_play_failed_device"] = "active device"
-            return True
+                    return "Starting playlist..."
+                return "Failed to start playlist."
 
         # 5. "Play X" query
         play_query = play_query_from_message(text)
@@ -107,40 +101,45 @@ class SpotifyService:
             if not token:
                 row = await db.get_spotify_tokens(user_id)
                 if row:
-                    extra_context["spotify_reconnect_needed"] = True
+                    return "Token expired. Please reconnect Spotify in Settings."
                 else:
-                    extra_context["spotify_play_connected"] = False
+                    return "Spotify is not connected. Connect in Settings."
             else:
-                extra_context["spotify_play_connected"] = True
                 results = await spotify_search_if_configured(play_query)
                 if not results or not results[0].get("uri"):
-                    extra_context["spotify_results"] = []
+                    return f"I couldn't find '{play_query}' on Spotify."
                 else:
                     track_uri = results[0]["uri"]
+                    track_name = results[0].get("name") or "track"
+                    artist = results[0].get("artist") or ""
+                    display_name = f"{track_name} by {artist}" if artist else track_name
+                    
                     devices = await list_user_devices(user_id)
                     if not devices:
-                        extra_context["spotify_devices"] = []
-                        extra_context["spotify_play_track_uri"] = track_uri
+                        return "No active Spotify devices found. Open Spotify on your phone or laptop first."
                     elif len(devices) == 1:
                         dev = devices[0]
                         ok = await start_playback(user_id, dev.get("id"), track_uri)
                         if ok:
-                            extra_context["spotify_played_on"] = dev.get("name") or "device"
-                        else:
-                            extra_context["spotify_play_failed"] = True
-                            extra_context["spotify_play_failed_device"] = dev.get("name") or "device"
+                            return f"Playing {display_name} on {dev.get('name')}."
+                        return f"Failed to play on {dev.get('name')}."
                     else:
                         await db.set_pending_spotify_play(user_id, track_uri, json.dumps(devices))
-                        extra_context["spotify_devices"] = devices
-                        extra_context["spotify_pending_track_uri"] = track_uri
-            return True
+                        dev_list = ", ".join([f"{i+1}. {d.get('name')}" for i, d in enumerate(devices)])
+                        return f"Found {display_name}. Which device?\n{dev_list}"
 
-        # 6. General Search (Fallback if enabled)
-        # Note: In the original handler, this was run if "spotify" was in skills_to_use.
-        # We might want to keep this separate or ensure it's called only when relevant.
+        # 6. General Search - Fallback
+        # If user explicitly asks to "search spotify for X", we might want to return results.
+        # But 'play' is handled above. If we just return None here, the LLM will handle "search" 
+        # using the context injected by checking 'spotify' skill later?
+        # Actually context builder runs BEFORE this returns? No. 
+        # In handler.py, handle_message runs service FIRST.
+        # So we can inject context here and let LLM talk about it if it's just a broad search.
+        
         query = _search_query_from_message(text)
         if query:
              extra_context["spotify_results"] = await spotify_search_if_configured(query)
-             return True
+             # Return None so LLM summarizes the search results
+             return None
         
-        return False
+        return None

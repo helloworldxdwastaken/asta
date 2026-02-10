@@ -52,8 +52,24 @@ kill_port() {
     else
         pids=$(fuser "$port/tcp" 2>/dev/null)
     fi
+    
     if [ -n "$pids" ]; then
-        echo "$pids" | xargs kill -9 2>/dev/null
+        for pid in $pids; do
+            # Check process name to avoid killing sshd (port forwarding)
+            local pname
+            pname=$(ps -p "$pid" -o comm= 2>/dev/null)
+            if [ "$pname" == "sshd" ]; then
+                print_warning "Port $port is held by sshd (likely port forwarding). Skipping kill for PID $pid."
+                continue
+            fi
+
+            # Kill nicely first
+            kill -15 "$pid" 2>/dev/null
+            sleep 0.5
+            if kill -0 "$pid" 2>/dev/null; then
+                kill -9 "$pid" 2>/dev/null
+            fi
+        done
         return 0
     fi
     return 1

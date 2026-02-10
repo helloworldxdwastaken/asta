@@ -115,8 +115,11 @@ export const api = {
   },
   audioStatus: (jobId: string) =>
     req<{ stage: string; transcript?: string; formatted?: string; error?: string }>("/audio/status/" + encodeURIComponent(jobId)),
-  getNotifications: (limit = 20) =>
-    req<{ notifications: { id: number; message: string; run_at: string; status: string; channel: string; created_at: string }[] }>(
-      "/notifications?limit=" + limit
-    ),
+  getNotifications(limit = 50) {
+    return req<{ notifications: any[] }>(`/notifications?limit=${limit}`);
+  },
+
+  deleteNotification(id: number) {
+    return req<{ ok: boolean }>(`/notifications/${id}`, { method: "DELETE" });
+  },
 };

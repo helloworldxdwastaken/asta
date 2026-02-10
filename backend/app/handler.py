@@ -57,8 +57,12 @@ async def handle_message(
         extra.update(learning_result)
 
     # 3. Spotify
-    # Returns True if it handled something, but we just want side effects on extra context
-    await SpotifyService.handle_message(user_id, text, extra)
+    # Returns a string if it handled the request fully (e.g. "Playing X", "Skipped"); None otherwise.
+    spotify_reply = await SpotifyService.handle_message(user_id, text, extra)
+    if spotify_reply:
+         await db.add_message(cid, "user", text)
+         await db.add_message(cid, "assistant", spotify_reply, "script")
+         return spotify_reply
 
     # --- END SERVICE CALLS ---
 
