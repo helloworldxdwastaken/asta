@@ -2,16 +2,6 @@
 #═══════════════════════════════════════════════════════════════════════════════
 #  Asta - Backend + Frontend control script
 #═══════════════════════════════════════════════════════════════════════════════
-#
-#  Usage:
-#    ./asta.sh start     Start backend + frontend (stop anything on ports first)
-#    ./asta.sh stop      Stop backend + frontend
-#    ./asta.sh restart   Stop then start both (reliable)
-#    ./asta.sh status    Show whether backend and frontend are running
-#
-#  Uses PID files + lsof so restarts work even when processes stick on ports.
-#
-#═══════════════════════════════════════════════════════════════════════════════
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$SCRIPT_DIR/backend"
@@ -23,29 +13,35 @@ FRONTEND_LOG_FILE="$SCRIPT_DIR/frontend.log"
 BACKEND_PORT=8010
 FRONTEND_PORT=5173
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-MAGENTA='\033[0;35m'
+# Colors
+RED='\033[38;5;196m'
+GREEN='\033[38;5;46m'
+YELLOW='\033[38;5;226m'
+BLUE='\033[38;5;39m'
+CYAN='\033[38;5;51m'
+MAGENTA='\033[38;5;213m'
+GRAY='\033[38;5;240m'
+WHITE='\033[38;5;255m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-# Nice ANSI "ASTA" word (shown on start / restart / status / help)
 print_asta_banner() {
-    echo -e "${CYAN}"
-    echo -e "   ${BOLD}╭─────────────╮${NC}"
-    echo -e "   ${CYAN}║${NC}  ${BOLD}${MAGENTA}A S T A${NC}  ${CYAN}║${NC}"
-    echo -e "   ${CYAN}╰─────────────╯${NC}"
-    echo -e "${NC}"
+    echo -e "${MAGENTA}${BOLD}"
+    echo "    ▄▄▄       ██████ ▄▄▄█████▓ ▄▄▄      "
+    echo "   ▒████▄   ▒██    ▒ ▓  ██▒ ▓▒▒████▄    "
+    echo "   ▒██  ▀█▄ ░ ▓██▄   ▒ ▓██░ ▒░▒██  ▀█▄  "
+    echo "   ░██▄▄▄▄██  ▒   ██▒░ ▓██▓ ░ ░██▄▄▄▄██ "
+    echo "    ▓█   ▓██▒██████▒▒  ▒██▒ ░  ▓█   ▓██▒"
+    echo "    ▒▒   ▓▒█▒ ▒▓▒ ▒ ░  ▒ ░░    ▒▒   ▓▒█░"
+    echo -e "     ░   ▒▒ ░ ░▒  ░ ░    ░      ░   ▒▒ ░${NC}"
+    echo -e "     ${CYAN}  AI Control Plane ${GRAY}:: ${WHITE}v0.1.0${NC}\n"
 }
 
-print_status() { echo -e "${BLUE}[INFO]${NC} $1"; }
-print_success() { echo -e "${GREEN}[✓]${NC} $1"; }
-print_warning() { echo -e "${YELLOW}[!]${NC} $1"; }
-print_error() { echo -e "${RED}[✗]${NC} $1"; }
-print_step() { echo -e "${BLUE}[→]${NC} $1"; }
+print_status() { echo -e "${CYAN}➜${NC} $1"; }
+print_success() { echo -e "${GREEN}✔${NC} $1"; }
+print_warning() { echo -e "${YELLOW}⚠${NC} $1"; }
+print_error() { echo -e "${RED}✘${NC} $1"; }
+print_sub() { echo -e "  ${GRAY}└─${NC} $1"; }
 
 # Kill any process on a specific port (lsof works reliably across systems)
 kill_port() {
@@ -54,7 +50,6 @@ kill_port() {
     if command -v lsof >/dev/null 2>&1; then
         pids=$(lsof -ti:"$port" 2>/dev/null)
     else
-        # fallback: fuser (Linux)
         pids=$(fuser "$port/tcp" 2>/dev/null)
     fi
     if [ -n "$pids" ]; then
@@ -64,15 +59,14 @@ kill_port() {
     return 1
 }
 
-# Stop Asta backend
 stop_backend() {
-    print_step "Stopping Asta backend..."
-
+    print_status "Stopping Backend..."
+    
     if [ -f "$PID_FILE" ]; then
         pid=$(cat "$PID_FILE")
         if kill -0 "$pid" 2>/dev/null; then
             kill -9 "$pid" 2>/dev/null
-            print_success "Killed backend process (PID: $pid)"
+            print_sub "Killed process (PID: $pid)"
         fi
         rm -f "$PID_FILE"
     fi
@@ -80,22 +74,25 @@ stop_backend() {
     pkill -9 -f "uvicorn.*app.main:app" 2>/dev/null
 
     if kill_port "$BACKEND_PORT"; then
-        print_success "Freed port $BACKEND_PORT"
+        print_sub "Freed port $BACKEND_PORT"
     fi
-
-    sleep 2
-    print_success "Backend stopped"
+    
+    # Check if really stopped
+    if lsof -Pi ":$BACKEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
+        print_warning "Port $BACKEND_PORT still in use!"
+    else
+        print_success "Backend stopped"
+    fi
 }
 
-# Stop Asta frontend (Vite dev server)
 stop_frontend() {
-    print_step "Stopping Asta frontend..."
+    print_status "Stopping Frontend..."
 
     if [ -f "$FRONTEND_PID_FILE" ]; then
         pid=$(cat "$FRONTEND_PID_FILE")
         if kill -0 "$pid" 2>/dev/null; then
             kill -9 "$pid" 2>/dev/null
-            print_success "Killed frontend process (PID: $pid)"
+            print_sub "Killed process (PID: $pid)"
         fi
         rm -f "$FRONTEND_PID_FILE"
     fi
@@ -103,150 +100,136 @@ stop_frontend() {
     pkill -9 -f "vite.*$FRONTEND_DIR" 2>/dev/null
 
     if kill_port "$FRONTEND_PORT"; then
-        print_success "Freed port $FRONTEND_PORT"
+        print_sub "Freed port $FRONTEND_PORT"
     fi
-
-    sleep 1
-    print_success "Frontend stopped"
+    
+    # Check if really stopped
+    if lsof -Pi ":$FRONTEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
+       print_warning "Port $FRONTEND_PORT still in use!"
+    else
+       print_success "Frontend stopped"
+    fi
 }
 
-# Stop backend + frontend
 stop_all() {
     stop_backend
     stop_frontend
 }
 
-# Start the backend server
 start_backend() {
-    print_step "Starting Asta backend..."
+    echo ""
+    print_status "Starting Backend..."
 
     if [ ! -d "$BACKEND_DIR" ]; then
-        print_error "Backend directory not found: $BACKEND_DIR"
+        print_error "Directory not found: $BACKEND_DIR"
         return 1
     fi
 
     if [ ! -f "$BACKEND_DIR/.venv/bin/activate" ]; then
-        print_error "Virtualenv not found. Run: cd backend && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
+        print_error "Virtualenv missing. Run: cd backend && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
         return 1
     fi
 
+    # Ensure port is free
     for _ in 1 2 3 4 5; do
-        if lsof -Pi ":$BACKEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1 || (command -v fuser >/dev/null 2>&1 && fuser "$BACKEND_PORT/tcp" >/dev/null 2>&1); then
-            print_warning "Port $BACKEND_PORT in use; freeing it..."
-            kill_port "$BACKEND_PORT"
-            sleep 3
-        else
-            break
-        fi
-    done
-    sleep 2
-
-    cd "$BACKEND_DIR" || return 1
-    if [ -f "$LOG_FILE" ]; then
-        size=$(stat -c%s "$LOG_FILE" 2>/dev/null || stat -f%z "$LOG_FILE" 2>/dev/null)
-        if [ -n "$size" ] && [ "$size" -gt 10485760 ]; then
-            mv "$LOG_FILE" "$LOG_FILE.old"
-        fi
-    fi
-    echo "" >> "$LOG_FILE"
-    echo "========================================" >> "$LOG_FILE"
-    echo "Asta backend starting: $(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
-    echo "========================================" >> "$LOG_FILE"
-
-    # Always use backend's venv (ignore any venv active in the calling shell)
-    nohup bash -c "source '$BACKEND_DIR/.venv/bin/activate' && cd '$BACKEND_DIR' && exec uvicorn app.main:app --host 0.0.0.0 --port $BACKEND_PORT" >> "$LOG_FILE" 2>&1 &
-    echo $! > "$PID_FILE"
-    pid=$(cat "$PID_FILE")
-
-    print_status "Waiting for backend..."
-    for _ in 1 2 3 4 5 6; do
-        sleep 2
         if lsof -Pi ":$BACKEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
-            break
-        fi
-    done
-
-    if lsof -Pi ":$BACKEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
-        print_success "Backend started (PID: $pid, port: $BACKEND_PORT)"
-        return 0
-    else
-        print_error "Backend may have failed to start. Check: $LOG_FILE"
-        tail -15 "$LOG_FILE"
-        rm -f "$PID_FILE"
-        return 1
-    fi
-}
-
-# Start the frontend (Vite dev server)
-start_frontend() {
-    print_step "Starting Asta frontend..."
-
-    if [ ! -d "$FRONTEND_DIR" ]; then
-        print_warning "Frontend directory not found: $FRONTEND_DIR (skipping frontend)"
-        return 0
-    fi
-
-    if [ ! -f "$FRONTEND_DIR/package.json" ]; then
-        print_warning "Frontend package.json not found (skipping frontend)"
-        return 0
-    fi
-
-    for _ in 1 2 3; do
-        if lsof -Pi ":$FRONTEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1 || (command -v fuser >/dev/null 2>&1 && fuser "$FRONTEND_PORT/tcp" >/dev/null 2>&1); then
-            print_warning "Port $FRONTEND_PORT in use; freeing it..."
-            kill_port "$FRONTEND_PORT"
+            print_sub "Port $BACKEND_PORT busy, freeing..."
+            kill_port "$BACKEND_PORT"
             sleep 1
         else
             break
         fi
     done
+
+    cd "$BACKEND_DIR" || return 1
+    
+    # Log rotation
+    if [ -f "$LOG_FILE" ]; then
+        size=$(stat -c%s "$LOG_FILE" 2>/dev/null || stat -f%z "$LOG_FILE" 2>/dev/null)
+        if [ -n "$size" ] && [ "$size" -gt 5242880 ]; then # 5MB
+            mv "$LOG_FILE" "$LOG_FILE.old"
+        fi
+    fi
+    
+    echo "--- Restart: $(date) ---" >> "$LOG_FILE"
+
+    nohup bash -c "source '$BACKEND_DIR/.venv/bin/activate' && cd '$BACKEND_DIR' && exec uvicorn app.main:app --host 0.0.0.0 --port $BACKEND_PORT" >> "$LOG_FILE" 2>&1 &
+    echo $! > "$PID_FILE"
+    pid=$(cat "$PID_FILE")
+
+    # Wait for startup
+    print_sub "Waiting for boot..."
+    for i in {1..7}; do
+        sleep 1
+        if lsof -Pi ":$BACKEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
+            print_success "Backend active (PID: $pid)"
+            return 0
+        fi
+    done
+
+    print_error "Backend failed to start. Check logs:"
+    print_sub "$LOG_FILE"
+    tail -5 "$LOG_FILE"
+    rm -f "$PID_FILE"
+    return 1
+}
+
+start_frontend() {
+    echo ""
+    print_status "Starting Frontend..."
+
+    if [ ! -d "$FRONTEND_DIR" ]; then
+        print_warning "Directory not found (skipping)"
+        return 0
+    fi
+
+    # Ensure port free
+    kill_port "$FRONTEND_PORT"
     sleep 1
 
     cd "$FRONTEND_DIR" || return 0
-    echo "" >> "$FRONTEND_LOG_FILE"
-    echo "========================================" >> "$FRONTEND_LOG_FILE"
-    echo "Asta frontend starting: $(date '+%Y-%m-%d %H:%M:%S')" >> "$FRONTEND_LOG_FILE"
-    echo "========================================" >> "$FRONTEND_LOG_FILE"
+    echo "--- Restart: $(date) ---" >> "$FRONTEND_LOG_FILE"
 
     nohup npm run dev >> "$FRONTEND_LOG_FILE" 2>&1 &
     echo $! > "$FRONTEND_PID_FILE"
     pid=$(cat "$FRONTEND_PID_FILE")
 
-    print_status "Waiting for frontend..."
+    print_sub "Waiting for Vite..."
     sleep 3
 
     if lsof -Pi ":$FRONTEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
-        print_success "Frontend started (PID: $pid, port: $FRONTEND_PORT)"
-        return 0
+        print_success "Frontend active (PID: $pid)"
     else
-        # Vite can take a bit; check log for errors
-        if [ -f "$FRONTEND_LOG_FILE" ]; then
-            tail -5 "$FRONTEND_LOG_FILE"
-        fi
-        print_success "Frontend process started (PID: $pid). If needed, check: $FRONTEND_LOG_FILE"
-        return 0
+        print_success "Frontend process started (PID: $pid)"
     fi
 }
 
 show_status() {
     echo ""
+    echo -e "${WHITE}${BOLD}Status Check:${NC}"
+    echo "-----------------------------------"
+    
+    # Backend
     if lsof -Pi ":$BACKEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
         pid=$(lsof -ti:"$BACKEND_PORT" 2>/dev/null | head -1)
-        print_success "Backend running (PID: $pid, port: $BACKEND_PORT)"
-        echo "   → http://localhost:$BACKEND_PORT"
+        print_success "Backend  : ${GREEN}Online${NC} (PID $pid)"
+        echo -e "    ${GRAY}└─ ${BLUE}http://localhost:$BACKEND_PORT${NC}"
     else
-        print_warning "Backend not running"
+        print_error "Backend  : ${RED}Offline${NC}"
     fi
+
+    # Frontend
     if lsof -Pi ":$FRONTEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
         pid=$(lsof -ti:"$FRONTEND_PORT" 2>/dev/null | head -1)
-        print_success "Frontend running (PID: $pid, port: $FRONTEND_PORT)"
-        echo "   → http://localhost:$FRONTEND_PORT"
+        print_success "Frontend : ${GREEN}Online${NC} (PID $pid)"
+        echo -e "    ${GRAY}└─ ${BLUE}http://localhost:$FRONTEND_PORT${NC}"
     else
-        print_warning "Frontend not running"
+        print_error "Frontend : ${RED}Offline${NC}"
     fi
     echo ""
 }
 
+# Main CLI logic
 case "$1" in
     start)
         print_asta_banner
@@ -258,11 +241,12 @@ case "$1" in
     stop)
         print_asta_banner
         stop_all
+        echo ""
+        print_success "All services stopped."
         ;;
     restart)
         print_asta_banner
         stop_all
-        sleep 3
         start_backend
         start_frontend
         show_status
@@ -271,17 +255,9 @@ case "$1" in
         print_asta_banner
         show_status
         ;;
-    help|--help|-h|"")
-        print_asta_banner
-        echo "  ./asta.sh start     Start backend + frontend (frees ports first)"
-        echo "  ./asta.sh stop      Stop backend + frontend"
-        echo "  ./asta.sh restart   Restart both (reliable)"
-        echo "  ./asta.sh status    Show status"
-        echo ""
-        ;;
     *)
-        print_error "Unknown command: $1"
-        echo "  Use: ./asta.sh start | stop | restart | status | help"
+        print_asta_banner
+        echo "Usage: ./asta.sh {start|stop|restart|status}"
         exit 1
         ;;
 esac

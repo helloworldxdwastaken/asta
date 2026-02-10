@@ -133,17 +133,37 @@ async def build_context(
 
     # Time (separate skill)
     if time_enabled and _use("time"):
-        from app.time_weather import get_current_time_utc_12h
+        from datetime import datetime, timezone
+        from zoneinfo import ZoneInfo
+        from app.time_weather import get_current_time_utc_12h, get_timezone_for_coords
         parts.append("--- Time ---")
+        # Always include UTC for reference
         parts.append("Current time (UTC, 12-hour): " + get_current_time_utc_12h())
-        parts.append("When the user asks for the time: start with a clock emoji and give the time in 12-hour AM/PM, one short line. Example: '🕐 11:25 PM in Holon.' or '🕐 It's 11:25 PM.' Do NOT explain UTC or timezone math.")
+        # And, when we know the user's location, compute their local time explicitly
         loc = await db.get_user_location(user_id)
         if loc:
-            parts.append(f"User's location: {loc['location_name']} (use for their local time).")
+            parts.append(f"User's location: {loc['location_name']}.")
+            try:
+                tz_name = await get_timezone_for_coords(loc["latitude"], loc["longitude"])
+                now_local = datetime.now(ZoneInfo(tz_name))
+                hour = now_local.hour
+                if hour == 0:
+                    hour12, am_pm = 12, "AM"
+                elif hour < 12:
+                    hour12, am_pm = hour, "AM"
+                elif hour == 12:
+                    hour12, am_pm = 12, "PM"
+                else:
+                    hour12, am_pm = hour - 12, "PM"
+                local_str = f"{hour12}:{now_local.minute:02d} {am_pm}"
+                parts.append(f"User's LOCAL time is {local_str} in {loc['location_name']}.")
+            except Exception:
+                parts.append("If you cannot compute local time, you may fall back to UTC, but prefer the user's local time when answering.")
         else:
             parts.append("User has not set their location. If they ask for local time, ask where they are; when they reply with a place, the system will save it.")
         if extra.get("location_just_set"):
             parts.append(f"(User just set location to: {extra['location_just_set']}. Confirm briefly.)")
+        parts.append("WHEN the user asks what time it is, ALWAYS answer with their LOCAL time first (using the value above), not UTC. Example: '🕐 11:25 PM in Holon.' Mention UTC only if they explicitly ask for it.")
         parts.append("")
 
     # Weather (separate skill; includes today and tomorrow forecast)

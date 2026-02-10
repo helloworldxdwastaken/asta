@@ -1,6 +1,6 @@
-// Use relative path so it works in dev (via proxy) and prod (same origin)
-// Or use VITE_API_URL if set.
-const API_BASE = import.meta.env.VITE_API_URL || "/api";
+// Local dev: talk directly to Asta backend on port 8010.
+// This avoids conflicts with other services (e.g. Tailscale) that may also use 8000.
+const API_BASE = "http://localhost:8010/api";
 
 async function req<T>(path: string, options?: RequestInit): Promise<T> {
   const r = await fetch(API_BASE + path, {

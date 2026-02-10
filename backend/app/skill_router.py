@@ -42,8 +42,9 @@ def get_skills_to_use(text: str, enabled_skill_ids: set[str]) -> set[str]:
         if any(k in t for k in ("remind me", "wake me up", "wake up at", "alarm at", "wake up tomorrow", "remind me tomorrow")):
             out.add("reminders")
 
-    # Web search: look up, search for (not spotify), what is, who is, when did, or question
-    if "google_search" in enabled_skill_ids and "spotify" not in out:
+    # Web search: look up, search for (not spotify), what is, who is, when did, or question.
+    # If we're already handling an explicit time question, skip web search so time answers stay clean.
+    if "google_search" in enabled_skill_ids and "spotify" not in out and "time" not in out:
         if any(k in t for k in ("search for", "look up", "find out", "what is ", "who is ", "when did", "latest ", "current ")):
             out.add("google_search")
         elif "?" in t and len(t) > 10:  # general question

@@ -62,7 +62,8 @@ async def read_file(path: str):
     _ensure_allowed(p)
     if not p.is_file():
         raise HTTPException(404, "Not a file")
-    
-    # Security: Use FileResponse to stream the file instead of reading it all into memory
-    from fastapi.responses import FileResponse
-    return FileResponse(p, media_type="text/plain")
+    try:
+        content = p.read_text(encoding="utf-8", errors="replace")
+        return {"path": path, "content": content}
+    except Exception as e:
+        raise HTTPException(500, str(e))

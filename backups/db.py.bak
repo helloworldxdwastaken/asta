@@ -11,8 +11,6 @@ DB_PATH = os.environ.get("ASTA_DB_PATH", str(Path(__file__).resolve().parent.par
 class Db:
     def __init__(self) -> None:
         self._conn: aiosqlite.Connection | None = None
-        import logging
-        self.logger = logging.getLogger(__name__)
 
     async def connect(self) -> None:
         self._conn = await aiosqlite.connect(DB_PATH)
@@ -124,8 +122,7 @@ class Db:
                 "ALTER TABLE user_settings ADD COLUMN default_ai_provider TEXT NOT NULL DEFAULT 'groq'"
             )
             await self._conn.commit()
-        except Exception as e:
-            self.logger.exception("Failed to add default_ai_provider column: %s", e)
+        except Exception:
             pass
 
     async def get_or_create_conversation(self, user_id: str, channel: str) -> str:
@@ -200,8 +197,7 @@ class Db:
             )
             row = await cursor.fetchone()
             return (row["default_ai_provider"] or "groq") if row else "groq"
-        except Exception as e:
-            self.logger.exception("Failed to get user default AI: %s", e)
+        except Exception:
             return "groq"
 
     async def set_user_default_ai(self, user_id: str, provider: str) -> None:
@@ -252,8 +248,7 @@ class Db:
             row = await cursor.fetchone()
             # No row = user never toggled this skill → default ON so new skills (time_weather, google_search) work
             return bool(row["enabled"]) if row else True
-        except Exception as e:
-            self.logger.exception("Failed to get skill enabled: %s", e)
+        except Exception:
             return True  # default on
 
     async def get_all_skill_toggles(self, user_id: str) -> dict[str, bool]:
@@ -266,8 +261,7 @@ class Db:
             )
             rows = await cursor.fetchall()
             return {r["skill_id"]: bool(r["enabled"]) for r in rows}
-        except Exception as e:
-            self.logger.exception("Failed to get all skill toggles: %s", e)
+        except Exception:
             return {}
 
     async def set_skill_enabled(self, user_id: str, skill_id: str, enabled: bool) -> None:
@@ -290,8 +284,7 @@ class Db:
             )
             row = await cursor.fetchone()
             return row["model"] if row and row["model"] else None
-        except Exception as e:
-            self.logger.exception("Failed to get user provider model: %s", e)
+        except Exception:
             return None
 
     async def get_all_provider_models(self, user_id: str) -> dict[str, str]:
@@ -304,8 +297,7 @@ class Db:
             )
             rows = await cursor.fetchall()
             return {r["provider"]: r["model"] for r in rows}
-        except Exception as e:
-            self.logger.exception("Failed to get all provider models: %s", e)
+        except Exception:
             return {}
 
     async def set_user_provider_model(self, user_id: str, provider: str, model: str) -> None:
