@@ -63,6 +63,44 @@ export default function Learning() {
         <code> ollama pull nomic-embed-text</code>).
       </p>
 
+      <div className="card" style={{ backgroundColor: "var(--bg-secondary)", borderLeft: "3px solid var(--primary)" }}>
+        <h3 style={{ marginTop: 0 }}>💡 Tip: Prepare content with AI</h3>
+        <p className="help" style={{ marginBottom: "0.75rem" }}>
+          You can use ChatGPT or other AIs to research and format content for learning. Copy this prompt:
+        </p>
+        <div style={{ position: "relative" }}>
+          <pre style={{
+            backgroundColor: "var(--bg)",
+            padding: "0.75rem",
+            borderRadius: "4px",
+            fontSize: "0.85rem",
+            overflow: "auto",
+            margin: "0 0 0.5rem 0"
+          }}>
+            {`Research and summarize information about [TOPIC].
+Format the output as a comprehensive reference document.
+Include key concepts, definitions, examples, and important details.
+Keep it well-structured and informative.`}
+          </pre>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            style={{ fontSize: "0.85rem" }}
+            onClick={() => {
+              navigator.clipboard.writeText(
+                `Research and summarize information about [TOPIC].\nFormat the output as a comprehensive reference document.\nInclude key concepts, definitions, examples, and important details.\nKeep it well-structured and informative.`
+              );
+              setResult("Prompt copied to clipboard!");
+            }}
+          >
+            Copy Prompt
+          </button>
+        </div>
+        <p className="help" style={{ marginTop: "0.75rem", marginBottom: 0 }}>
+          Replace [TOPIC] with your subject, paste the result into "Learn now" below.
+        </p>
+      </div>
+
       <div className="card">
         <div className="card-header">
           <div>
@@ -254,44 +292,6 @@ export default function Learning() {
             Learn this
           </button>
         </div>
-      </div>
-
-      <div className="card" style={{ backgroundColor: "var(--bg-secondary)", borderLeft: "3px solid var(--primary)" }}>
-        <h3 style={{ marginTop: 0 }}>💡 Tip: Prepare content with AI</h3>
-        <p className="help" style={{ marginBottom: "0.75rem" }}>
-          You can use ChatGPT or other AIs to research and format content for learning. Copy this prompt:
-        </p>
-        <div style={{ position: "relative" }}>
-          <pre style={{
-            backgroundColor: "var(--bg)",
-            padding: "0.75rem",
-            borderRadius: "4px",
-            fontSize: "0.85rem",
-            overflow: "auto",
-            margin: "0 0 0.5rem 0"
-          }}>
-            {`Research and summarize information about [TOPIC].
-Format the output as a comprehensive reference document.
-Include key concepts, definitions, examples, and important details.
-Keep it well-structured and informative.`}
-          </pre>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            style={{ fontSize: "0.85rem" }}
-            onClick={() => {
-              navigator.clipboard.writeText(
-                `Research and summarize information about [TOPIC].\nFormat the output as a comprehensive reference document.\nInclude key concepts, definitions, examples, and important details.\nKeep it well-structured and informative.`
-              );
-              setResult("Prompt copied to clipboard!");
-            }}
-          >
-            Copy Prompt
-          </button>
-        </div>
-        <p className="help" style={{ marginTop: "0.75rem", marginBottom: 0 }}>
-          Replace [TOPIC] with your subject, paste the result into "Learn now" above.
-        </p>
       </div>
 
       <div className="card">
