@@ -107,27 +107,10 @@ async def handle_message(
         skills_to_use = skills_to_use | {"learn"}
 
     # If user asks for time/weather but no location (DB or User.md), ask for their location
-    if "time" in skills_to_use or "weather" in skills_to_use:
-        from app.services.reminder_service import _get_effective_location
-        loc = await _get_effective_location(user_id)
-        if not loc:
-            t_lower = (text or "").strip().lower()
-            if "time" in skills_to_use and any(
-                k in t_lower for k in ("what time", "what's the time", "what time is it", "current time", "time?")
-            ):
-                await db.set_pending_location_request(user_id)
-                return (
-                    "I don't know your location yet. Add it in Files → About you (User.md) under **Location:**, "
-                    "or tell me your city and country (e.g. \"I'm in Holon, Israel\")."
-                )
-            if "weather" in skills_to_use and any(
-                k in t_lower for k in ("weather", "temperature", "forecast", "rain", "sunny", "tomorrow")
-            ):
-                await db.set_pending_location_request(user_id)
-                return (
-                    "I don't know where you are yet. Add it in Files → About you (User.md) under **Location:**, "
-                    "or tell me your city and country (e.g. \"I'm in Holon, Israel\")."
-                )
+    # REMOVED: fast-fail check. We now let it fall through to build_context, which has instructions
+    # to ask for location if missing. This allows combined intents (e.g. "check notes and time")
+    # to succeed on the "notes" part even if location is invalid.
+
 
     # Status: only the skills we're actually using, with emojis
     skill_labels = [SKILL_STATUS_LABELS[s] for s in skills_to_use if s in SKILL_STATUS_LABELS]
