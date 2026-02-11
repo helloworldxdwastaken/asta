@@ -7,18 +7,19 @@ def get_skills_to_use(text: str, enabled_skill_ids: set[str]) -> set[str]:
     t = (text or "").strip().lower()
     out: set[str] = set()
 
-    # Time: time-related or short location reply (so we can answer "what time" after they set location)
+    # Time: ONLY when explicitly asking about time (not for general questions)
     if "time" in enabled_skill_ids:
-        if any(k in t for k in ("time", "what time", "what's the time", "current time", "what time is it")):
+        if any(k in t for k in ("time", "what time", "what's the time", "current time", "what time is it", "clock")):
             out.add("time")
-        elif len(t) < 60 and "," in t:
-            # Short reply might be a location ("Holon, Israel")
+        elif len(t) < 60 and "," in t and not any(k in t for k in ("what is", "who is", "?")):
+            # Short reply might be a location ("Holon, Israel") - but not if it's a question
             out.add("time")
+    
     # Weather: weather, temperature, forecast, tomorrow
     if "weather" in enabled_skill_ids:
         if any(k in t for k in ("weather", "temperature", "forecast", "tomorrow", "today", "rain", "sunny", "temperature")):
             out.add("weather")
-        elif len(t) < 60 and "," in t:
+        elif len(t) < 60 and "," in t and not any(k in t for k in ("what is", "who is", "?")):
             out.add("weather")
 
     # Spotify: search or play — check first so "play X" doesn't trigger lyrics
@@ -40,28 +41,36 @@ def get_skills_to_use(text: str, enabled_skill_ids: set[str]) -> set[str]:
         if any(k in t for k in ("remind me", "wake me up", "wake up at", "alarm at", "alarm in", "alarm or reminder", "alarm", "reminder", "timer", "wake up tomorrow", "remind me tomorrow", "min from now")):
             out.add("reminders")
 
-    # Web search: look up, search for, check the web (not spotify), what is, who is, when did, or question.
-    # If we're already handling an explicit time question, skip web search so time answers stay clean.
-    if "google_search" in enabled_skill_ids and "spotify" not in out and "time" not in out:
-        if any(k in t for k in (
-            "search for", "look up", "find out", "what is ", "who is ", "when did",
-            "latest ", "current ", "check the web", "search the web", "search online",
-            "look it up", "search for ", "google ", "look up "
-        )):
-            out.add("google_search")
-        elif "?" in t and len(t) > 10:  # general question
-            out.add("google_search")
-
     # Learn about X (for Y time): start background learning job
     if "rag" in enabled_skill_ids:
         if "learn about" in t:
             out.add("learn")
-    # RAG (notes/learned): remember, notes, saved, learned, or question about knowledge
+    
+    # RAG (notes/learned): PRIORITY for "what is" questions - check learned knowledge first
     if "rag" in enabled_skill_ids:
         if any(k in t for k in ("remember", "notes", "saved", "learned", "what did i", "my notes", "what did you learn", "what have you learned", "what do you know about")):
             out.add("rag")
-        elif "?" in t and len(t) > 15:
+        elif any(k in t for k in ("what is ", "who is ", "what are ", "tell me about ")):
+            # "What is X?" should check RAG first
             out.add("rag")
+        elif "?" in t and len(t) > 15 and "time" not in out:
+            # General questions check RAG (unless already handling time)
+            out.add("rag")
+
+    # Web search: AFTER RAG - look up, search for, check the web, or questions not handled by other skills
+    # Skip if we're already handling time/spotify to keep answers focused
+    if "google_search" in enabled_skill_ids and "spotify" not in out and "time" not in out:
+        if any(k in t for k in (
+            "search for", "look up", "find out", "latest ", "check the web", "search the web", "search online",
+            "look it up", "search for ", "google ", "look up "
+        )):
+            out.add("google_search")
+        elif any(k in t for k in ("what is ", "who is ", "when did ", "what are ", "tell me about ")):
+            # Also add web search for "what is" questions (will work alongside RAG)
+            out.add("google_search")
+        elif "?" in t and len(t) > 10 and "rag" in out:
+            # If RAG is already checking, also add web search as backup
+            out.add("google_search")
 
     # When the message is clearly a lyrics request, don't add generic question skills (so status shows only "Finding lyrics…")
     if "lyrics" in out and any(k in t for k in ("lyrics of", "lyrics for", "lyrics to", "what are the lyrics", "song lyrics", "get lyrics", "find lyrics")):
