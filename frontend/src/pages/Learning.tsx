@@ -83,15 +83,34 @@ export default function Learning() {
             <p className="help" style={{ marginBottom: "0.75rem" }}>
               Topics and chunk counts:
             </p>
-            <ul style={{ margin: 0, paddingLeft: "1.25rem" }}>
+            <ul style={{ margin: 0, paddingLeft: 0, listStyle: "none" }}>
               {learned.topics.map((t) => (
-                <li key={t.topic} style={{ marginBottom: "0.35rem" }}>
-                  <strong>{t.topic}</strong>
-                  {t.chunks_count > 0 && (
-                    <span className="muted" style={{ marginLeft: "0.5rem" }}>
-                      ({t.chunks_count} chunk{t.chunks_count !== 1 ? "s" : ""})
-                    </span>
-                  )}
+                <li key={t.topic} style={{ marginBottom: "0.5rem", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.5rem", border: "1px solid var(--border-color)", borderRadius: "4px" }}>
+                  <div>
+                    <strong>{t.topic}</strong>
+                    {t.chunks_count > 0 && (
+                      <span className="muted" style={{ marginLeft: "0.5rem" }}>
+                        ({t.chunks_count} chunk{t.chunks_count !== 1 ? "s" : ""})
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    style={{ fontSize: "0.85rem", padding: "0.25rem 0.75rem" }}
+                    onClick={() => {
+                      if (confirm(`Delete all content for topic "${t.topic}"?`)) {
+                        api.ragDeleteTopic(t.topic)
+                          .then(() => {
+                            setResult(`Deleted topic "${t.topic}"`);
+                            fetchLearned();
+                          })
+                          .catch((e) => setResult("Error: " + (e as Error).message));
+                      }
+                    }}
+                  >
+                    Delete
+                  </button>
                 </li>
               ))}
             </ul>

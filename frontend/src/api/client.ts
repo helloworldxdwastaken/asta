@@ -66,6 +66,10 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ question, topic, k: 5 }),
     }),
+  ragDeleteTopic: (topic: string) =>
+    req<{ ok: boolean; topic: string; deleted_chunks: number }>(`/rag/topic/${encodeURIComponent(topic)}`, {
+      method: "DELETE",
+    }),
   tasksLearn: (topic: string, durationMinutes: number, sources: string[]) =>
     req<{ job_id: string; topic: string }>("/tasks/learn", {
       method: "POST",

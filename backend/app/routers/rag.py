@@ -41,3 +41,11 @@ async def rag_ask(body: AskIn):
     rag = get_rag()
     summary = await rag.query(body.question, topic=body.topic, k=body.k)
     return {"summary": summary}
+
+
+@router.delete("/rag/topic/{topic}")
+async def rag_delete_topic(topic: str):
+    """Delete all chunks for a given topic."""
+    rag = get_rag()
+    deleted = rag.delete_topic(topic)
+    return {"ok": True, "topic": topic, "deleted_chunks": deleted}

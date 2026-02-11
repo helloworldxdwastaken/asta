@@ -190,6 +190,21 @@ class RAGService:
             return ""
         return "\n".join(results["documents"][0])
 
+    def delete_topic(self, topic: str) -> int:
+        """Delete all chunks for a given topic. Returns number of chunks deleted."""
+        try:
+            n = self._coll.count()
+            if n == 0:
+                return 0
+            # Get all IDs for this topic
+            result = self._coll.get(where={"topic": topic}, include=["metadatas"])
+            ids = result.get("ids") or []
+            if ids:
+                self._coll.delete(ids=ids)
+            return len(ids)
+        except Exception:
+            return 0
+
 
 _rag: RAGService | None = None
 
