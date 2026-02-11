@@ -123,13 +123,10 @@ async def handle_message(
             from app.rag.service import get_rag
             rag = get_rag()
             rag_summary = await rag.query(text, k=5)
-            logger.info(f"RAG query for '{text}': got {len(rag_summary) if rag_summary else 0} chars")
             if rag_summary:
                 extra["rag_summary"] = rag_summary
-                logger.info(f"RAG summary preview: {rag_summary[:200]}...")
             extra["learned_topics"] = rag.list_topics()
-        except Exception as e:
-            logger.exception(f"RAG query failed: {e}")
+        except Exception:
             extra["learned_topics"] = []
 
     # Web search: only when relevant
