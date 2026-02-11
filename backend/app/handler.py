@@ -124,8 +124,8 @@ async def handle_message(
             from app.rag.service import get_rag
             rag = get_rag()
             rag_summary = await rag.query(text, k=5)
-            if rag_summary and len(rag_summary.strip()) > 100:
-                # RAG found substantial content - skip web search to avoid conflicting results
+            if rag_summary and len(rag_summary.strip()) > 10:
+                # RAG found content - skip web search to avoid conflicting results
                 rag_found_content = True
                 extra["rag_summary"] = rag_summary
                 if "google_search" in skills_to_use:
