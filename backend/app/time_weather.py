@@ -113,6 +113,8 @@ async def get_timezone_for_coords(latitude: float, longitude: float, location_na
     tz = _timezone_from_coords_sync(latitude, longitude)
     if tz:
         return tz
+    
+    logger.info("Timezonefinder returned None for %.4f,%.4f; falling back to Open-Meteo", latitude, longitude)
     fallback = "UTC"
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -123,8 +125,16 @@ async def get_timezone_for_coords(latitude: float, longitude: float, location_na
             r.raise_for_status()
             data = r.json()
         fallback = data.get("timezone") or "UTC"
+        logger.info("Open-Meteo returned timezone: %s", fallback)
     except Exception as e:
         logger.warning("Open-Meteo timezone lookup failed for %.2f,%.2f: %s", latitude, longitude, e)
+    
+    # Sanity check: if we got UTC but the user said "Israel" or "Holon", warn loudly
+    if fallback == "UTC" and location_name:
+        name_lower = location_name.lower()
+        if any(k in name_lower for k in ("israel", "holon", "jerusalem", "tel aviv")):
+             logger.error("SUSPICIOUS TIMEZONE: Resolved to UTC for location '%s' (lat=%.4f, lon=%.4f). Check network or timezonefinder installation.", location_name, latitude, longitude)
+    
     return fallback
 
 
