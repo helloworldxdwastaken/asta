@@ -70,6 +70,13 @@ export const api = {
     req<{ ok: boolean; topic: string; deleted_chunks: number }>(`/rag/topic/${encodeURIComponent(topic)}`, {
       method: "DELETE",
     }),
+  ragGetTopic: (topic: string) =>
+    req<{ topic: string; content: string }>(`/rag/topic/${encodeURIComponent(topic)}`),
+  ragUpdateTopic: (topic: string, content: string) =>
+    req<{ ok: boolean; topic: string }>(`/rag/topic/${encodeURIComponent(topic)}`, {
+      method: "PUT",
+      body: JSON.stringify({ content }),
+    }),
   tasksLearn: (topic: string, durationMinutes: number, sources: string[]) =>
     req<{ job_id: string; topic: string }>("/tasks/learn", {
       method: "POST",

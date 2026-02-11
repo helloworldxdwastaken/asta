@@ -49,3 +49,23 @@ async def rag_delete_topic(topic: str):
     rag = get_rag()
     deleted = rag.delete_topic(topic)
     return {"ok": True, "topic": topic, "deleted_chunks": deleted}
+
+
+@router.get("/rag/topic/{topic}")
+async def rag_get_topic(topic: str):
+    """Get all content for a topic."""
+    rag = get_rag()
+    content = rag.get_topic_content(topic)
+    return {"topic": topic, "content": content}
+
+
+class UpdateTopicIn(BaseModel):
+    content: str
+
+
+@router.put("/rag/topic/{topic}")
+async def rag_update_topic(topic: str, body: UpdateTopicIn):
+    """Update/replace all content for a topic."""
+    rag = get_rag()
+    await rag.update_topic(topic, body.content)
+    return {"ok": True, "topic": topic}

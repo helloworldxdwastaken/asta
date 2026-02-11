@@ -205,6 +205,24 @@ class RAGService:
         except Exception:
             return 0
 
+    def get_topic_content(self, topic: str) -> str:
+        """Get all content for a topic as a single text string."""
+        try:
+            result = self._coll.get(where={"topic": topic}, include=["documents"])
+            docs = result.get("documents") or []
+            return "\n\n".join(docs) if docs else ""
+        except Exception:
+            return ""
+
+    async def update_topic(self, topic: str, new_content: str):
+        """Replace all content for a topic with new content."""
+        # Delete old content
+        self.delete_topic(topic)
+        # Add new content
+        if new_content.strip():
+            await self.add(topic, new_content)
+
+
 
 _rag: RAGService | None = None
 
