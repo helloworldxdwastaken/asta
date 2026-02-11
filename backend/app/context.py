@@ -218,6 +218,8 @@ async def build_context(
                 else:
                     hour12, am_pm = hour - 12, "PM"
                 local_str = f"{hour12}:{now_local.minute:02d} {am_pm}"
+                import logging
+                logging.getLogger(__name__).info("Context Time Computed: %s for %s (TZ: %s)", local_str, loc['location_name'], tz_name)
                 parts.append(f"User's LOCAL time is {local_str} in {loc['location_name']}. THIS IS THE LIVE VALUE — use it exactly.")
             except Exception:
                 parts.append("If you cannot compute local time, you may fall back to UTC, but prefer the user's local time when answering.")
