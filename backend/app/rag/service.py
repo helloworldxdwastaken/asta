@@ -126,6 +126,8 @@ class RAGService:
         doc_id: str | None = None,
     ) -> None:
         """Chunk and add text under a topic. Uses Ollama, then OpenAI, then Google for embeddings."""
+        # Normalize topic to lowercase for case-insensitive matching
+        topic = topic.lower()
         chunks = [text[i : i + 500] for i in range(0, len(text), 500)] if len(text) > 500 else [text]
         if not chunks:
             return
@@ -174,7 +176,8 @@ class RAGService:
         emb = await _get_embedding_any(question)
         if not emb:
             return ""
-        where = {"topic": topic} if topic else None
+        # Normalize topic to lowercase for case-insensitive matching
+        where = {"topic": topic.lower()} if topic else None
         try:
             n = self._coll.count()
             if n == 0:
@@ -192,6 +195,8 @@ class RAGService:
 
     def delete_topic(self, topic: str) -> int:
         """Delete all chunks for a given topic. Returns number of chunks deleted."""
+        # Normalize topic to lowercase for case-insensitive matching
+        topic = topic.lower()
         try:
             n = self._coll.count()
             if n == 0:
@@ -207,6 +212,8 @@ class RAGService:
 
     def get_topic_content(self, topic: str) -> str:
         """Get all content for a topic as a single text string."""
+        # Normalize topic to lowercase for case-insensitive matching
+        topic = topic.lower()
         try:
             result = self._coll.get(where={"topic": topic}, include=["documents"])
             docs = result.get("documents") or []
@@ -216,6 +223,8 @@ class RAGService:
 
     async def update_topic(self, topic: str, new_content: str):
         """Replace all content for a topic with new content."""
+        # Normalize topic to lowercase for case-insensitive matching
+        topic = topic.lower()
         # Delete old content
         self.delete_topic(topic)
         # Add new content
