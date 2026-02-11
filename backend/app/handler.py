@@ -118,18 +118,26 @@ async def handle_message(
         await send_skill_status(channel, channel_target, skill_labels)
 
     # RAG: only when relevant — retrieve context and actual learned topics (so the model cannot claim it learned things it didn't)
+    rag_found_content = False
     if "rag" in skills_to_use:
         try:
             from app.rag.service import get_rag
             rag = get_rag()
             rag_summary = await rag.query(text, k=5)
-            if rag_summary:
+            if rag_summary and len(rag_summary.strip()) > 100:
+                # RAG found substantial content - skip web search to avoid conflicting results
+                rag_found_content = True
+                extra["rag_summary"] = rag_summary
+                if "google_search" in skills_to_use:
+                    skills_to_use.discard("google_search")
+                    logger.info(f"Skipping web search because RAG found {len(rag_summary)} chars of content")
+            elif rag_summary:
                 extra["rag_summary"] = rag_summary
             extra["learned_topics"] = rag.list_topics()
         except Exception:
             extra["learned_topics"] = []
 
-    # Web search: only when relevant
+    # Web search: only when relevant (and RAG didn't find good content)
     if "google_search" in skills_to_use:
         import asyncio
         from app.search_web import search_web

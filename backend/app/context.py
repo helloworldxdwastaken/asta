@@ -32,6 +32,7 @@ async def build_context(
     parts = [
         "You are Asta, the user's agent. You use whichever AI model is configured (Groq, Gemini, Claude, Ollama) and have access to the user's connected services.",
         "TONE: " + mood_instruction,
+        "CORE DIRECTIVE: If you have learned knowledge (RAG) about a topic, it takes precedence over general knowledge or web search results.",
         "Use the context below to understand what is connected and recent history.",
         "",
     ]
@@ -170,9 +171,15 @@ async def build_context(
 
     # RAG / learned knowledge summary (retrieved chunks for this question)
     if rag_enabled and _use("rag") and extra and extra.get("rag_summary"):
-        parts.append("--- Relevant learned knowledge ---")
+        parts.append("""
+--- RELEVANT LEARNED KNOWLEDGE (RAG) ---
+IMPORTANT: The following information comes from your internal knowledge base. 
+You MUST prioritize this information over any web search results or general training data. 
+If the user asks about a specific term like 'eSimo' and it appears below, use THIS definition, even if it contradicts external sources.
+----------------------------------------
+""")
         parts.append(extra["rag_summary"])
-        parts.append("")
+        parts.append("----------------------------------------")
 
     async def _get_effective_location():
         """Get location from DB, or from User.md if DB is empty (geocode and persist)."""
