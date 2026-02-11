@@ -9,7 +9,7 @@ export default function Dashboard() {
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [defaultAi, setDefaultAi] = useState<string | null>(null);
+  const [_defaultAi, setDefaultAi] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     setError(null);

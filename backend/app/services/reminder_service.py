@@ -34,7 +34,7 @@ class ReminderService:
         tz_str: str | None = None
         loc = await _get_effective_location(user_id)
         if loc:
-            tz_str = await get_timezone_for_coords(loc["latitude"], loc["longitude"])
+            tz_str = await get_timezone_for_coords(loc["latitude"], loc["longitude"], loc.get("location_name"))
             
         reminder = parse_reminder(text, tz_str=tz_str)
         if reminder:

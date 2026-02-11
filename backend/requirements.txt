@@ -31,5 +31,8 @@ google-auth-httplib2>=0.2.0
 # Web search (no API key; multi-backend: bing, brave, duckduckgo, etc.)
 ddgs>=9.0.0
 
+# Timezone from lat/lon (offline, no API)
+timezonefinder>=6.0.0
+
 # Audio → text (local, free)
 faster-whisper>=1.0.0

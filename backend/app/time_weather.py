@@ -85,8 +85,35 @@ async def geocode(query: str) -> tuple[float, float, str] | None:
         return None
 
 
-async def get_timezone_for_coords(latitude: float, longitude: float) -> str:
-    """Return IANA timezone (e.g. 'Asia/Jerusalem') for lat/lon. Uses Open-Meteo; falls back to 'UTC'."""
+def _timezone_from_coords_sync(latitude: float, longitude: float) -> str | None:
+    """Offline lookup: return IANA timezone (e.g. 'Asia/Jerusalem') for lat/lon, or None."""
+    try:
+        from timezonefinder import timezone_at
+        tz = timezone_at(lat=latitude, lng=longitude)
+        return tz
+    except Exception as e:
+        logger.warning("Timezonefinder failed for %.2f,%.2f: %s", latitude, longitude, e)
+        return None
+
+
+# Fallback when coords lookup fails: map location-name keywords to IANA timezone
+_LOCATION_TZ_FALLBACKS: list[tuple[list[str], str]] = [
+    (["israel", "holon", "jerusalem", "tel aviv", "haifa", "beer sheva", "eilat"], "Asia/Jerusalem"),
+]
+
+
+async def get_timezone_for_coords(latitude: float, longitude: float, location_name: str | None = None) -> str:
+    """Return IANA timezone (e.g. 'Asia/Jerusalem') for lat/lon. Location-name override when it clearly indicates a region (e.g. Holon, Israel -> Asia/Jerusalem)."""
+    # Location name override: if user said "Holon" or "Israel", trust it over coords (coords can be wrong)
+    if location_name:
+        name_lower = location_name.lower()
+        for keywords, tz_id in _LOCATION_TZ_FALLBACKS:
+            if any(kw in name_lower for kw in keywords):
+                return tz_id
+    tz = _timezone_from_coords_sync(latitude, longitude)
+    if tz:
+        return tz
+    fallback = "UTC"
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             r = await client.get(
@@ -95,10 +122,10 @@ async def get_timezone_for_coords(latitude: float, longitude: float) -> str:
             )
             r.raise_for_status()
             data = r.json()
-        return data.get("timezone") or "UTC"
+        fallback = data.get("timezone") or "UTC"
     except Exception as e:
-        logger.warning("Timezone lookup failed for %.2f,%.2f: %s", latitude, longitude, e)
-        return "UTC"
+        logger.warning("Open-Meteo timezone lookup failed for %.2f,%.2f: %s", latitude, longitude, e)
+    return fallback
 
 
 async def fetch_weather(latitude: float, longitude: float) -> str:

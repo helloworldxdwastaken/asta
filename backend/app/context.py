@@ -47,14 +47,28 @@ async def build_context(
             return True
         return False
 
+    def _is_time_reply(content: str) -> bool:
+        """Skip assistant time answers (e.g. '6:09 PM in Holon') — they may be stale/wrong, use live value instead."""
+        import re
+        s = (content or "").strip()
+        if len(s) > 150:  # Long replies aren't simple time answers
+            return False
+        # Pattern: "X:XX AM/PM" or "X:XX" followed by "in [place]" — likely a time reply
+        if re.search(r"\d{1,2}:\d{2}\s*(AM|PM)?", s) and (" in " in s.lower() or " holon" in s.lower() or " it's " in s.lower() or " it is " in s.lower()):
+            return True
+        return False
+
     if conversation_id:
         try:
             recent = await db.get_recent_messages(conversation_id, limit=10)
             if recent:
                 parts.append("--- Recent conversation ---")
+                skip_time_replies = only_skills and "time" in only_skills
                 for m in recent:
                     if m["role"] == "assistant" and _is_error_reply(m["content"]):
                         continue
+                    if skip_time_replies and m["role"] == "assistant" and _is_time_reply(m["content"]):
+                        continue  # Don't show old time answers — use live value from Time section
                     role = "User" if m["role"] == "user" else "Assistant"
                     parts.append(f"{role}: {m['content'][:500]}")
                 parts.append("")
@@ -190,7 +204,9 @@ async def build_context(
         if loc:
             parts.append(f"User's location: {loc['location_name']}.")
             try:
-                tz_name = await get_timezone_for_coords(loc["latitude"], loc["longitude"])
+                tz_name = await get_timezone_for_coords(
+                    loc["latitude"], loc["longitude"], loc.get("location_name")
+                )
                 now_local = datetime.now(ZoneInfo(tz_name))
                 hour = now_local.hour
                 if hour == 0:
@@ -202,14 +218,14 @@ async def build_context(
                 else:
                     hour12, am_pm = hour - 12, "PM"
                 local_str = f"{hour12}:{now_local.minute:02d} {am_pm}"
-                parts.append(f"User's LOCAL time is {local_str} in {loc['location_name']}.")
+                parts.append(f"User's LOCAL time is {local_str} in {loc['location_name']}. THIS IS THE LIVE VALUE — use it exactly.")
             except Exception:
                 parts.append("If you cannot compute local time, you may fall back to UTC, but prefer the user's local time when answering.")
         else:
             parts.append("User has not set their location. If they ask for local time, ask where they are; when they reply with a place, the system will save it.")
         if extra.get("location_just_set"):
             parts.append(f"(User just set location to: {extra['location_just_set']}. Confirm briefly.)")
-        parts.append("WHEN the user asks what time it is, ALWAYS answer with their LOCAL time first (using the value above), not UTC. Example: '🕐 11:25 PM in Holon.' Mention UTC only if they explicitly ask for it.")
+        parts.append("When the user asks what time it is: use ONLY the 'User's LOCAL time' value above. Do NOT use any time from recent conversation or memory — that may be wrong. Reply with the exact value from the Time section.")
         parts.append("")
 
     # Weather (separate skill; includes today and tomorrow forecast)

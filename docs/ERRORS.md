@@ -48,7 +48,7 @@ Quick reference for errors you might see and how to fix them.
 | Symptom | Cause | Solution |
 |---------|-------|----------|
 | **Reminders not firing** | Pending reminders not loaded | Restart backend once: `./asta.sh restart`. Reminders are re-loaded on startup. |
-| **Wrong timezone (e.g. 12pm instead of 10am)** | Location not set | Add location in Files → About you (User.md) under **Location:**, or tell Asta "I'm in City, Country". |
+| **Wrong timezone (e.g. 6pm instead of 8pm)** | Timezone lookup failed (now uses offline timezonefinder) | Ensure location is set in Files → About you (User.md) or tell Asta "I'm in City, Country". Restart backend after setting. |
 | **"I couldn't parse that reminder"** | Phrase not recognised | Use: "remind me in 5 min to X", "alarm in 5 min to X", "wake me up at 7am", "remind me at 6pm to X". |
 
 ### Lyrics
