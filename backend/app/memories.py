@@ -114,13 +114,35 @@ def _format_memories(data: dict[str, str | list[str]]) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
+# Keys/values we refuse to save (meta, emotional, interests, etc.)
+_BLOCKED_KEY_PATTERNS = (
+    "emotional", "status", "mood", "assistant", "supported", "meta", "interaction",
+    "support", "feeling", "response", "capability", "state",
+    "interest", "hobby", "concern", "verified", "confirmed", "pending",
+)
+_BLOCKED_VALUE_WORDS = ("supported", "assistant", "emotional", "status", "capable", "available")
+
+
+def _should_reject_memory(key: str, value: str) -> bool:
+    """Reject meta/emotional/assistant status — only keep concrete user facts."""
+    k, v = key.lower(), value.lower()
+    if any(p in k for p in _BLOCKED_KEY_PATTERNS):
+        return True
+    if len(v.split()) <= 3 and any(w in v for w in _BLOCKED_VALUE_WORDS):
+        return True
+    return False
+
+
 def add_memory(user_id: str, key: str, value: str) -> bool:
     """Add or update one memory. Key can be 'location', 'preferred_name', or an important fact.
-    Enforces max 10 important facts. Returns True if updated."""
-    key = key.strip().lower()
+    Enforces max 10 important facts. Rejects meta/emotional/assistant status. Returns True if updated."""
+    key = key.strip()
     value = value.strip()
     if not value:
         return False
+    if _should_reject_memory(key, value):
+        return False
+    key = key.lower()
     content = load_user_memories(user_id)
     data = _parse_memories(content)
     if key in ("location", "place", "where"):

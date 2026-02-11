@@ -118,7 +118,7 @@ async def build_context(
     if mem_content:
         parts.append("--- About you (memories) ---")
         parts.append(mem_content)
-        parts.append("Use this when relevant. Do not contradict it. To add a memory, end your message with [SAVE: key: value]. Only save when the user explicitly shares something new and important. Max 10 important facts total.")
+        parts.append("Use this when relevant. Do not contradict it. To add a memory, end your message with [SAVE: key: value]. Only save location or preferred name when the user explicitly shares them. Do not save interests, hobbies, concerns, or other personal details. Max 10 important facts total.")
         parts.append("")
 
     # Self Awareness: Asta docs
