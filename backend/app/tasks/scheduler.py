@@ -79,11 +79,13 @@ def _run_learning_job_sync(
                 logger.warning("Learn search/add failed for %s: %s", query[:50], e)
             idx += 1
             time.sleep(20)  # avoid rate limit
-        msg = f"Done learning about {topic} for {duration_minutes} min. You can ask me anything about it."
+    msg = f"Done learning about {topic} for {duration_minutes} min. You can ask me anything about it."
     except Exception as e:
         logger.exception("Learning job failed: %s", e)
         msg = f"Learning about {topic} stopped (error). You can still ask me what I've learned so far."
     try:
+        # Give DB a moment to settle/commit so the user can query immediately
+        time.sleep(2)
         asyncio.run(send_notification(channel, channel_target, msg))
     except Exception as e:
         logger.warning("Could not send learning-done notification: %s", e)
