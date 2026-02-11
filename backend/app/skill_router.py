@@ -14,8 +14,6 @@ def get_skills_to_use(text: str, enabled_skill_ids: set[str]) -> set[str]:
         elif len(t) < 60 and "," in t:
             # Short reply might be a location ("Holon, Israel")
             out.add("time")
-        elif len(t) < 40 and "?" in t:
-            out.add("time")
     # Weather: weather, temperature, forecast, tomorrow
     if "weather" in enabled_skill_ids:
         if any(k in t for k in ("weather", "temperature", "forecast", "tomorrow", "today", "rain", "sunny", "temperature")):
