@@ -140,6 +140,15 @@ class Db:
             except Exception as e:
                 self.logger.exception("Failed to add pending_location_request column: %s", e)
 
+        if "fallback_providers" not in columns:
+            try:
+                await self._conn.execute(
+                    "ALTER TABLE user_settings ADD COLUMN fallback_providers TEXT DEFAULT ''"
+                )
+                await self._conn.commit()
+            except Exception as e:
+                self.logger.exception("Failed to add fallback_providers column: %s", e)
+
     async def get_or_create_conversation(self, user_id: str, channel: str) -> str:
         if not self._conn:
             await self.connect()
@@ -568,6 +577,31 @@ class Db:
         await self._conn.execute(
             "UPDATE user_settings SET pending_location_request = NULL WHERE user_id = ?",
             (user_id,),
+        )
+        await self._conn.commit()
+
+    async def get_user_fallback_providers(self, user_id: str) -> str:
+        """Get comma-separated fallback provider names (e.g. 'google,openai'). Empty if not set."""
+        if not self._conn:
+            await self.connect()
+        try:
+            cursor = await self._conn.execute(
+                "SELECT fallback_providers FROM user_settings WHERE user_id = ?", (user_id,)
+            )
+            row = await cursor.fetchone()
+            return (row["fallback_providers"] or "") if row else ""
+        except Exception:
+            return ""
+
+    async def set_user_fallback_providers(self, user_id: str, providers_csv: str) -> None:
+        """Set fallback providers (comma-separated names, e.g. 'google,openai')."""
+        if not self._conn:
+            await self.connect()
+        await self._conn.execute(
+            """INSERT INTO user_settings (user_id, mood, default_ai_provider, fallback_providers, updated_at)
+               VALUES (?, 'normal', 'groq', ?, datetime('now'))
+               ON CONFLICT(user_id) DO UPDATE SET fallback_providers = ?, updated_at = datetime('now')""",
+            (user_id, providers_csv, providers_csv),
         )
         await self._conn.commit()
 

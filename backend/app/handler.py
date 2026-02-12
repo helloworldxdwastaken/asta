@@ -231,11 +231,32 @@ async def handle_message(
         if not (m["role"] == "assistant" and is_error_reply(m["content"]))
     ]
     messages.append({"role": "user", "content": text})
+
+    # Context compaction: summarize older messages if history is too long
+    from app.compaction import compact_history
+    provider_for_compact = get_provider(provider_name)
+    if provider_for_compact:
+        messages = await compact_history(messages, provider_for_compact, context=context)
+
     provider = get_provider(provider_name)
     if not provider:
         return f"No AI provider found for '{provider_name}'. Check your provider settings."
     user_model = await db.get_user_provider_model(user_id, provider.name)
-    reply = await provider.chat(messages, context=context, model=user_model or None)
+
+    # Cross-provider fallback: if primary fails, try other configured providers
+    from app.providers.fallback import chat_with_fallback, get_available_fallback_providers, is_error_reply as is_provider_error
+    fallback_names = await get_available_fallback_providers(db, user_id, exclude_provider=provider.name)
+    # Collect each fallback's custom model (so we use the right model per provider)
+    fallback_models = {}
+    for fb_name in fallback_names:
+        fb_model = await db.get_user_provider_model(user_id, fb_name)
+        if fb_model:
+            fallback_models[fb_name] = fb_model
+    reply = await chat_with_fallback(
+        provider, messages, fallback_names,
+        context=context, model=user_model or None,
+        _fallback_models=fallback_models,
+    )
     
     # Expand GIF tags
     if "[gif:" in reply:

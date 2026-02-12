@@ -1,8 +1,14 @@
-"""RAG: ingest text, embed (Ollama, then OpenAI, then Google), store in Chroma; query for context."""
+"""RAG: ingest text, embed (Ollama, then OpenAI, then Google), store in Chroma; query for context.
+
+Hybrid search: combines vector similarity (ChromaDB) with keyword search (SQLite FTS5)
+for better retrieval. Inspired by OpenClaw's hybrid memory search.
+"""
 from __future__ import annotations
 import asyncio
 import logging
 import os
+import sqlite3
+import hashlib
 import httpx
 from pathlib import Path
 import chromadb
@@ -12,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 COLLECTION = "asta_rag"
 CHROMA_PATH = os.environ.get("ASTA_CHROMA_PATH", str(Path(__file__).resolve().parent.parent.parent / "chroma_db"))
+FTS_DB_PATH = os.environ.get("ASTA_FTS_PATH", str(Path(__file__).resolve().parent.parent.parent / "rag_fts.db"))
 EMBED_DIM = 768  # nomic-embed-text; OpenAI/Google normalized to this for compatibility
 
 
@@ -118,6 +125,12 @@ class RAGService:
             COLLECTION,
             metadata={"hnsw:space": "cosine"},
         )
+        # Initialize SQLite FTS5 for keyword search
+        self._fts_conn = sqlite3.connect(FTS_DB_PATH)
+        self._fts_conn.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS rag_fts USING fts5(doc_id, topic, chunk_text)"
+        )
+        self._fts_conn.commit()
 
     async def add(
         self,
@@ -146,6 +159,16 @@ class RAGService:
                 documents=chunks,
                 metadatas=[{"topic": topic}] * len(ids),
             )
+        # Also add to FTS5 for keyword search
+        try:
+            for chunk_id, chunk_text in zip(ids, chunks):
+                self._fts_conn.execute(
+                    "INSERT OR REPLACE INTO rag_fts (doc_id, topic, chunk_text) VALUES (?, ?, ?)",
+                    (chunk_id, topic, chunk_text),
+                )
+            self._fts_conn.commit()
+        except Exception as e:
+            logger.debug("FTS insert failed: %s", e)
 
     def list_topics(self) -> list[dict]:
         """Return list of learned topics with chunk counts. Empty if nothing learned."""
@@ -172,41 +195,117 @@ class RAGService:
             return []
 
     async def query(self, question: str, topic: str | None = None, k: int = 5) -> str:
-        """Return top-k relevant chunks as a single summary string for context."""
+        """Hybrid search: vector similarity + keyword match, merged with weights."""
+        # 1) Vector search (existing)
+        vector_results = await self._query_vector(question, topic, k)
+        # 2) Keyword search (new FTS5)
+        keyword_results = self._query_keyword(question, topic, k)
+        # 3) Merge
+        merged = self._merge_hybrid(vector_results, keyword_results)
+        return "\n".join(merged[:k]) if merged else ""
+
+    async def _query_vector(self, question: str, topic: str | None, k: int) -> list[dict]:
+        """Vector similarity search via ChromaDB. Returns list of {text, score}."""
         emb = await _get_embedding_any(question)
         if not emb:
-            return ""
-        # Normalize topic to lowercase for case-insensitive matching
+            return []
         where = {"topic": topic.lower()} if topic else None
         try:
             n = self._coll.count()
             if n == 0:
-                return ""
+                return []
             results = self._coll.query(
                 query_embeddings=[emb],
                 n_results=min(k, n),
                 where=where,
             )
         except Exception:
-            return ""
+            return []
         if not results or not results.get("documents") or not results["documents"][0]:
-            return ""
-        return "\n".join(results["documents"][0])
+            return []
+        docs = results["documents"][0]
+        distances = results.get("distances", [[]])[0]
+        out = []
+        for i, doc in enumerate(docs):
+            # ChromaDB cosine distance: 0 = identical, 2 = opposite; convert to similarity score
+            dist = distances[i] if i < len(distances) else 1.0
+            score = max(0.0, 1.0 - dist / 2.0)
+            out.append({"text": doc, "score": score, "source": "vector"})
+        return out
+
+    def _query_keyword(self, question: str, topic: str | None, k: int) -> list[dict]:
+        """Keyword search via SQLite FTS5. Returns list of {text, score}."""
+        # Sanitize the query for FTS5 (escape special chars, use OR for terms)
+        terms = [w for w in question.split() if len(w) > 2]
+        if not terms:
+            return []
+        fts_query = " OR ".join(f'"{t}"' for t in terms[:10])  # Limit to 10 terms
+        try:
+            if topic:
+                rows = self._fts_conn.execute(
+                    "SELECT chunk_text, rank FROM rag_fts WHERE rag_fts MATCH ? AND topic = ? ORDER BY rank LIMIT ?",
+                    (fts_query, topic.lower(), k),
+                ).fetchall()
+            else:
+                rows = self._fts_conn.execute(
+                    "SELECT chunk_text, rank FROM rag_fts WHERE rag_fts MATCH ? ORDER BY rank LIMIT ?",
+                    (fts_query, k),
+                ).fetchall()
+        except Exception as e:
+            logger.debug("FTS query failed: %s", e)
+            return []
+        out = []
+        for text, rank in rows:
+            # FTS5 rank is negative (more negative = more relevant); normalize to 0-1
+            score = min(1.0, max(0.0, 1.0 / (1.0 + abs(rank))))
+            out.append({"text": text, "score": score, "source": "keyword"})
+        return out
+
+    @staticmethod
+    def _merge_hybrid(
+        vector_results: list[dict],
+        keyword_results: list[dict],
+        vector_weight: float = 0.7,
+        keyword_weight: float = 0.3,
+    ) -> list[str]:
+        """Merge vector and keyword results with weighted scoring. Deduplicate by text hash."""
+        scored: dict[str, float] = {}  # text_hash -> weighted_score
+        text_map: dict[str, str] = {}  # text_hash -> original text
+
+        for r in vector_results:
+            h = hashlib.md5(r["text"].encode()).hexdigest()
+            scored[h] = scored.get(h, 0) + r["score"] * vector_weight
+            text_map[h] = r["text"]
+
+        for r in keyword_results:
+            h = hashlib.md5(r["text"].encode()).hexdigest()
+            scored[h] = scored.get(h, 0) + r["score"] * keyword_weight
+            text_map[h] = r["text"]
+
+        # Sort by combined score descending
+        ranked = sorted(scored.items(), key=lambda x: x[1], reverse=True)
+        return [text_map[h] for h, _ in ranked]
 
     def delete_topic(self, topic: str) -> int:
         """Delete all chunks for a given topic. Returns number of chunks deleted."""
-        # Normalize topic to lowercase for case-insensitive matching
         topic = topic.lower()
         try:
             n = self._coll.count()
             if n == 0:
-                return 0
-            # Get all IDs for this topic
-            result = self._coll.get(where={"topic": topic}, include=["metadatas"])
-            ids = result.get("ids") or []
-            if ids:
-                self._coll.delete(ids=ids)
-            return len(ids)
+                deleted_count = 0
+            else:
+                result = self._coll.get(where={"topic": topic}, include=["metadatas"])
+                ids = result.get("ids") or []
+                if ids:
+                    self._coll.delete(ids=ids)
+                deleted_count = len(ids)
+            # Also delete from FTS5
+            try:
+                self._fts_conn.execute("DELETE FROM rag_fts WHERE topic = ?", (topic,))
+                self._fts_conn.commit()
+            except Exception as e:
+                logger.debug("FTS delete failed: %s", e)
+            return deleted_count
         except Exception:
             return 0
 

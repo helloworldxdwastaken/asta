@@ -99,6 +99,13 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ provider }),
     }),
+  getFallbackProviders: () =>
+    req<{ providers: string }>("/settings/fallback"),
+  setFallbackProviders: (providers: string) =>
+    req<{ providers: string }>("/settings/fallback", {
+      method: "PUT",
+      body: JSON.stringify({ providers }),
+    }),
   getModels: () =>
     req<{ models: Record<string, string>; defaults: Record<string, string> }>("/settings/models"),
   setModel: (provider: string, model: string) =>

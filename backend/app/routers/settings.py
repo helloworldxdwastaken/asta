@@ -79,6 +79,36 @@ async def set_default_ai(body: DefaultAiIn, user_id: str = "default"):
     return {"provider": body.provider}
 
 
+class FallbackProvidersIn(BaseModel):
+    providers: str  # comma-separated, e.g. "google,openai" or "" to disable
+
+
+@router.get("/settings/fallback")
+@router.get("/api/settings/fallback")
+async def get_fallback_providers(user_id: str = "default"):
+    """Get configured fallback providers (comma-separated). Empty = auto-detect from key availability."""
+    db = get_db()
+    await db.connect()
+    providers = await db.get_user_fallback_providers(user_id)
+    return {"providers": providers}
+
+
+@router.put("/settings/fallback")
+@router.put("/api/settings/fallback")
+async def set_fallback_providers(body: FallbackProvidersIn, user_id: str = "default"):
+    """Set fallback provider order (comma-separated, e.g. 'google,openai'). Empty = auto-detect."""
+    valid = {"groq", "google", "claude", "ollama", "openai", "openrouter"}
+    if body.providers.strip():
+        names = [n.strip() for n in body.providers.split(",") if n.strip()]
+        bad = [n for n in names if n not in valid]
+        if bad:
+            return {"error": f"Unknown provider(s): {', '.join(bad)}. Valid: {', '.join(sorted(valid))}"}
+    db = get_db()
+    await db.connect()
+    await db.set_user_fallback_providers(user_id, body.providers.strip())
+    return {"providers": body.providers.strip()}
+
+
 # Default models per provider (used when user has not set a custom model)
 DEFAULT_MODELS = {
     "groq": "llama-3.3-70b-versatile",

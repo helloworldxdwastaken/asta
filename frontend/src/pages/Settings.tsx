@@ -157,6 +157,106 @@ function DefaultAiSelect() {
   );
 }
 
+function FallbackProviderSelect() {
+  const [fallbackCsv, setFallbackCsv] = useState("");
+  const [defaultProvider, setDefaultProvider] = useState("");
+  const [connected, setConnected] = useState<Record<string, boolean>>({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    Promise.all([
+      api.getFallbackProviders(),
+      api.getDefaultAi(),
+      api.status(),
+    ]).then(([fb, ai, status]) => {
+      setFallbackCsv(fb.providers || "");
+      setDefaultProvider(ai.provider);
+      setConnected(status.apis ?? {});
+      setLoading(false);
+    });
+  }, []);
+
+  const connectedProviders = (["groq", "google", "claude", "ollama", "openai", "openrouter"] as const).filter(
+    (id) => connected[PROVIDER_STATUS_KEYS[id]] && id !== defaultProvider
+  );
+
+  const selected = fallbackCsv
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s && connectedProviders.includes(s as any));
+
+  const toggle = (provider: string) => {
+    let next: string[];
+    if (selected.includes(provider)) {
+      next = selected.filter((p) => p !== provider);
+    } else {
+      next = [...selected, provider];
+    }
+    const csv = next.join(",");
+    setFallbackCsv(csv);
+    setSaving(true);
+    setMsg(null);
+    api.setFallbackProviders(csv)
+      .then(() => {
+        setMsg(next.length ? `Fallback order: ${next.map(p => DEFAULT_AI_LABELS[p]).join(" → ")}` : "Auto-detect (all available keys)");
+      })
+      .catch(() => setMsg("Failed to save"))
+      .finally(() => setSaving(false));
+  };
+
+  if (loading) return <p style={{ color: "var(--muted)" }}>Loading…</p>;
+  if (connectedProviders.length === 0) {
+    return (
+      <p className="help" style={{ marginTop: "0.5rem" }}>
+        No other providers connected. Add more API keys above to enable fallback.
+      </p>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: "1rem" }}>
+      <p className="help" style={{ marginBottom: "0.5rem" }}>
+        If <strong>{DEFAULT_AI_LABELS[defaultProvider] || defaultProvider}</strong> fails (rate limit, timeout, etc.), Asta will try these providers in order.
+        {!fallbackCsv && " Currently auto-detecting from all available keys."}
+      </p>
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+        {connectedProviders.map((id) => (
+          <label
+            key={id}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+              cursor: "pointer",
+              padding: "0.35rem 0.5rem",
+              borderRadius: 6,
+              background: selected.includes(id) ? "var(--bg-hover)" : "transparent",
+              transition: "background 0.15s",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={selected.includes(id)}
+              onChange={() => toggle(id)}
+              disabled={saving}
+              style={{ accentColor: "var(--primary)" }}
+            />
+            <span>{DEFAULT_AI_LABELS[id]}</span>
+            {selected.includes(id) && (
+              <span className="help" style={{ marginLeft: "auto" }}>
+                #{selected.indexOf(id) + 1}
+              </span>
+            )}
+          </label>
+        ))}
+      </div>
+      {msg && <p className="help" style={{ marginTop: "0.5rem", color: "var(--success)" }}>{msg}</p>}
+    </div>
+  );
+}
+
 function WhatsAppQr() {
   const [state, setState] = useState<{ connected?: boolean; qr?: string | null; error?: string } | null>(null);
   const fetchQr = useCallback(() => {
@@ -523,6 +623,8 @@ export default function Settings() {
           <div className="acc-body">
             <p className="help">Asta uses this provider by default for Chat, WhatsApp, and Telegram.</p>
             <DefaultAiSelect />
+            <h3 style={{ marginTop: "1.25rem", marginBottom: "0.25rem" }}>Fallback providers</h3>
+            <FallbackProviderSelect />
           </div>
         </details>
 
