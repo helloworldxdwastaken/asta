@@ -41,7 +41,7 @@ get_version() {
 }
 
 print_asta_banner() {
-    echo -e "${MAGENTA}${BOLD}"
+    echo -e "${BLUE}${BOLD}"
     echo "    ▄▄▄       ██████ ▄▄▄█████▓ ▄▄▄      "
     echo "   ▒████▄   ▒██    ▒ ▓  ██▒ ▓▒▒████▄    "
     echo "   ▒██  ▀█▄ ░ ▓██▄   ▒ ▓██░ ▒░▒██  ▀█▄  "
@@ -49,7 +49,7 @@ print_asta_banner() {
     echo "    ▓█   ▓██▒██████▒▒  ▒██▒ ░  ▓█   ▓██▒"
     echo "    ▒▒   ▓▒█▒ ▒▓▒ ▒ ░  ▒ ░░    ▒▒   ▓▒█░"
     echo -e "     ░   ▒▒ ░ ░▒  ░ ░    ░      ░   ▒▒ ░${NC}"
-    echo -e "     ${CYAN}  AI Control Plane ${GRAY}:: ${WHITE}v$(get_version)${NC}\n"
+    echo -e "     ${WHITE}  AI Control Plane ${GRAY}:: ${WHITE}v$(get_version)${NC}\n"
 
     # Random Witty Quotes
     quotes=(
@@ -68,7 +68,7 @@ print_asta_banner() {
     RANDOM=$$$(date +%s)
     selected_quote=${quotes[$RANDOM % ${#quotes[@]}]}
     
-    echo -e "    ${GRAY}\"${selected_quote}\"${NC}\n"
+    echo -e "    ${BLUE}\"${selected_quote}\"${NC}\n"
     
     check_updates
 }
