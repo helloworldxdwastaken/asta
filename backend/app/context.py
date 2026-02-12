@@ -111,6 +111,24 @@ async def build_context(
     lyrics_enabled = await db.get_skill_enabled(user_id, "lyrics")
     reminders_enabled = await db.get_skill_enabled(user_id, "reminders")
     self_awareness_enabled = await db.get_skill_enabled(user_id, "self_awareness")
+    server_status_enabled = await db.get_skill_enabled(user_id, "server_status")
+
+    # Server Status summary
+    if server_status_enabled and _use("server_status") and extra and extra.get("server_status"):
+        ss = extra["server_status"]
+        if ss.get("ok"):
+            parts.append("--- Server Status (REAL-TIME METRICS) ---")
+            parts.append(f"CPU Usage: {ss['cpu_percent']}%")
+            parts.append(f"RAM Usage: {ss['ram']['percent']}% ({ss['ram']['used_gb']}GB / {ss['ram']['total_gb']}GB)")
+            parts.append(f"Disk Usage: {ss['disk']['percent']}% ({ss['disk']['used_gb']}GB / {ss['disk']['total_gb']}GB)")
+            parts.append(f"System Uptime: {ss['uptime_str']}")
+            parts.append(f"Asta Version: {ss.get('version', 'Unknown')}")
+            parts.append("Use these exact values to answer 'server status' or 'system stats' questions. Do NOT say you cannot check.")
+            parts.append("")
+        else:
+            parts.append("--- Server Status ---")
+            parts.append(f"Status check failed: {ss.get('error')}")
+            parts.append("")
 
     # Files summary (allowed paths)
     if files_enabled and _use("files") and s.asta_allowed_paths:
@@ -142,6 +160,7 @@ async def build_context(
         parts.append(extra["asta_docs"])
         parts.append("")
         parts.append("Use the documentation above to answer questions about Asta's features, installation, or configuration. Be helpful and specific.")
+        parts.append("CRITICAL: The documentation is ALREADY provided above. Do NOT say 'I will check the docs'. Answer valid questions immediately based on the text above.")
         parts.append("")
 
     # Past meetings (saved when user chose "meeting notes"; user can ask "last meeting?" etc.)
@@ -179,6 +198,7 @@ If the user asks about a specific term like 'eSimo' and it appears below, use TH
 ----------------------------------------
 """)
         parts.append(extra["rag_summary"])
+        parts.append("CRITICAL: The information above is the result of your check. DONT say 'I will check'. Answer immediately based on this.")
         parts.append("----------------------------------------")
 
     async def _get_effective_location():

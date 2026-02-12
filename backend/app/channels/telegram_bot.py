@@ -4,12 +4,47 @@ import re
 from urllib.parse import urlparse
 
 import httpx
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, constants
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, AIORateLimiter
+import asyncio
+from collections import defaultdict
+import html
+
+# Locks to ensure sequential processing per chat
+_chat_locks = defaultdict(asyncio.Lock)
 
 from app.handler import handle_message
 
 logger = logging.getLogger(__name__)
+
+
+def to_telegram_format(text: str) -> str:
+    """Convert common Markdown bits to Telegram HTML."""
+    if not text:
+        return ""
+    # First escape the raw text so we don't accidentally send biohazard HTML
+    text = html.escape(text)
+
+    # Bold: **text** -> <b>text</b>
+    text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", text)
+    # Bold: __text__ -> <b>text</b> (if not inside word?)
+    text = re.sub(r"__(.*?)__", r"<b>\1</b>", text)
+    
+    # Italic: *text* -> <i>text</i>
+    # We use a refined regex to avoid matching things like multiplication or URLs
+    text = re.sub(r"(?<!\*)\*(?!\s)(.*?)(?<!\s)\*(?!\*)", r"<i>\1</i>", text)
+    # Italic: _text_ -> <i>text</i>
+    text = re.sub(r"(?<!_)_(?!\s)(.*?)(?<!\s)_(?!_)", r"<i>\1</i>", text)
+
+    # Code: `text` -> <code>text</code>
+    text = re.sub(r"`(.*?)`", r"<code>\1</code>", text)
+
+    # Code blocks: ```text``` -> <pre>text</pre>
+    # Note: re.DOTALL to match across lines
+    text = re.sub(r"```(.*?)```", r"<pre>\1</pre>", text, flags=re.DOTALL)
+
+    return text
+
 
 # Max length for a single Telegram message
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
@@ -79,83 +114,95 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     # Same user as web panel (personal assistant: one user for all channels)
     user_id = "default"
-    chat_id = str(update.effective_chat.id) if update.effective_chat else ""
-    text = update.message.text
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    
+    # Acquire lock for this chat to prevent race conditions (sequential processing)
+    # This matches OpenClaw's "sequentialize" behavior.
+    async with _chat_locks[chat_id]:
+        chat_id_str = str(chat_id)
+        text = update.message.text
 
-    # If message is a single URL (optionally with instruction on next line), try to process as audio link (workaround for 20 MB Telegram limit)
-    if _is_audio_url(text):
-        url, instruction = _extract_url_and_instruction(text)
-        if url:
-            await update.message.reply_text("Downloading from link…")
-            result = await _fetch_audio_from_url(url)
-            if result:
-                data, filename = result
-                await update.message.reply_text("Transcribing…")
-                async def _url_progress(stage: str) -> None:
-                    if stage == "formatting":
-                        await update.message.reply_text("Formatting…")
-                try:
-                    from app.audio_notes import process_audio_to_notes
-                    out_result = await process_audio_to_notes(data, filename, instruction, user_id, progress_callback=_url_progress)
-                    formatted = (out_result.get("formatted") or "").strip() or "No formatted output."
-                    transcript = (out_result.get("transcript") or "").strip()
-                    reply_text = formatted[:TELEGRAM_MAX_MESSAGE_LENGTH]
-                    if len(formatted) > TELEGRAM_MAX_MESSAGE_LENGTH:
-                        reply_text += "…"
-                    await update.message.reply_text(reply_text)
-                    if transcript and transcript != "(no speech detected)":
-                        excerpt = transcript[:TELEGRAM_MAX_MESSAGE_LENGTH - 30] + ("…" if len(transcript) > TELEGRAM_MAX_MESSAGE_LENGTH - 30 else "")
-                        await update.message.reply_text("📝 Transcript:\n" + excerpt)
-                    logger.info("Telegram audio-from-URL sent to %s", user_id)
-                    return
-                except ValueError as e:
-                    await update.message.reply_text(str(e)[:500])
-                    return
-                except Exception as e:
-                    logger.exception("Audio notes from URL failed: %s", e)
-                    await update.message.reply_text(f"Error: {str(e)[:500]}")
-                    return
-            await update.message.reply_text(
-                "Could not use that link as audio (not a direct audio file or too large). "
-                "Use a direct download link to an audio file (e.g. .m4a, .mp3), max 50 MB."
+        # If message is a single URL (optionally with instruction on next line), try to process as audio link (workaround for 20 MB Telegram limit)
+        if _is_audio_url(text):
+            url, instruction = _extract_url_and_instruction(text)
+            if url:
+                await update.message.reply_text("Downloading from link…")
+                result = await _fetch_audio_from_url(url)
+                if result:
+                    data, filename = result
+                    await update.message.reply_text("Transcribing…")
+                    async def _url_progress(stage: str) -> None:
+                        if stage == "formatting":
+                            await update.message.reply_text("Formatting…")
+                    try:
+                        from app.audio_notes import process_audio_to_notes
+                        out_result = await process_audio_to_notes(data, filename, instruction, user_id, progress_callback=_url_progress)
+                        formatted = (out_result.get("formatted") or "").strip() or "No formatted output."
+                        transcript = (out_result.get("transcript") or "").strip()
+                        reply_text = formatted[:TELEGRAM_MAX_MESSAGE_LENGTH]
+                        if len(formatted) > TELEGRAM_MAX_MESSAGE_LENGTH:
+                            reply_text += "…"
+                        await update.message.reply_text(reply_text)
+                        if transcript and transcript != "(no speech detected)":
+                            excerpt = transcript[:TELEGRAM_MAX_MESSAGE_LENGTH - 30] + ("…" if len(transcript) > TELEGRAM_MAX_MESSAGE_LENGTH - 30 else "")
+                            await update.message.reply_text("📝 Transcript:\n" + excerpt)
+                        logger.info("Telegram audio-from-URL sent to %s", user_id)
+                        return
+                    except ValueError as e:
+                        await update.message.reply_text(str(e)[:500])
+                        return
+                    except Exception as e:
+                        logger.exception("Audio notes from URL failed: %s", e)
+                        await update.message.reply_text(f"Error: {str(e)[:500]}")
+                        return
+                await update.message.reply_text(
+                    "Could not use that link as audio (not a direct audio file or too large). "
+                    "Use a direct download link to an audio file (e.g. .m4a, .mp3), max 50 MB."
+                )
+                return
+
+        logger.info("Telegram message from %s: %s", user_id, (text[:80] + "…") if len(text) > 80 else text)
+        try:
+            await update.message.chat.send_action("typing")
+            reply = await handle_message(
+                user_id, "telegram", text, provider_name="default",
+                channel_target=chat_id_str,
             )
-            return
+            
+            # Check for markdown GIF (Giphy or .gif) and send as animation
+            # Regex matches ![alt](url) where url contains giphy.com or ends in .gif
+            gif_match = re.search(r"!\[.*?\]\((https?://(?:media\d?\.giphy\.com/media/|.*\.gif).*?)\)", reply)
+            
+            if gif_match:
+                gif_url = gif_match.group(1)
+                # Remove the markdown image from the text to avoid duplicate/ugly link
+                text_reply = reply.replace(gif_match.group(0), "").strip()
+                
+                if text_reply:
+                    await update.message.reply_text(
+                        to_telegram_format(text_reply[:TELEGRAM_MAX_MESSAGE_LENGTH]),
+                        parse_mode=constants.ParseMode.HTML
+                    )
+                
+                try:
+                    await update.message.reply_animation(gif_url)
+                    logger.info("Telegram reply sent to %s (with animation)", user_id)
+                except Exception as e:
+                    logger.warning("Failed to send animation to %s: %s", user_id, e)
+                    # Fallback: if we haven't sent text yet (e.g. only gif), send the link
+                    if not text_reply:
+                        await update.message.reply_text(gif_url)
+            else:
+                out = (reply or "").strip()[:TELEGRAM_MAX_MESSAGE_LENGTH] or "No response."
+                await update.message.reply_text(
+                    to_telegram_format(out),
+                    parse_mode=constants.ParseMode.HTML
+                )
+                logger.info("Telegram reply sent to %s", user_id)
+        except Exception as e:
+            logger.exception("Telegram handler error")
+            await update.message.reply_text(f"Error: {str(e)[:500]}")
 
-    logger.info("Telegram message from %s: %s", user_id, (text[:80] + "…") if len(text) > 80 else text)
-    try:
-        await update.message.chat.send_action("typing")
-        reply = await handle_message(
-            user_id, "telegram", text, provider_name="default",
-            channel_target=chat_id,
-        )
-        
-        # Check for markdown GIF (Giphy or .gif) and send as animation
-        # Regex matches ![alt](url) where url contains giphy.com or ends in .gif
-        gif_match = re.search(r"!\[.*?\]\((https?://(?:media\d?\.giphy\.com/media/|.*\.gif).*?)\)", reply)
-        
-        if gif_match:
-            gif_url = gif_match.group(1)
-            # Remove the markdown image from the text to avoid duplicate/ugly link
-            text_reply = reply.replace(gif_match.group(0), "").strip()
-            
-            if text_reply:
-                await update.message.reply_text(text_reply[:TELEGRAM_MAX_MESSAGE_LENGTH])
-            
-            try:
-                await update.message.reply_animation(gif_url)
-                logger.info("Telegram reply sent to %s (with animation)", user_id)
-            except Exception as e:
-                logger.warning("Failed to send animation to %s: %s", user_id, e)
-                # Fallback: if we haven't sent text yet (e.g. only gif), send the link
-                if not text_reply:
-                    await update.message.reply_text(gif_url)
-        else:
-            out = (reply or "").strip()[:TELEGRAM_MAX_MESSAGE_LENGTH] or "No response."
-            await update.message.reply_text(out)
-            logger.info("Telegram reply sent to %s", user_id)
-    except Exception as e:
-        logger.exception("Telegram handler error")
-        await update.message.reply_text(f"Error: {str(e)[:500]}")
 
 
 async def on_voice_or_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -164,65 +211,69 @@ async def on_voice_or_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
     # Same user as web panel (personal assistant: one user for all channels)
     user_id = "default"
-    chat_id = str(update.effective_chat.id) if update.effective_chat else ""
-    # Caption as instruction (e.g. "meeting notes" or "action items")
-    instruction = (update.message.caption or "").strip()
-    file_id = None
-    filename = "voice.ogg"
-    if update.message.voice:
-        file_id = update.message.voice.file_id
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    
+    async with _chat_locks[chat_id]:
+        chat_id_str = str(chat_id)
+        # Caption as instruction (e.g. "meeting notes" or "action items")
+        instruction = (update.message.caption or "").strip()
+        file_id = None
         filename = "voice.ogg"
-    elif update.message.audio:
-        file_id = update.message.audio.file_id
-        filename = update.message.audio.file_name or "audio.mp3"
-    elif update.message.document and update.message.document.mime_type and "audio" in update.message.document.mime_type:
-        file_id = update.message.document.file_id
-        filename = update.message.document.file_name or "audio"
-    if not file_id:
-        await update.message.reply_text("Send a voice message or an audio file. Add a caption like \"meeting notes\" or \"action items\" (optional).")
-        return
-    await update.message.reply_text("Transcribing…")
-    try:
-        tg_file = await context.bot.get_file(file_id)
-        buf = await tg_file.download_as_bytearray()
-        data = bytes(buf)
-    except Exception as e:
-        err = str(e).strip()
-        logger.exception("Telegram file download failed: %s", e)
-        if "too big" in err.lower() or "file is too big" in err.lower():
-            await update.message.reply_text(
-                "This file is too large (Telegram limit 20 MB). Workaround: upload the file elsewhere (e.g. Google Drive, Dropbox), get a direct download link, and paste that link here — I can process links up to 50 MB. Or use the web panel: Audio notes."
-            )
-        else:
-            await update.message.reply_text(f"Could not download the file: {err[:300]}")
-        return
-    async def on_progress(stage: str) -> None:
-        if stage == "formatting":
-            await update.message.reply_text("Formatting…")
+        if update.message.voice:
+            file_id = update.message.voice.file_id
+            filename = "voice.ogg"
+        elif update.message.audio:
+            file_id = update.message.audio.file_id
+            filename = update.message.audio.file_name or "audio.mp3"
+        elif update.message.document and update.message.document.mime_type and "audio" in update.message.document.mime_type:
+            file_id = update.message.document.file_id
+            filename = update.message.document.file_name or "audio"
+        if not file_id:
+            await update.message.reply_text("Send a voice message or an audio file. Add a caption like \"meeting notes\" or \"action items\" (optional).")
+            return
+        await update.message.reply_text("Transcribing…")
+        try:
+            tg_file = await context.bot.get_file(file_id)
+            buf = await tg_file.download_as_bytearray()
+            data = bytes(buf)
+        except Exception as e:
+            err = str(e).strip()
+            logger.exception("Telegram file download failed: %s", e)
+            if "too big" in err.lower() or "file is too big" in err.lower():
+                await update.message.reply_text(
+                    "This file is too large (Telegram limit 20 MB). Workaround: upload the file elsewhere (e.g. Google Drive, Dropbox), get a direct download link, and paste that link here — I can process links up to 50 MB. Or use the web panel: Audio notes."
+                )
+            else:
+                await update.message.reply_text(f"Could not download the file: {err[:300]}")
+            return
+        async def on_progress(stage: str) -> None:
+            if stage == "formatting":
+                await update.message.reply_text("Formatting…")
 
-    try:
-        from app.audio_notes import process_audio_to_notes
-        result = await process_audio_to_notes(data, filename, instruction, user_id, progress_callback=on_progress)
-    except ValueError as e:
-        await update.message.reply_text(str(e)[:500])
-        return
-    except Exception as e:
-        logger.exception("Audio notes failed: %s", e)
-        await update.message.reply_text(f"Error: {str(e)[:500]}")
-        return
-    formatted = (result.get("formatted") or "").strip()
-    transcript = (result.get("transcript") or "").strip()
-    if not formatted:
-        formatted = "No formatted output."
-    out = formatted[:TELEGRAM_MAX_MESSAGE_LENGTH]
-    if len(formatted) > TELEGRAM_MAX_MESSAGE_LENGTH:
-        out = out + "…"
-    await update.message.reply_text(out)
-    if transcript and transcript != "(no speech detected)" and len(transcript) <= 500:
-        await update.message.reply_text("📝 Transcript:\n" + transcript[:TELEGRAM_MAX_MESSAGE_LENGTH - 20])
-    elif transcript and len(transcript) > 500:
-        await update.message.reply_text("📝 Transcript (excerpt):\n" + transcript[:TELEGRAM_MAX_MESSAGE_LENGTH - 30] + "…")
-    logger.info("Telegram audio notes sent to %s", user_id)
+        try:
+            from app.audio_notes import process_audio_to_notes
+            result = await process_audio_to_notes(data, filename, instruction, user_id, progress_callback=on_progress)
+        except ValueError as e:
+            await update.message.reply_text(str(e)[:500])
+            return
+        except Exception as e:
+            logger.exception("Audio notes failed: %s", e)
+            await update.message.reply_text(f"Error: {str(e)[:500]}")
+            return
+        formatted = (result.get("formatted") or "").strip()
+        transcript = (result.get("transcript") or "").strip()
+        if not formatted:
+            formatted = "No formatted output."
+        out = formatted[:TELEGRAM_MAX_MESSAGE_LENGTH]
+        if len(formatted) > TELEGRAM_MAX_MESSAGE_LENGTH:
+            out = out + "…"
+        await update.message.reply_text(to_telegram_format(out), parse_mode=constants.ParseMode.HTML)
+        if transcript and transcript != "(no speech detected)" and len(transcript) <= 500:
+            await update.message.reply_text("📝 Transcript:\n" + transcript[:TELEGRAM_MAX_MESSAGE_LENGTH - 20])
+        elif transcript and len(transcript) > 500:
+            await update.message.reply_text("📝 Transcript (excerpt):\n" + transcript[:TELEGRAM_MAX_MESSAGE_LENGTH - 30] + "…")
+
+        logger.info("Telegram audio notes sent to %s", user_id)
 
 
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -235,12 +286,38 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def build_telegram_app(token: str) -> Application:
     """Build configured Application (handlers only). Caller must initialize/start in same event loop."""
-    app = Application.builder().token(token.strip()).build()
+    # Use AIORateLimiter to respect Telegram limits (30 msg/sec, etc.)
+    # This automatically handles 429s with backoff.
+    rate_limiter = AIORateLimiter(overall_max_rate=30, overall_time_period=1)
+    app = Application.builder().token(token.strip()).rate_limiter(rate_limiter).build()
     app.add_handler(CommandHandler("start", start_cmd))
+    app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice_or_audio))
     app.add_handler(MessageHandler(filters.Document.AUDIO, on_voice_or_audio))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     return app
+
+
+async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /status command directly (bypass AI for deterministic response)."""
+    if not update.message:
+        return
+    
+    from app.server_status import get_server_status
+    ss = get_server_status()
+    
+    if ss.get("ok"):
+        text = (
+            f"<b>🖥️ Server Status</b> (v{ss.get('version', '?')})\n\n"
+            f"<b>CPU:</b> {ss['cpu_percent']}%\n"
+            f"<b>RAM:</b> {ss['ram']['percent']}% ({ss['ram']['used_gb']}GB / {ss['ram']['total_gb']}GB)\n"
+            f"<b>Disk:</b> {ss['disk']['percent']}% ({ss['disk']['used_gb']}GB / {ss['disk']['total_gb']}GB)\n"
+            f"<b>Uptime:</b> {ss['uptime_str']}"
+        )
+    else:
+        text = f"<b>⚠️ Status Check Failed</b>\n{ss.get('error')}"
+        
+    await update.message.reply_text(text, parse_mode=constants.ParseMode.HTML)
 
 
 async def start_telegram_bot_in_loop(app: Application) -> None:

@@ -8,6 +8,7 @@ import Learning from "./pages/Learning";
 import AudioNotes from "./pages/AudioNotes";
 import Skills from "./pages/Skills";
 import Settings from "./pages/Settings";
+import Channels from "./pages/Channels";
 import { api } from "./api/client";
 import "./index.css";
 
@@ -54,6 +55,13 @@ const ICONS = {
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 2L2 7l10 5 10-5-10-5z" />
       <path d="M2 17l10 5 10-5" />
+    </svg>
+  ),
+  channels: (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z" />
+      <path d="M2 12h20" />
+      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
     </svg>
   ),
   settings: (
@@ -144,6 +152,10 @@ export default function App() {
               <span className="nav-icon">{ICONS.skills}</span>
               <span className="nav-label">Skills</span>
             </NavLink>
+            <NavLink to="/channels" onClick={() => setNavOpen(false)}>
+              <span className="nav-icon">{ICONS.channels}</span>
+              <span className="nav-label">Channels</span>
+            </NavLink>
             <NavLink to="/settings" onClick={() => setNavOpen(false)}>
               <span className="nav-icon">{ICONS.settings}</span>
               <span className="nav-label">Settings</span>
@@ -152,16 +164,17 @@ export default function App() {
         </aside>
         <main className="main">
           <div className="main-inner">
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/chat" element={<Chat />} />
-            <Route path="/files" element={<Files />} />
-            <Route path="/drive" element={<Drive />} />
-            <Route path="/learning" element={<Learning />} />
-            <Route path="/audio-notes" element={<AudioNotes />} />
-            <Route path="/skills" element={<Skills />} />
-            <Route path="/settings" element={<Settings />} />
-          </Routes>
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/chat" element={<Chat />} />
+              <Route path="/files" element={<Files />} />
+              <Route path="/drive" element={<Drive />} />
+              <Route path="/learning" element={<Learning />} />
+              <Route path="/audio-notes" element={<AudioNotes />} />
+              <Route path="/skills" element={<Skills />} />
+              <Route path="/channels" element={<Channels />} />
+              <Route path="/settings" element={<Settings />} />
+            </Routes>
           </div>
         </main>
       </div>

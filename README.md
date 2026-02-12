@@ -65,11 +65,12 @@ From the repo root (Linux / macOS):
 - **Drive** — Google Drive (OAuth stub)  
 - **Learning** — RAG: “learn about X for 30 min”, ask later; semantic search so answers use only relevant learned bits  
 - **Audio notes** — Upload or paste a link; transcribe (local faster-whisper) and get meeting notes or summary; saved for “last meeting?”  
-- **Settings** — API keys (Groq, Gemini, Claude, Telegram, Spotify), default AI, skill toggles, “Run the API”, “Restart backend”  
+- **Channels** — Manage WhatsApp and Telegram connections (QR code, bot token)
+- **Settings** — API keys (Groq, Gemini, Claude, Spotify), default AI, skill toggles, “Run the API”, “Restart backend”  
 - **Skills** — Enable/disable time, weather, web search, lyrics, Spotify, reminders, audio notes, learning  
 
-**Telegram:** Set `TELEGRAM_BOT_TOKEN` in `backend/.env` or Settings; same user as the panel.  
-**WhatsApp:** Run `services/whatsapp` with `ASTA_API_URL=http://localhost:8010`; scan QR in Settings.
+**Telegram:** Set `TELEGRAM_BOT_TOKEN` in `backend/.env` or on the **Channels** page.  
+**WhatsApp:** Run `services/whatsapp` (see `services/whatsapp/README.md`); scan QR on the **Channels** page. Ensure `ASTA_WHATSAPP_BRIDGE_URL` is set in `backend/.env`.
 
 ---
 

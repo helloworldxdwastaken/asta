@@ -117,6 +117,11 @@ class Db:
             CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id);
             CREATE INDEX IF NOT EXISTS idx_tasks_run ON tasks(run_at);
             CREATE INDEX IF NOT EXISTS idx_reminders_run ON reminders(run_at);
+            CREATE TABLE IF NOT EXISTS system_config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
         """)
         await self._conn.commit()
         # Check if column exists before adding
@@ -602,6 +607,28 @@ class Db:
                VALUES (?, 'normal', 'groq', ?, datetime('now'))
                ON CONFLICT(user_id) DO UPDATE SET fallback_providers = ?, updated_at = datetime('now')""",
             (user_id, providers_csv, providers_csv),
+        )
+        await self._conn.commit()
+
+
+    async def get_system_config(self, key: str) -> str | None:
+        """Get a global system setting."""
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute(
+            "SELECT value FROM system_config WHERE key = ?", (key,)
+        )
+        row = await cursor.fetchone()
+        return row["value"] if row else None
+
+    async def set_system_config(self, key: str, value: str) -> None:
+        """Set a global system setting."""
+        if not self._conn:
+            await self.connect()
+        await self._conn.execute(
+            """INSERT INTO system_config (key, value, updated_at) VALUES (?, ?, datetime('now'))
+               ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = datetime('now')""",
+            (key, value, value),
         )
         await self._conn.commit()
 

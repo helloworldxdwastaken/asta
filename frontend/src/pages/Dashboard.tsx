@@ -10,6 +10,9 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [_defaultAi, setDefaultAi] = useState<string | null>(null);
+  const [serverStatus, setServerStatus] = useState<any>(null);
+  const [models, setModels] = useState<Record<string, string>>({});
+  const [defaults, setDefaults] = useState<Record<string, string>>({});
 
   const refresh = useCallback(() => {
     setError(null);
@@ -19,6 +22,8 @@ export default function Dashboard() {
       .catch(() => setError("Cannot reach Asta API. Is the backend running on port 8010?"));
     api.getNotifications(50).then((r) => setNotifications(r.notifications || [])).catch(() => setNotifications([]));
     api.getDefaultAi().then((r) => setDefaultAi(r.provider)).catch(() => setDefaultAi(null));
+    api.getServerStatus().then(r => setServerStatus(r)).catch(() => setServerStatus(null));
+    api.getModels().then((r) => { setModels(r.models); setDefaults(r.defaults); }).catch(() => { });
   }, []);
 
   useEffect(() => {
@@ -41,162 +46,443 @@ export default function Dashboard() {
   const integrations = status?.integrations ?? {};
   const skills = status?.skills ?? [];
   const connected = !error && status;
-
   const pendingReminders = notifications.filter(n => n.status === 'pending');
-  const pastReminders = notifications.filter(n => n.status !== 'pending');
 
   return (
-    <div className="dashboard">
-      <header className="dashboard-hero">
-        <h1 className="dashboard-title">Control panel</h1>
-        <p className="dashboard-tagline">
-          One place for AI, WhatsApp, Telegram, files, Drive, and learning.
-        </p>
+    <div className="dashboard-container">
+      {/* ─── HEADER ─── */}
+      <header className="dashboard-header">
+        <div>
+          <h1 className="title">Asta Dashboard</h1>
+          <p className="subtitle">System Overview & Diagnostics</p>
+        </div>
+        <div className={`system-status-badge ${connected ? 'ok' : 'error'}`}>
+          <span className="dot"></span>
+          {connected ? `System Online v${status?.version}` : 'System Offline'}
+        </div>
       </header>
 
-      <section className="dashboard-section">
-        <div className={`card card-backend ${error ? "card-error" : connected ? "card-success" : ""}`}>
-          <div className="card-backend-header">
-            <h2>Backend Status</h2>
-            {connected && <span className="backend-badge status-ok">Connected</span>}
-            {error && <span className="backend-badge status-pending">Disconnected</span>}
-          </div>
-          {error ? (
-            <>
-              <p className="card-backend-message">Frontend cannot reach the API. Start the backend:</p>
-              <code className="card-backend-code">cd backend && uvicorn app.main:app --port 8010</code>
-              <button type="button" onClick={refresh} className="btn btn-secondary" style={{ marginTop: "0.75rem" }}>Retry</button>
-            </>
-          ) : status ? (
-            <p className="card-backend-message">Asta {status.app} v{status.version} is running.</p>
-          ) : (
-            <p className="muted">Checking…</p>
-          )}
+      {error ? (
+        <div className="error-banner">
+          <h3>⚠️ Connection Lost</h3>
+          <p>Cannot reach the Asta backend. Ensure the server is running on port 8010.</p>
+          <code>cd backend && uvicorn app.main:app --port 8010</code>
+          <button onClick={refresh} className="btn btn-secondary retry-btn">Retry Connection</button>
         </div>
-      </section>
+      ) : (
+        <div className="bento-grid">
 
-      {status && (
-        <>
-          {/* ─── REMINDERS SECTION ─── */}
-          <section className="dashboard-section">
-            <h2 className="dashboard-section-title">Reminders</h2>
-            <div className="dashboard-grid">
-
-              {/* UPCOMING */}
-              <div className="card">
-                <h2>Upcoming</h2>
-                {pendingReminders.length === 0 ? (
-                  <p className="muted">No upcoming reminders.</p>
-                ) : (
-                  <ul className="reminders-list">
-                    {pendingReminders.map((n) => (
-                      <li key={n.id} className="reminder-item">
-                        <div className="reminder-info">
-                          <span className="reminder-time">
-                            {new Date(n.run_at).toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' })}
-                          </span>
-                          <span className="reminder-msg">{n.message}</span>
-                        </div>
-                        <button
-                          className="btn-quiet btn-sm"
-                          onClick={() => handleDeleteNotification(n.id)}
-                          title="Delete reminder"
-                        >
-                          ✕
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
+          {/* ─── 1. THE BRAIN (AI) ─── */}
+          <div className="bento-card brain-section">
+            <div className="card-header">
+              <div className="icon">🧠</div>
+              <div>
+                <h2>The Brain</h2>
+                <p className="desc">Active AI Models & Intelligence Providers</p>
               </div>
-
-              {/* HISTORY */}
-              <div className="card">
-                <h2>History</h2>
-                {pastReminders.length === 0 ? (
-                  <p className="muted">No past reminders.</p>
-                ) : (
-                  <ul className="reminders-list">
-                    {pastReminders.slice(0, 5).map((n) => (
-                      <li key={n.id} className="reminder-item opacity-50">
-                        <div className="reminder-info">
-                          <span className="reminder-status">✓</span>
-                          <span className="reminder-msg">{n.message}</span>
-                        </div>
-                        <span className="reminder-time-sm">
-                          {new Date(n.run_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                {pastReminders.length > 5 && <p className="muted" style={{ fontSize: "0.8rem", marginTop: "0.5rem" }}>+ {pastReminders.length - 5} more</p>}
-              </div>
-
             </div>
-          </section>
-
-          <section className="dashboard-section">
-            <h2 className="dashboard-section-title">System Status</h2>
-            <div className="dashboard-grid">
-              <div className="card">
-                <h2>API Providers</h2>
-                <div className="status-grid">
-                  {[
-                    { key: "groq", label: "Groq" },
-                    { key: "gemini", label: "Gemini" },
-                    { key: "claude", label: "Claude" },
-                    { key: "openai", label: "OpenAI" },
-                    { key: "openrouter", label: "OpenRouter" },
-                    { key: "ollama", label: "Ollama" },
-                  ].map(({ key, label }) => (
-                    <div key={key} className="status-item">
-                      <span className={apis[key] ? "status-ok" : "status-pending"}>●</span>
-                      <span className={apis[key] ? "" : "muted"}>{label}</span>
+            <div className="status-list">
+              {[
+                { key: "groq", label: "Groq" },
+                { key: "gemini", label: "Gemini" },
+                { key: "claude", label: "Claude" },
+                { key: "openai", label: "OpenAI" },
+                { key: "openrouter", label: "OpenRouter" },
+                { key: "ollama", label: "Ollama" },
+              ]
+                .sort((a, b) => (apis[b.key] ? 1 : 0) - (apis[a.key] ? 1 : 0))
+                .map(({ key, label }) => {
+                  const isActive = apis[key];
+                  const modelName = models[key] || defaults[key] || "Default";
+                  return (
+                    <div key={key} className={`status-row ${isActive ? 'active' : 'inactive'}`}>
+                      <span className="status-dot"></span>
+                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                        <span className="label">{label}</span>
+                        {isActive && <span style={{ fontSize: '0.75rem', opacity: 0.8 }}>{modelName}</span>}
+                      </div>
+                      <span className="state">{isActive ? 'Active' : 'Offline'}</span>
                     </div>
-                  ))}
+                  );
+                })}
+            </div>
+          </div>
+
+          {/* ─── 2. THE BODY (Server) ─── */}
+          <div className="bento-card body-section">
+            <div className="card-header" style={{ alignItems: 'center' }}>
+              <div className="icon">🫀</div>
+              <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+                <h2 style={{ marginBottom: '2px' }}>The Body</h2>
+                <p className="desc" style={{ margin: 0 }}>Server Health & Vital Signs</p>
+              </div>
+            </div>
+            {serverStatus?.ok ? (
+              <div className="vitals-grid">
+                <div className="vital-item">
+                  <span className="vital-label">CPU Load</span>
+                  <div className="progress-bar">
+                    <div className="fill" style={{ width: `${serverStatus.cpu_percent}%` }}></div>
+                  </div>
+                  <span className="vital-value">{serverStatus.cpu_percent}%</span>
+                </div>
+                <div className="vital-item">
+                  <span className="vital-label">RAM Usage</span>
+                  <div className="progress-bar">
+                    <div className="fill" style={{ width: `${serverStatus.ram.percent}%` }}></div>
+                  </div>
+                  <div className="vital-stats">
+                    <span className="vital-value">{serverStatus.ram.percent}%</span>
+                    <span className="vital-sub">{serverStatus.ram.used_gb} / {serverStatus.ram.total_gb} GB</span>
+                  </div>
+                </div>
+                <div className="vital-item">
+                  <span className="vital-label">Disk Space</span>
+                  <div className="progress-bar">
+                    <div className="fill" style={{ width: `${serverStatus.disk.percent}%` }}></div>
+                  </div>
+                  <div className="vital-stats">
+                    <span className="vital-value">{serverStatus.disk.percent}%</span>
+                    <span className="vital-sub">{serverStatus.disk.used_gb} / {serverStatus.disk.total_gb} GB</span>
+                  </div>
+                </div>
+                <div className="uptime-box">
+                  <small>System Uptime</small>
+                  <strong>{serverStatus.uptime_str}</strong>
                 </div>
               </div>
+            ) : (
+              <div className="loading-state">Checking Vitals...</div>
+            )}
+          </div>
 
-              <div className="card">
+          {/* ─── 3. CONNECTORS (Channels) ─── */}
+          <div className="bento-card connectors-section">
+            <div className="card-header">
+              <div className="icon">🔌</div>
+              <div>
                 <h2>Channels</h2>
-                <div className="status-grid">
-                  <div className="status-item">
-                    <span className={integrations.telegram ? "status-ok" : "status-pending"}>●</span>
-                    <span>Telegram</span>
-                  </div>
-                  <div className="status-item">
-                    <span className={integrations.whatsapp ? "status-ok" : "status-pending"}>●</span>
-                    <span>WhatsApp</span>
-                  </div>
+                <p className="desc">External Communication Interfaces</p>
+              </div>
+            </div>
+            <div className="connectors-list">
+              <div className={`connector-card ${integrations.whatsapp ? 'on' : 'off'}`}>
+                <div className="connector-icon whatsapp">
+                  <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z" /></svg>
+                </div>
+                <div className="connector-info">
+                  <strong>WhatsApp</strong>
+                  <span>{integrations.whatsapp ? 'Connected' : 'Disconnected'}</span>
+                </div>
+              </div>
+              <div className={`connector-card ${integrations.telegram ? 'on' : 'off'}`}>
+                <div className="connector-icon telegram">
+                  <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" /></svg>
+                </div>
+                <div className="connector-info">
+                  <strong>Telegram</strong>
+                  <span>{integrations.telegram ? 'Connected' : 'Disconnected'}</span>
                 </div>
               </div>
             </div>
-          </section>
+            <Link to="/channels" className="setup-link">Configure Channels →</Link>
+          </div>
 
-          <section className="dashboard-section">
-            <div className="card">
-              <div className="card-skills-header">
-                <h2>Active Skills</h2>
-                <Link to="/skills" className="btn btn-link">Manage →</Link>
-              </div>
-              <div className="skills-chips">
-                {skills.filter(s => s.enabled).map((s) => (
-                  <span key={s.id} className="skill-chip skill-chip-on">{s.name}</span>
-                ))}
-                {skills.every(s => !s.enabled) && <span className="muted">No skills enabled.</span>}
+          {/* ─── 4. MEMORY (Reminders) ─── */}
+          <div className="bento-card memory-section">
+            <div className="card-header">
+              <div className="icon">📝</div>
+              <div>
+                <h2>Tasks</h2>
+                <p className="desc">Pending Tasks & Reminders</p>
               </div>
             </div>
-          </section>
+            <div className="memory-list">
+              {pendingReminders.length === 0 ? (
+                <div className="empty-state">No active reminders. Memory is clear.</div>
+              ) : (
+                <ul>
+                  {pendingReminders.slice(0, 5).map(n => (
+                    <li key={n.id}>
+                      <span className="time">{new Date(n.run_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                      <span className="msg">{n.message}</span>
+                      <button onClick={() => handleDeleteNotification(n.id)} className="del-btn">×</button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
 
-        </>
-      )}
+          {/* ─── 5. CAPABILITIES (Skills) ─── */}
+          <div className="bento-card skills-section">
+            <div className="card-header">
+              <div className="icon">⚡</div>
+              <div>
+                <h2>Capabilities</h2>
+                <p className="desc">Active Skill Modules</p>
+              </div>
+            </div>
+            <div className="skills-cloud">
+              {skills.filter(s => s.enabled).map(s => (
+                <span key={s.id} className="skill-tag">{s.name}</span>
+              ))}
+              {skills.every(s => !s.enabled) && <span className="empty-state">No skills loaded.</span>}
+            </div>
+            <Link to="/skills" className="setup-link">Manage Skills →</Link>
+          </div>
 
-      {!status && !error && (
-        <div className="card">
-          <p className="muted">Loading status…</p>
         </div>
       )}
+
+      <style>{`
+        .dashboard-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding-bottom: 4rem;
+            /* darker bg for contrast if needed, but grid needs it */
+        }
+        .dashboard-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding: 1rem 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .dashboard-header .title {
+            font-size: 1.8rem;
+            font-weight: 700;
+            margin: 0;
+            color: var(--text-main);
+        }
+        .dashboard-header .subtitle {
+            margin: 0;
+            color: var(--muted);
+            font-size: 0.95rem;
+        }
+        .system-status-badge {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            border-radius: 99px;
+            font-weight: 500;
+            font-size: 0.9rem;
+            border: 1px solid transparent;
+        }
+        .system-status-badge.ok {
+            background: rgba(var(--rgb-success), 0.1);
+            color: var(--success);
+            border-color: rgba(var(--rgb-success), 0.2);
+        }
+        .system-status-badge.error {
+            background: rgba(var(--rgb-destroy), 0.1);
+            color: var(--destroy);
+            border-color: rgba(var(--rgb-destroy), 0.2);
+        }
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            box-shadow: 0 0 8px currentColor;
+        }
+
+        .error-banner {
+            background: rgba(var(--rgb-destroy), 0.05);
+            border: 1px solid var(--destroy);
+            padding: 2rem;
+            border-radius: 12px;
+            text-align: center;
+        }
+        .retry-btn { margin-top: 1rem; }
+
+        /* BENTO GRID */
+        .bento-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            grid-template-rows: auto auto;
+            gap: 1.5rem;
+        }
+        .bento-card {
+            background: #ffffff;
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            transition: transform 0.2s, box-shadow 0.2s;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+        .bento-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            border-color: var(--accent-dim);
+        }
+        .card-header {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 1rem;
+        }
+        .icon {
+            font-size: 2rem;
+            background: var(--bg-main);
+            width: 50px;
+            height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 12px;
+        }
+        .card-header h2 { margin: 0; font-size: 1.1rem; }
+        .card-header .desc { margin: 0; font-size: 0.8rem; color: var(--muted); }
+
+        /* Sections specific sizing */
+        .brain-section { grid-column: span 1; grid-row: span 2; }
+        .body-section { grid-column: span 2; }
+        .connectors-section { grid-column: span 1; }
+        .memory-section { grid-column: span 1; }
+        .skills-section { grid-column: span 1; }
+
+        /* Responsive */
+        @media (max-width: 900px) {
+            .bento-grid { grid-template-columns: 1fr; }
+            .brain-section, .body-section, .connectors-section, .memory-section, .skills-section { grid-column: span 1; }
+        }
+
+        /* Brain Lists */
+        .status-list { display: flex; flex-direction: column; gap: 0.75rem; }
+        .status-row {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            background: var(--bg-main);
+            transition: all 0.2s;
+        }
+        .status-row.active {
+            background: rgba(var(--rgb-success), 0.15);
+            border: 1px solid rgba(var(--rgb-success), 0.3);
+        }
+        .status-row.inactive { opacity: 0.6; }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--muted);
+        }
+        .status-row.active .status-dot { background: var(--success); box-shadow: 0 0 5px var(--success); }
+        .status-row .label { flex: 1; font-weight: 500; color: var(--text); }
+        .status-row.active .label { color: var(--success-dark); font-weight: 600; }
+        .status-row .state { font-size: 0.75rem; color: var(--muted); }
+        .status-row.active .state { color: var(--success); }
+
+        /* Body Vitals */
+        .vitals-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1rem;
+            align-items: center;
+        }
+        .vital-item {
+            text-align: center;
+            background: var(--bg-main);
+            padding: 1rem;
+            border-radius: 12px;
+        }
+        .vital-label { font-size: 0.75rem; color: var(--muted); display: block; margin-bottom: 0.5rem; }
+        .vital-stats { display: flex; flex-direction: column; align-items: center; }
+        .vital-value { font-size: 1.2rem; font-weight: 700; color: var(--text-main); line-height: 1.2; }
+        .vital-sub { font-size: 0.75rem; color: var(--muted); margin-top: 0.2rem; }
+        .progress-bar {
+            height: 4px;
+            background: var(--border);
+            border-radius: 2px;
+            margin: 0.5rem 0;
+            overflow: hidden;
+        }
+        .progress-bar .fill { height: 100%; background: var(--primary); }
+        .uptime-box {
+            grid-column: span 3;
+            text-align: center;
+            background: var(--bg-main);
+            padding: 0.75rem;
+            border-radius: 8px;
+            margin-top: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 1.5rem;
+            height: 40px;
+        }
+
+        /* Connectors */
+        .connectors-list { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
+        .connector-card {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.75rem;
+            border-radius: 12px;
+            background: var(--bg-main);
+            border: 1px solid transparent;
+        }
+        .connector-card.on { border-color: rgba(var(--rgb-success), 0.3); background: rgba(var(--rgb-success), 0.05); }
+        .connector-icon {
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 0.8rem;
+        }
+        .connector-icon.whatsapp { background: #25D366; }
+        .connector-icon.telegram { background: #229ED9; }
+        .connector-info { display: flex; flex-direction: column; font-size: 0.8rem; }
+        .connector-info span { font-size: 0.7rem; opacity: 0.7; }
+
+        /* Memory */
+        .memory-list ul { list-style: none; padding: 0; margin: 0; }
+        .memory-list li {
+            display: flex;
+            gap: 0.75rem;
+            padding: 0.75rem 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.9rem;
+        }
+        .memory-list .time { color: var(--muted); font-mono: monospace; font-size: 0.8rem; }
+        .memory-list .msg { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .del-btn { background: none; border: none; color: var(--muted); cursor: pointer; }
+        .del-btn:hover { color: var(--destroy); }
+        .empty-state { text-align: center; padding: 2rem; color: var(--muted); font-size: 0.9rem; font-style: italic; }
+
+        /* Skills */
+        .skills-cloud { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
+        .skill-tag {
+            background: var(--bg-main);
+            padding: 0.25rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            border: 1px solid var(--border);
+        }
+        .setup-link {
+            display: block;
+            text-align: right;
+            font-size: 0.85rem;
+            color: var(--primary);
+            text-decoration: none;
+            margin-top: auto;
+        }
+        .setup-link:hover { text-decoration: underline; }
+
+      `}</style>
     </div>
   );
 }

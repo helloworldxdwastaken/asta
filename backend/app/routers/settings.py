@@ -43,6 +43,7 @@ SKILLS = [
     {"id": "audio_notes", "name": "Audio notes", "description": "Upload audio (meetings, calls, voice memos); Asta transcribes and formats as meeting notes, action items, or conversation summary. No API key for transcription (runs locally)."},
     {"id": "silly_gif", "name": "Silly GIF", "description": "Occasionally replies with a relevant GIF in friendly chats. Requires Giphy API key."},
     {"id": "self_awareness", "name": "Self Awareness", "description": "Allows Asta to read its own documentation and source code context when asked about itself."},
+    {"id": "server_status", "name": "Server Status", "description": "Monitor system metrics like CPU, RAM, Disk and Uptime. Ask 'server status' or '/status'."},
 ]
 
 ALLOWED_API_KEY_NAMES = frozenset({
@@ -219,12 +220,21 @@ async def get_status(user_id: str = "default"):
             "enabled": enabled,
             "available": available,
         })
+    # Read version
+    try:
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent.parent.parent
+        with open(root / "VERSION", "r") as f:
+            version = f.read().strip()
+    except Exception:
+        version = "0.0.0"
+
     return {
         "apis": apis,
         "integrations": integrations,
         "skills": skills,
         "app": s.app_name,
-        "version": "0.1.0",
+        "version": version,
     }
 
 
@@ -260,6 +270,41 @@ async def set_api_keys(body: ApiKeysIn):
         if val is not None:
             await db.set_stored_api_key(name, val)
     return {"ok": True}
+
+
+@router.post("/settings/whatsapp/logout")
+@router.post("/api/settings/whatsapp/logout")
+async def whatsapp_logout():
+    """Logout WhatsApp session (clear auth)."""
+    s = get_settings()
+    url = s.asta_whatsapp_bridge_url
+    if not url:
+        return {"ok": False, "error": "WhatsApp bridge not configured"}
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.post(f"{url.rstrip('/')}/logout")
+            if r.status_code == 200:
+                return {"ok": True}
+            return {"ok": False, "error": f"Bridge error: {r.text}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+class WhatsAppOwnerIn(BaseModel):
+    number: str
+
+
+@router.post("/settings/whatsapp/owner")
+@router.post("/api/settings/whatsapp/owner")
+async def set_whatsapp_owner(body: WhatsAppOwnerIn):
+    """Set the auto-detected WhatsApp owner number."""
+    db = get_db()
+    await db.connect()
+    # Normalize: remove non-digits just in case, or trust the bridge
+    num = "".join(filter(str.isdigit, body.number))
+    await db.set_system_config("whatsapp_owner", num)
+    return {"ok": True, "number": num}
 
 
 @router.get("/settings/test-key")
@@ -450,3 +495,11 @@ async def delete_notification(id: int, user_id: str = "default"):
     if sch.get_job(job_id):
         sch.remove_job(job_id)
     return {"ok": deleted, "id": id}
+
+
+@router.get("/settings/server-status")
+@router.get("/api/settings/server-status")
+async def server_status_endpoint():
+    """Get system metrics for the dashboard."""
+    from app.server_status import get_server_status
+    return get_server_status()

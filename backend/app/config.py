@@ -24,6 +24,22 @@ def _load_dotenv(path: Path) -> None:
 
 
 class Settings(BaseSettings):
+    # WhatsApp Whitelist (comma-separated numbers or list)
+    asta_whatsapp_allowed_numbers: str | int | list[str] = []
+
+    @property
+    def whatsapp_whitelist(self) -> set[str]:
+        val = self.asta_whatsapp_allowed_numbers
+        if not val:
+            return set()
+        if isinstance(val, (str, int)):
+            nums = str(val).split(",")
+        else:
+            nums = val
+        # Clean up
+        return {str(n).strip() for n in nums if str(n).strip()}
+
+    # App
     app_name: str = "Asta"
     debug: bool = False
 

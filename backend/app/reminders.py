@@ -296,4 +296,7 @@ async def send_telegram_message(chat_id: str, text: str) -> None:
     if not token:
         return
     bot = Bot(token=token)
-    await bot.send_message(chat_id=chat_id, text=text[:4096])
+    from app.channels.telegram_bot import to_telegram_format
+    formatted = to_telegram_format(text[:4096])
+    await bot.send_message(chat_id=chat_id, text=formatted, parse_mode="HTML")
+

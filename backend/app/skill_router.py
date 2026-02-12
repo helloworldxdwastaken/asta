@@ -92,6 +92,13 @@ def get_skills_to_use(text: str, enabled_skill_ids: set[str]) -> set[str]:
         if any(k in t for k in ("drive", "gdrive", "google drive")):
             out.add("drive")
 
+    # Server Status: CPU, RAM, Disk, Uptime, Status
+    if "server_status" in enabled_skill_ids:
+        if any(k in t for k in ("server status", "system stats", "cpu usage", "ram usage", "disk space", "uptime", "/status")):
+            out.add("server_status")
+        elif t == "status":
+            out.add("server_status")
+
     return out
 
 
@@ -109,5 +116,6 @@ SKILL_STATUS_LABELS: dict[str, str] = {
     "reminders": "⏰ Setting reminder…",
     "audio_notes": "🎤 Processing audio…",
     "self_awareness": "🧠 Checking self-knowledge…",
+    "server_status": "🖥️ Checking server status…",
     "silly_gif": "🎬 Searching Giphy…",
 }

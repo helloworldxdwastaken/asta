@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { api } from "../api/client";
 
 const KEY_LABELS: Record<string, string> = {
@@ -257,40 +257,7 @@ function FallbackProviderSelect() {
   );
 }
 
-function WhatsAppQr() {
-  const [state, setState] = useState<{ connected?: boolean; qr?: string | null; error?: string } | null>(null);
-  const fetchQr = useCallback(() => {
-    api.whatsappQr()
-      .then(setState)
-      .catch((e) => setState({ connected: false, qr: null, error: e.message }));
-  }, []);
-  useEffect(() => {
-    fetchQr();
-    const t = setInterval(fetchQr, 4000);
-    return () => clearInterval(t);
-  }, [fetchQr]);
-  if (state?.error && !state?.qr) {
-    return (
-      <div className="alert alert-error">
-        {state.error} Then run: <code>cd services/whatsapp &amp;&amp; npm install &amp;&amp; npm run start</code>
-      </div>
-    );
-  }
-  if (state?.connected) {
-    return <p className="status-ok">WhatsApp connected.</p>;
-  }
-  if (state?.qr) {
-    return (
-      <div>
-        <p className="help" style={{ marginBottom: "0.5rem" }}>
-          Scan with WhatsApp (Linked Devices): open WhatsApp → Settings → Linked devices → Link a device.
-        </p>
-        <img src={state.qr} alt="WhatsApp QR" style={{ maxWidth: 256, height: "auto", border: "1px solid var(--border)", borderRadius: 8 }} />
-      </div>
-    );
-  }
-  return <p className="help">Loading… Start the WhatsApp bridge if you have not.</p>;
-}
+
 
 function TestSpotifyButton() {
   const [testing, setTesting] = useState(false);
@@ -431,50 +398,7 @@ function SpotifySetup({ keysStatus, onSaved }: { keysStatus: Record<string, bool
   );
 }
 
-function TelegramTokenField({ keysStatus, onSaved }: { keysStatus: Record<string, boolean>; onSaved: () => void }) {
-  const [token, setToken] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  const isSet = keysStatus["telegram_bot_token"];
-  const save = async () => {
-    if (!token.trim()) return;
-    setSaving(true);
-    setMsg(null);
-    try {
-      await api.setSettingsKeys({ telegram_bot_token: token.trim() });
-      onSaved();
-      setToken("");
-      setMsg("Token saved. Restart the backend for the bot to connect.");
-    } catch (e) {
-      setMsg("Error: " + ((e as Error).message || String(e)));
-    } finally {
-      setSaving(false);
-    }
-  };
-  return (
-    <div className="field">
-      <div className="field-row">
-        <label className="label" htmlFor="telegram-token">Bot token</label>
-        {isSet && <span className="status-ok">Set</span>}
-      </div>
-      <input
-        id="telegram-token"
-        type="password"
-        placeholder={isSet ? "Leave blank to keep current" : "Paste token from @BotFather"}
-        value={token}
-        onChange={(e) => setToken(e.target.value)}
-        className="input"
-        style={{ maxWidth: 520 }}
-      />
-      <div className="actions" style={{ marginTop: "0.5rem" }}>
-        <button type="button" onClick={save} disabled={saving || !token.trim()} className="btn btn-primary">
-          {saving ? "Saving…" : "Save token"}
-        </button>
-      </div>
-      {msg && <div className={msg.startsWith("Error:") ? "alert alert-error" : "alert"} style={{ marginTop: "0.75rem" }}>{msg}</div>}
-    </div>
-  );
-}
+
 
 function ModelsForm() {
   const [models, setModels] = useState<Record<string, string>>({});
@@ -643,23 +567,7 @@ export default function Settings() {
           </div>
         </details>
 
-        <details>
-          <summary>
-            <span>Channels</span>
-            <span className="acc-meta">Telegram + WhatsApp</span>
-          </summary>
-          <div className="acc-body">
-            <h3 style={{ marginTop: 0 }}>Telegram</h3>
-            <p className="help">
-              Create a bot at <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="link">t.me/BotFather</a>,
-              paste the token below, save, then restart the backend.
-            </p>
-            <TelegramTokenField keysStatus={keysStatus} onSaved={() => api.getSettingsKeys().then(setKeysStatus)} />
 
-            <h3>WhatsApp</h3>
-            <WhatsAppQr />
-          </div>
-        </details>
 
         <details>
           <summary>

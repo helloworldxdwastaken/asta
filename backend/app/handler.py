@@ -11,6 +11,7 @@ from app.services.spotify_service import SpotifyService
 from app.services.reminder_service import ReminderService
 from app.services.learning_service import LearningService
 from app.services.giphy_service import GiphyService
+from app.server_status import get_server_status
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +95,7 @@ async def handle_message(
     # Intent-based skill selection: only run and show skills relevant to this message (saves tokens)
     from app.skill_router import get_skills_to_use, SKILL_STATUS_LABELS
     enabled = set()
-    for sid in ("time", "weather", "files", "drive", "rag", "google_search", "lyrics", "spotify", "reminders", "audio_notes", "silly_gif", "self_awareness"):
+    for sid in ("time", "weather", "files", "drive", "rag", "google_search", "lyrics", "spotify", "reminders", "audio_notes", "silly_gif", "self_awareness", "server_status"):
         if await db.get_skill_enabled(user_id, sid):
             enabled.add(sid)
     
@@ -144,6 +145,10 @@ async def handle_message(
         results, err = await asyncio.to_thread(search_web, text, 5)
         extra["search_results"] = results
         extra["search_error"] = err
+
+    # Server Status: only when relevant
+    if "server_status" in skills_to_use:
+        extra["server_status"] = get_server_status()
 
     # Lyrics: only when relevant
     if "lyrics" in skills_to_use:

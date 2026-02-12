@@ -53,8 +53,31 @@ class IncomingWhatsApp(BaseModel):
 
 
 @router.post("/incoming/whatsapp")
+@router.post("/incoming/whatsapp")
 async def incoming_whatsapp(body: IncomingWhatsApp):
     """Called by WhatsApp bridge when a message is received. Reminders will be sent back to this number."""
+    from app.config import get_settings
+    from app.db import get_db
+    import logging
+    
+    settings = get_settings()
+    whitelist = settings.whatsapp_whitelist
+    
+    # Add auto-detected owner from DB
+    try:
+        db = get_db()
+        await db.connect()
+        owner = await db.get_system_config("whatsapp_owner")
+        if owner:
+            whitelist.add(owner)
+    except Exception as e:
+        logging.error(f"Failed to get whatsapp_owner: {e}")
+    
+    # Whitelist check
+    if whitelist and body.from_number not in whitelist:
+        logging.warning(f"WhatsApp message from {body.from_number} ignored (not in whitelist).")
+        return {"ignored": True}
+
     user_id = f"wa:{body.from_number}"
     reply = await handle_message(
         user_id, "whatsapp", body.message, provider_name="default",

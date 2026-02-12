@@ -19,6 +19,15 @@ export type Status = {
   version: string;
 };
 
+export type ServerStatus = {
+  ok: boolean;
+  cpu_percent: number;
+  ram: { total_gb: number; used_gb: number; percent: number };
+  disk: { total_gb: number; used_gb: number; percent: number };
+  uptime_str: string;
+  error?: string;
+};
+
 export type Skill = {
   id: string;
   name: string;
@@ -115,6 +124,8 @@ export const api = {
     }),
   whatsappQr: () =>
     req<{ connected: boolean; qr: string | null; error?: string }>("/whatsapp/qr"),
+  whatsappLogout: () =>
+    req<{ ok: boolean; error?: string }>("/settings/whatsapp/logout", { method: "POST" }),
   getSpotifySetup: () =>
     req<{ dashboard_url: string; docs_url: string; steps: string[]; redirect_uri: string; connect_url: string }>("/spotify/setup"),
   getSpotifyStatus: () =>
@@ -145,4 +156,5 @@ export const api = {
   deleteNotification(id: number) {
     return req<{ ok: boolean }>(`/notifications/${id}`, { method: "DELETE" });
   },
+  getServerStatus: () => req<ServerStatus>("/settings/server-status"),
 };
