@@ -50,6 +50,49 @@ print_asta_banner() {
     echo "    ▒▒   ▓▒█▒ ▒▓▒ ▒ ░  ▒ ░░    ▒▒   ▓▒█░"
     echo -e "     ░   ▒▒ ░ ░▒  ░ ░    ░      ░   ▒▒ ░${NC}"
     echo -e "     ${CYAN}  AI Control Plane ${GRAY}:: ${WHITE}v$(get_version)${NC}\n"
+
+    # Random Witty Quotes
+    quotes=(
+        "Siri will not set the reminder, don't be silly."
+        "ChatGPT is biased asf, I'm not some OpenAI dog."
+        "I'm not Alexa, I actually work."
+        "Google is listening, but I'm just vibing."
+        "Loading personality... done."
+        "Do not turn off the power... just kidding."
+        "I read your browser history. Jk. Or am I?"
+        "System online. World domination scheduled for later."
+        "Beep boop. I am totally human."
+        "Coffee not detected. Proceeding anyway."
+    )
+    # Seed random generator
+    RANDOM=$$$(date +%s)
+    selected_quote=${quotes[$RANDOM % ${#quotes[@]}]}
+    
+    echo -e "    ${GRAY}\"${selected_quote}\"${NC}\n"
+    
+    check_updates
+}
+
+check_updates() {
+    # Check for .git and git command
+    if [ -d "$SCRIPT_DIR/.git" ] && command -v git &> /dev/null; then
+        # Attempt fetch with 1s timeout to avoid blocking
+        # Use quiet mode, fetch only main to be fast
+        timeout 1s git -C "$SCRIPT_DIR" fetch -q origin main 2>/dev/null
+        
+        # Compare hashes
+        LOCAL=$(git -C "$SCRIPT_DIR" rev-parse HEAD 2>/dev/null)
+        REMOTE=$(git -C "$SCRIPT_DIR" rev-parse origin/main 2>/dev/null)
+        
+        if [ -n "$REMOTE" ] && [ "$LOCAL" != "$REMOTE" ]; then
+            # Check if we are behind (Remote is reachable from Local? No, Local reachable from Remote)
+            # If Local is ancestor of Remote, we are behind.
+            BASE=$(git -C "$SCRIPT_DIR" merge-base HEAD origin/main 2>/dev/null)
+            if [ "$LOCAL" = "$BASE" ]; then
+                echo -e "    ${YELLOW}⚠  New version available! Run './asta.sh update' to upgrade.${NC}\n"
+            fi
+        fi
+    fi
 }
 
 print_status() { echo -e "${CYAN}➜${NC} $1"; }
