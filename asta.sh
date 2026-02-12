@@ -406,16 +406,28 @@ show_status() {
     echo -e "${WHITE}${BOLD}Status Check:${NC}"
     echo "-----------------------------------"
     
-    # Backend
+    # Check Backend
     if lsof -Pi ":$BACKEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
         pid=$(lsof -ti:"$BACKEND_PORT" 2>/dev/null | head -1)
-        print_success "Backend  : ${GREEN}Online${NC} (PID $pid)"
-        echo -e "    ${GRAY}└─ ${BLUE}http://localhost:$BACKEND_PORT${NC}"
+        
+        # Try to run rich status via python script
+        if [ -f "$BACKEND_DIR/cli_status.py" ]; then
+            # Use venv python if available, else system python3
+            if [ -f "$BACKEND_DIR/.venv/bin/python" ]; then
+                "$BACKEND_DIR/.venv/bin/python" "$BACKEND_DIR/cli_status.py"
+            else
+                python3 "$BACKEND_DIR/cli_status.py"
+            fi
+        else
+            # Fallback
+            print_success "Backend  : ${GREEN}Online${NC} (PID $pid)"
+            echo -e "    ${GRAY}└─ ${BLUE}http://localhost:$BACKEND_PORT${NC}"
+        fi
     else
         print_error "Backend  : ${RED}Offline${NC}"
     fi
 
-    # Frontend
+    # Frontend (keep simple check)
     if lsof -Pi ":$FRONTEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
         pid=$(lsof -ti:"$FRONTEND_PORT" 2>/dev/null | head -1)
         print_success "Frontend : ${GREEN}Online${NC} (PID $pid)"
