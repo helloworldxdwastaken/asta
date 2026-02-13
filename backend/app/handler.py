@@ -1,5 +1,7 @@
 """Core message handler: build context, call AI, persist. Handles mood and reminders."""
 import logging
+import io
+from PIL import Image
 from app.context import build_context
 from app.db import get_db
 from app.providers.registry import get_provider
@@ -24,11 +26,35 @@ async def handle_message(
     extra_context: dict | None = None,
     channel_target: str = "",
     mood: str | None = None,
+    image_bytes: bytes | None = None,
+    image_mime: str | None = None,
 ) -> str:
     """Process one user message: context + AI + save. Schedules reminders when requested. Returns assistant reply.
     Asta is the agent; it uses whichever AI provider you set (Groq, Gemini, Claude, Ollama)."""
     db = get_db()
     await db.connect()
+
+    # Image optimization: compress/resize to speed up API
+    if image_bytes:
+        try:
+            img = Image.open(io.BytesIO(image_bytes))
+            # Max dimension 1024px
+            max_size = 1024
+            if img.width > max_size or img.height > max_size:
+                img.thumbnail((max_size, max_size))
+            
+            # Convert to RGB if necessary (e.g. RGBA/PNG to JPEG)
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+                
+            out_buf = io.BytesIO()
+            img.save(out_buf, format="JPEG", quality=70, optimize=True)
+            image_bytes = out_buf.getvalue()
+            image_mime = "image/jpeg"
+            logger.info("Image compressed: %d bytes", len(image_bytes))
+        except Exception as e:
+            logger.warning("Image compression failed: %s", e)
+
     cid = conversation_id or await db.get_or_create_conversation(user_id, channel)
     extra = extra_context or {}
     if mood is None:
@@ -158,12 +184,13 @@ async def handle_message(
     context = await build_context(db, user_id, cid, extra=extra, skills_in_use=skills_to_use)
     
     # Silly GIF skill: Proactive instruction (not intent-based)
-    if "silly_gif" in skills_to_use: 
+    if "silly_gif" in enabled: 
         context += (
             "\n\n[SKILL: SILLY GIF ENABLED]\n"
             "You can occasionally (10-20% chance) send a relevant GIF by adding `[gif: search term]` at the end of your message. "
             "Only do this when the mood is friendly or fun. Example: 'That's awesome! [gif: happy dance]'"
         )
+
     # Load recent messages; skip old assistant error messages so the model doesn't repeat "check your API key"
     recent = await db.get_recent_messages(cid, limit=20)
 
@@ -174,6 +201,7 @@ async def handle_message(
         if not (m["role"] == "assistant" and (m["content"].startswith("Error:") or m["content"].startswith("No AI provider")))
     ]
     messages.append({"role": "user", "content": text})
+
 
     # Context compaction: summarize older messages if history is too long
     from app.compaction import compact_history
@@ -200,6 +228,8 @@ async def handle_message(
         provider, messages, fallback_names,
         context=context, model=user_model or None,
         _fallback_models=fallback_models,
+        image_bytes=image_bytes,
+        image_mime=image_mime,
     )
     
     reply = response.content
@@ -233,7 +263,12 @@ async def handle_message(
         if any(p in lower for p in ("i've set a reminder", "i set a reminder", "reminder set", "i'll remind you", "i'll send you a message at")):
             reply += "\n\n_I couldn't parse that reminder. Try: \"remind me in 5 min to X\" or \"alarm in 5 min to take a shower\"_"
 
-    await db.add_message(cid, "user", text)
+    db_text = text
+    if image_bytes:
+        db_text = f" [Image: {image_mime or 'image/jpeg'}] {text}"
+    await db.add_message(cid, "user", db_text)
+
+
     if not (reply.strip().startswith("Error:") or reply.strip().startswith("No AI provider")):
         await db.add_message(cid, "assistant", reply, provider.name)
     return reply

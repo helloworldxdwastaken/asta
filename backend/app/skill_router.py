@@ -50,5 +50,5 @@ SKILL_STATUS_LABELS: dict[str, str] = {
     "audio_notes": "🎤 Processing audio…",
     "self_awareness": "🧠 Checking self-knowledge…",
     "server_status": "🖥️ Checking server status…",
-    "silly_gif": "🎬 GIF prompt enabled…",
 }
+

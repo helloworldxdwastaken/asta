@@ -232,6 +232,34 @@ export default function Dashboard() {
             <Link to="/skills" className="setup-link">Manage Skills →</Link>
           </div>
 
+          {/* ─── 6. THE EYES (Vision) ─── */}
+          <div className="bento-card vision-section">
+            <div className="card-header">
+              <div className="icon">👀</div>
+              <div>
+                <h2>The Eyes</h2>
+                <p className="desc">Visual Intelligence & Multimodal Model</p>
+              </div>
+            </div>
+            <div className="vision-status">
+              <div className="model-badge">
+                <span className="model-label">Multimodal VL</span>
+                <span className="model-name">Nemotron-Nano 12B</span>
+              </div>
+              <div className="vision-active">
+                <div className="vision-dot"></div>
+                <span>Vision Ready</span>
+              </div>
+              <p className="vision-info">
+                Detects images on <strong>Telegram</strong> and automatically switches to
+                Nemotron VL for perceptual analysis.
+              </p>
+            </div>
+            <div style={{ marginTop: 'auto', textAlign: 'center', fontSize: '0.8rem', opacity: 0.6 }}>
+              nvidia/nemotron-nano-12b-v2-vl:free
+            </div>
+          </div>
+
         </div>
       )}
 
@@ -346,6 +374,7 @@ export default function Dashboard() {
         .connectors-section { grid-column: span 1; }
         .memory-section { grid-column: span 1; }
         .skills-section { grid-column: span 1; }
+        .vision-section { grid-column: span 1; }
 
         /* Responsive */
         @media (max-width: 900px) {
@@ -481,6 +510,56 @@ export default function Dashboard() {
             margin-top: auto;
         }
         .setup-link:hover { text-decoration: underline; }
+
+        /* Vision Section specific */
+        .vision-section {
+            background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+        }
+        .vision-status {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+        .model-badge {
+            background: var(--bg-main);
+            padding: 0.75rem;
+            border-radius: 12px;
+            display: flex;
+            flex-direction: column;
+            border: 1px dashed var(--border);
+        }
+        .model-label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+        .model-name { font-weight: 700; color: var(--primary); font-size: 1rem; }
+        .vision-active {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: var(--success);
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+        .vision-dot {
+            width: 10px;
+            height: 10px;
+            background: var(--success);
+            border-radius: 50%;
+            box-shadow: 0 0 10px var(--success);
+            animation: pulse-vision 2s infinite;
+        }
+        @keyframes pulse-vision {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.2); opacity: 0.7; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        .vision-info {
+            font-size: 0.85rem;
+            color: var(--text);
+            line-height: 1.4;
+            margin: 0;
+            padding: 0.5rem;
+            background: rgba(var(--rgb-primary), 0.03);
+            border-radius: 8px;
+        }
 
       `}</style>
     </div>

@@ -73,14 +73,18 @@ async def incoming_whatsapp(body: IncomingWhatsApp):
     except Exception as e:
         logging.error(f"Failed to get whatsapp_owner: {e}")
     
+    user_id = f"wa:{body.from_number}"
+    # Strip suffix (e.g. @s.whatsapp.net or @lid) for whitelist check
+    clean_number = body.from_number.split("@")[0] if "@" in body.from_number else body.from_number
+
     # Whitelist check
-    if whitelist and body.from_number not in whitelist:
+    if whitelist and clean_number not in whitelist and body.from_number not in whitelist:
         logging.warning(f"WhatsApp message from {body.from_number} ignored (not in whitelist).")
         return {"ignored": True}
 
-    user_id = f"wa:{body.from_number}"
     reply = await handle_message(
         user_id, "whatsapp", body.message, provider_name="default",
         channel_target=body.from_number,
     )
+
     return {"reply": reply}

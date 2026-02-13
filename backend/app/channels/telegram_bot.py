@@ -306,8 +306,48 @@ def build_telegram_app(token: str) -> Application:
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice_or_audio))
     app.add_handler(MessageHandler(filters.Document.AUDIO, on_voice_or_audio))
+    app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     return app
+
+
+async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle photos: download highest res, then call handle_message with image_bytes."""
+    if not update.message or not update.message.photo:
+        return
+    user_id = "default"
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+
+    async with _chat_locks[chat_id]:
+        chat_id_str = str(chat_id)
+        # Fetch the largest available photo version
+        photo = update.message.photo[-1]
+        text = (update.message.caption or "").strip() or "What is in this image?"
+
+        logger.info("Telegram photo from %s: %s", user_id, text)
+        try:
+            await update.message.reply_text("Taking a look… 🔍")
+            await update.message.chat.send_action("typing")
+            
+            tg_file = await context.bot.get_file(photo.file_id)
+            buf = await tg_file.download_as_bytearray()
+            image_bytes = bytes(buf)
+            image_mime = "image/jpeg" # Telegram photos are usually JPEGs
+
+            reply = await handle_message(
+                user_id, "telegram", text, provider_name="default",
+                channel_target=chat_id_str,
+                image_bytes=image_bytes,
+                image_mime=image_mime
+            )
+            
+            out = (reply or "").strip()[:TELEGRAM_MAX_MESSAGE_LENGTH] or "No response."
+            await _reply_text_safe_html(update.message, out)
+            logger.info("Telegram photo reply sent to %s", user_id)
+        except Exception as e:
+            logger.exception("Telegram photo handler error")
+            await update.message.reply_text(f"Error: {str(e)[:500]}")
+
 
 
 async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

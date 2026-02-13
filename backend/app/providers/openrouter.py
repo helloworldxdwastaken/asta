@@ -28,12 +28,41 @@ class OpenRouterProvider(BaseProvider):
             )
         client = AsyncOpenAI(api_key=key, base_url=BASE_URL, timeout=MODEL_TIMEOUT)
         system = kwargs.get("context", "")
-        msgs = [{"role": m["role"], "content": m["content"]} for m in messages]
+        image_bytes: bytes | None = kwargs.get("image_bytes")
+        image_mime: str | None = kwargs.get("image_mime", "image/jpeg")
+
+        msgs = []
         if system:
-            msgs = [{"role": "system", "content": system}] + msgs
+            msgs.append({"role": "system", "content": system})
+
+        # Base64 encode if image present
+        image_data_url = ""
+        if image_bytes:
+            import base64
+            b64 = base64.b64encode(image_bytes).decode("utf-8")
+            image_data_url = f"data:{image_mime};base64,{b64}"
+
+        for m in messages:
+            role = m["role"]
+            content = m["content"]
+            if role == "user" and image_data_url and m == messages[-1]:
+                # Add image to the last user message
+                msgs.append({
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": content},
+                        {"type": "image_url", "image_url": {"url": image_data_url}}
+                    ]
+                })
+            else:
+                msgs.append({"role": role, "content": content})
 
         # Support comma-separated models: first is primary, rest are fallbacks
         model_raw = kwargs.get("model") or DEFAULT_MODEL
+        if image_bytes:
+            # Force vision model if image present
+            model_raw = "nvidia/nemotron-nano-12b-v2-vl:free"
+            
         models = [m.strip() for m in model_raw.split(",") if m.strip()]
         if not models:
             models = [DEFAULT_MODEL]
@@ -46,6 +75,7 @@ class OpenRouterProvider(BaseProvider):
                     messages=msgs,
                     max_tokens=4096,
                 )
+
                 return ProviderResponse(content=(r.choices[0].message.content or "").strip())
             except APITimeoutError:
                 err_msg = f"Model {model} timed out after {MODEL_TIMEOUT}s"
