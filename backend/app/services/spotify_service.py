@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
 from app.db import get_db
@@ -12,6 +13,7 @@ from app.spotify_client import (
     extract_playlist_uri,
     play_query_from_message,
     spotify_search_if_configured,
+    search_spotify_artists,
     _search_query_from_message,
     _is_music_search,
     parse_volume_percent,
@@ -19,11 +21,41 @@ from app.spotify_client import (
 
 logger = logging.getLogger(__name__)
 
+# Retry request expires after this many seconds (so "Done" only retries recent failures)
+SPOTIFY_RETRY_MAX_AGE_SECONDS = 300
 
-def _has_spotify_intent(text: str, pending_play: bool) -> bool:
+
+def _is_retry_phrase(text: str) -> bool:
+    """True if user is saying to retry (e.g. after opening Spotify or connecting)."""
+    t = (text or "").strip().lower()
+    if len(t) > 30:
+        return False
+    return t in ("done", "try again", "again", "retry", "yes", "go", "ok", "okay") or t in (
+        "done.", "try again.", "again.", "retry.", "yes.", "go.", "ok.", "okay.",
+    )
+
+
+def _is_retry_request_valid(retry: dict[str, Any] | None) -> bool:
+    """True if retry request exists and is not too old."""
+    if not retry or not retry.get("created_at"):
+        return False
+    try:
+        # SQLite datetime('now') is UTC
+        created = datetime.fromisoformat(retry["created_at"].replace("Z", "+00:00"))
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - created).total_seconds()
+        return age <= SPOTIFY_RETRY_MAX_AGE_SECONDS
+    except (ValueError, TypeError):
+        return False
+
+
+def _has_spotify_intent(text: str, pending_play: bool, retry_request: dict[str, Any] | None = None) -> bool:
     """True only when message has explicit Spotify/music intent (not generic text)."""
     t = (text or "").strip().lower()
     if pending_play and len(text.strip()) < 40:
+        return True
+    if _is_retry_phrase(text) and _is_retry_request_valid(retry_request):
         return True
     if any(k in t for k in ("skip", "next song", "next track")):
         return True
@@ -50,12 +82,66 @@ class SpotifyService:
         t_lower = (text or "").strip().lower()
         db = get_db()
 
-        # 0. Pending device selection state
+        # 0. Pending device selection state + retry request (for "Done" / "Try again")
         pending = await db.get_pending_spotify_play(user_id)
         pending_play = bool(pending and len(text.strip()) < 40)
+        retry_request = await db.get_spotify_retry_request(user_id)
+        if retry_request and not _is_retry_request_valid(retry_request):
+            await db.clear_spotify_retry_request(user_id)
+            retry_request = None
 
         # Early exit: no Spotify intent -> let LLM handle
-        if not _has_spotify_intent(text, pending_play):
+        if not _has_spotify_intent(text, pending_play, retry_request):
+            return None
+
+        # 0b. Retry last play (user said "Done" / "Try again" after no devices or not connected)
+        if _is_retry_phrase(text) and retry_request:
+            play_query = retry_request.get("play_query") or ""
+            track_uri = (retry_request.get("track_uri") or "").strip()
+            await db.clear_spotify_retry_request(user_id)
+            token = await get_user_access_token(user_id)
+            if not token:
+                row = await db.get_spotify_tokens(user_id)
+                if row:
+                    return "I need to reconnect to Spotify. Please check Settings."
+                return "Spotify is not connected. Connect in Settings."
+            if track_uri:
+                # We had a track; just list devices and play
+                devices = await list_user_devices(user_id)
+                if not devices:
+                    await db.set_spotify_retry_request(user_id, play_query, track_uri)
+                    return "No active Spotify devices found. Open Spotify on your phone or laptop first."
+                if len(devices) == 1:
+                    dev = devices[0]
+                    ok = await start_playback(user_id, dev.get("id"), track_uri)
+                    if ok:
+                        return "Playing on {0}.".format(dev.get("name") or "device")
+                    return "Failed to play on {0}.".format(dev.get("name") or "device")
+                await db.set_pending_spotify_play(user_id, track_uri, json.dumps(devices))
+                dev_list = ", ".join([f"{i+1}. {d.get('name')}" for i, d in enumerate(devices)])
+                return "Which device?\n{0}".format(dev_list)
+            if play_query:
+                # No track yet (e.g. was "not connected"); search and play
+                results = await spotify_search_if_configured(play_query)
+                if not results or not results[0].get("uri"):
+                    return f"I couldn't find '{play_query}' on Spotify."
+                track_uri = results[0]["uri"]
+                track_name = results[0].get("name") or "track"
+                artist = results[0].get("artist") or ""
+                display_name = f"{track_name} by {artist}" if artist else track_name
+                devices = await list_user_devices(user_id)
+                if not devices:
+                    await db.set_spotify_retry_request(user_id, play_query, track_uri)
+                    return "No active Spotify devices found. Open Spotify on your phone or laptop first."
+                if len(devices) == 1:
+                    dev = devices[0]
+                    ok = await start_playback(user_id, dev.get("id"), track_uri)
+                    if ok:
+                        return f"Playing {display_name} on {dev.get('name')}."
+                    return f"Failed to play on {dev.get('name')}."
+                await db.set_pending_spotify_play(user_id, track_uri, json.dumps(devices))
+                dev_list = ", ".join([f"{i+1}. {d.get('name')}" for i, d in enumerate(devices)])
+                return f"Found {display_name}. Which device?\n{dev_list}"
             return None
 
         # 1. Pending Device Selection (e.g. "1", "Kitchen")
@@ -127,6 +213,7 @@ class SpotifyService:
         if play_query:
             token = await get_user_access_token(user_id)
             if not token:
+                await db.set_spotify_retry_request(user_id, play_query, "")
                 row = await db.get_spotify_tokens(user_id)
                 if row:
                     return "Token expired. Please reconnect Spotify in Settings."
@@ -134,25 +221,35 @@ class SpotifyService:
                     return "Spotify is not connected. Connect in Settings."
             else:
                 results = await spotify_search_if_configured(play_query)
-                if not results or not results[0].get("uri"):
-                    return f"I couldn't find '{play_query}' on Spotify."
-                else:
+                track_uri = None
+                context_uri = None
+                display_name = play_query
+                if results and results[0].get("uri"):
                     track_uri = results[0]["uri"]
                     track_name = results[0].get("name") or "track"
                     artist = results[0].get("artist") or ""
                     display_name = f"{track_name} by {artist}" if artist else track_name
-                    
+                else:
+                    # No track found — try artist (e.g. "Play Bob Dylan")
+                    artist_results = await search_spotify_artists(play_query, token, 1)
+                    if artist_results and artist_results[0].get("uri"):
+                        context_uri = artist_results[0]["uri"]
+                        display_name = artist_results[0].get("name") or play_query
+                    else:
+                        return f"I couldn't find '{play_query}' on Spotify."
+                if track_uri or context_uri:
                     devices = await list_user_devices(user_id)
                     if not devices:
+                        await db.set_spotify_retry_request(user_id, play_query, track_uri or context_uri or "")
                         return "No active Spotify devices found. Open Spotify on your phone or laptop first."
                     elif len(devices) == 1:
                         dev = devices[0]
-                        ok = await start_playback(user_id, dev.get("id"), track_uri)
+                        ok = await start_playback(user_id, dev.get("id"), track_uri=track_uri, context_uri=context_uri)
                         if ok:
                             return f"Playing {display_name} on {dev.get('name')}."
                         return f"Failed to play on {dev.get('name')}."
                     else:
-                        await db.set_pending_spotify_play(user_id, track_uri, json.dumps(devices))
+                        await db.set_pending_spotify_play(user_id, track_uri or context_uri or "", json.dumps(devices))
                         dev_list = ", ".join([f"{i+1}. {d.get('name')}" for i, d in enumerate(devices)])
                         return f"Found {display_name}. Which device?\n{dev_list}"
 

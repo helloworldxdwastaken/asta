@@ -1,4 +1,4 @@
-"""RAG: ingest text, embed (Ollama, then OpenAI, then Google), store in Chroma; query for context.
+"""RAG: ingest text, embed via Ollama (nomic-embed-text), store in Chroma; query for context.
 
 Hybrid search: combines vector similarity (ChromaDB) with keyword search (SQLite FTS5)
 for better retrieval. Inspired by OpenClaw's hybrid memory search.
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 COLLECTION = "asta_rag"
 CHROMA_PATH = os.environ.get("ASTA_CHROMA_PATH", str(Path(__file__).resolve().parent.parent.parent / "chroma_db"))
 FTS_DB_PATH = os.environ.get("ASTA_FTS_PATH", str(Path(__file__).resolve().parent.parent.parent / "rag_fts.db"))
-EMBED_DIM = 768  # nomic-embed-text; OpenAI/Google normalized to this for compatibility
+EMBED_DIM = 768  # nomic-embed-text
 
 
 def _embed_ollama(text: str, base_url: str) -> list[float]:
@@ -38,79 +38,51 @@ def _embed_ollama(text: str, base_url: str) -> list[float]:
         return []
 
 
-def _embed_openai(text: str, api_key: str) -> list[float]:
-    """OpenAI embeddings (text-embedding-3-small, 768 dims). Returns [] on failure."""
-    if not (api_key or "").strip():
-        return []
-    try:
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key.strip())
-        r = client.embeddings.create(
-            model="text-embedding-3-small",
-            input=text[:8191],
-            dimensions=EMBED_DIM,
-        )
-        if r.data and len(r.data) > 0:
-            emb = r.data[0].embedding
-            return emb[:EMBED_DIM] if len(emb) >= EMBED_DIM else emb + [0.0] * (EMBED_DIM - len(emb))
-        return []
-    except Exception as e:
-        logger.debug("OpenAI embed failed: %s", e)
-        return []
+def _ollama_embed_error(base_url: str) -> str:
+    """Try Ollama embed and return a human-readable error string, or empty if OK."""
+    _, detail = _ollama_diagnose(base_url)
+    return detail or ""
 
 
-def _embed_google(text: str, api_key: str) -> list[float]:
-    """Google Gemini embedding (models/embedding-001). Normalized to EMBED_DIM."""
-    if not (api_key or "").strip():
-        return []
+def _ollama_diagnose(base_url: str) -> tuple[str, str]:
+    """Try Ollama embed. Returns (reason, detail). reason: ok | not_running | model_missing | wrong_config | unknown."""
+    base_url = base_url.rstrip("/")
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key.strip())
-        result = genai.embed_content(
-            model="models/embedding-001",
-            content=text,
-            task_type="retrieval_document",
-        )
-        emb = result.get("embedding", getattr(result, "embedding", None)) or []
-        if not emb or not isinstance(emb, list):
-            return []
-        # embedding-001 is 768 dims; if larger, truncate; if smaller, pad
-        if len(emb) >= EMBED_DIM:
-            return emb[:EMBED_DIM]
-        return emb + [0.0] * (EMBED_DIM - len(emb))
+        with httpx.Client(timeout=10) as c:
+            r = c.post(
+                f"{base_url}/api/embed",
+                json={"model": "nomic-embed-text", "input": "test"},
+            )
+            if r.status_code == 200:
+                data = r.json()
+                emb = data.get("embeddings", [data.get("embedding", [])])[0] if data else []
+                if isinstance(emb, list) and len(emb) == EMBED_DIM:
+                    return "ok", ""
+                return "wrong_config", "Ollama returned invalid embedding (wrong size). Pull the embed model and ensure Ollama is running."
+            if r.status_code == 404:
+                return "model_missing", "Model not found. Run: ollama pull nomic-embed-text"
+            try:
+                body = r.json()
+                err = body.get("error", r.text[:200]) or r.text[:200]
+            except Exception:
+                err = r.text[:200] if r.text else f"HTTP {r.status_code}"
+            if "model" in err.lower() and ("not found" in err.lower() or "404" in err):
+                return "model_missing", err
+            return "unknown", f"Ollama error ({r.status_code}): {err}"
+    except httpx.ConnectError:
+        return "not_running", f"Cannot reach Ollama at {base_url}. Ollama may not be installed, or it may not be running."
+    except httpx.TimeoutException:
+        return "not_running", f"Ollama at {base_url} timed out. Is it running?"
     except Exception as e:
-        logger.debug("Google embed failed: %s", e)
-        return []
+        return "unknown", str(e) or "Ollama request failed"
 
 
 async def _get_embedding_any(text: str) -> list[float]:
-    """Try Ollama first, then OpenAI, then Google. Returns 768-dim list or []."""
+    """Embed via Ollama (nomic-embed-text). Returns 768-dim list or []."""
     from app.config import get_settings
-    from app.keys import get_api_key
     settings = get_settings()
     base_url = (settings.ollama_base_url or "").strip() or "http://localhost:11434"
-
-    # 1) Ollama (sync, run in thread)
-    emb = await asyncio.to_thread(_embed_ollama, text, base_url)
-    if emb:
-        return emb
-
-    # 2) OpenAI (if key set)
-    openai_key = await get_api_key("openai_api_key")
-    if openai_key:
-        emb = await asyncio.to_thread(_embed_openai, text, openai_key)
-        if emb:
-            return emb
-
-    # 3) Google (Gemini or Google AI key)
-    for key_name in ("gemini_api_key", "google_ai_key"):
-        key = await get_api_key(key_name)
-        if key:
-            emb = await asyncio.to_thread(_embed_google, text, key)
-            if emb:
-                return emb
-
-    return []
+    return await asyncio.to_thread(_embed_ollama, text, base_url)
 
 
 class RAGService:
@@ -333,6 +305,20 @@ class RAGService:
 
 
 
+def check_ollama_at_url(url: str) -> dict:
+    """Check Ollama at an arbitrary URL (no ChromaDB). Returns { ok, detail, ollama_url, ollama_reason }."""
+    u = (url or "").strip()
+    if not u:
+        u = "http://localhost:11434"
+    if not u.startswith("http://") and not u.startswith("https://"):
+        u = "http://" + u
+    u = u.rstrip("/")
+    reason, detail = _ollama_diagnose(u)
+    if reason == "ok":
+        return {"ok": True, "detail": None, "ollama_url": u, "ollama_reason": "ok"}
+    return {"ok": False, "detail": detail, "ollama_url": u, "ollama_reason": reason}
+
+
 _rag: RAGService | None = None
 
 
@@ -341,3 +327,40 @@ def get_rag() -> RAGService:
     if _rag is None:
         _rag = RAGService()
     return _rag
+
+
+async def check_rag_status() -> dict:
+    """Check if RAG is usable: ChromaDB/FTS OK and Ollama embedding works.
+    Returns ok, message, provider, detail, ollama_url; when store fails still returns ollama check and ollama_url."""
+    from app.config import get_settings
+    settings = get_settings()
+    base_url = (settings.ollama_base_url or "").strip() or "http://localhost:11434"
+    base_url = base_url.rstrip("/")
+    store_error: str | None = None
+    try:
+        get_rag()
+    except Exception as e:
+        store_error = str(e)
+    reason, detail = await asyncio.to_thread(_ollama_diagnose, base_url)
+    if store_error:
+        return {
+            "ok": False,
+            "message": f"RAG store failed: {store_error}",
+            "provider": None,
+            "detail": detail or None,
+            "ollama_url": base_url,
+            "ollama_reason": reason,
+            "ollama_ok": reason == "ok",
+            "store_error": True,
+        }
+    if reason == "ok":
+        return {"ok": True, "message": "RAG ready. Learn content below or ask in Chat.", "provider": "Ollama", "detail": None, "ollama_url": base_url, "ollama_reason": "ok", "ollama_ok": True}
+    return {
+        "ok": False,
+        "message": "Ollama not available.",
+        "provider": None,
+        "detail": detail,
+        "ollama_url": base_url,
+        "ollama_reason": reason,
+        "ollama_ok": False,
+    }

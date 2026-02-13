@@ -100,6 +100,12 @@ class Db:
                 devices_json TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS spotify_retry_request (
+                user_id TEXT PRIMARY KEY,
+                play_query TEXT NOT NULL,
+                track_uri TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS saved_audio_notes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT NOT NULL,
@@ -523,6 +529,37 @@ class Db:
         row = await cursor.fetchone()
         return dict(row) if row else None
 
+    async def update_cron_job(
+        self,
+        job_id: int,
+        cron_expr: str | None = None,
+        tz: str | None = None,
+        message: str | None = None,
+    ) -> bool:
+        """Update an existing cron job by id. Only non-None fields are updated."""
+        if not self._conn:
+            await self.connect()
+        updates = []
+        params = []
+        if cron_expr is not None:
+            updates.append("cron_expr = ?")
+            params.append(cron_expr.strip())
+        if tz is not None:
+            updates.append("tz = ?")
+            params.append(tz.strip())
+        if message is not None:
+            updates.append("message = ?")
+            params.append(message.strip())
+        if not updates:
+            return True
+        params.append(job_id)
+        await self._conn.execute(
+            f"UPDATE cron_jobs SET {', '.join(updates)} WHERE id = ?",
+            tuple(params),
+        )
+        await self._conn.commit()
+        return True
+
     async def delete_cron_job(self, job_id: int) -> bool:
         if not self._conn:
             await self.connect()
@@ -648,6 +685,34 @@ class Db:
         if not self._conn:
             await self.connect()
         await self._conn.execute("DELETE FROM pending_spotify_play WHERE user_id = ?", (user_id,))
+        await self._conn.commit()
+
+    async def get_spotify_retry_request(self, user_id: str) -> dict[str, Any] | None:
+        """Last play request that failed (e.g. no devices) so 'Done' / 'Try again' can retry."""
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute(
+            "SELECT play_query, track_uri, created_at FROM spotify_retry_request WHERE user_id = ?",
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def set_spotify_retry_request(self, user_id: str, play_query: str, track_uri: str) -> None:
+        if not self._conn:
+            await self.connect()
+        await self._conn.execute(
+            """INSERT INTO spotify_retry_request (user_id, play_query, track_uri, created_at)
+               VALUES (?, ?, ?, datetime('now')) ON CONFLICT(user_id) DO UPDATE SET
+               play_query = ?, track_uri = ?, created_at = datetime('now')""",
+            (user_id, play_query, track_uri, play_query, track_uri),
+        )
+        await self._conn.commit()
+
+    async def clear_spotify_retry_request(self, user_id: str) -> None:
+        if not self._conn:
+            await self.connect()
+        await self._conn.execute("DELETE FROM spotify_retry_request WHERE user_id = ?", (user_id,))
         await self._conn.commit()
 
     async def save_audio_note(self, user_id: str, title: str, transcript: str, formatted: str) -> None:

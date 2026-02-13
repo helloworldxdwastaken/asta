@@ -18,6 +18,28 @@ from app.services.giphy_service import GiphyService
 
 logger = logging.getLogger(__name__)
 
+# Short acknowledgments: when user sends only this, we nudge the model to reply with one phrase
+_SHORT_ACK_PHRASES = frozenset({
+    "ok", "okay", "thanks", "thank you", "thx", "bye", "got it", "no", "sure", "yep", "yes",
+    "cool", "nice", "np", "alright", "k", "kk", "done", "good", "great", "perfect",
+})
+
+
+def _is_short_acknowledgment(text: str) -> bool:
+    """True if the message is only a short acknowledgment (ok, thanks, etc.)."""
+    t = (text or "").strip().lower()
+    if len(t) > 25:
+        return False
+    # Exact match or single word/phrase from list
+    if t in _SHORT_ACK_PHRASES:
+        return True
+    # "thanks!" or "ok." etc.
+    base = t.rstrip(".!")
+    if base in _SHORT_ACK_PHRASES:
+        return True
+    return False
+
+
 async def handle_message(
     user_id: str,
     channel: str,
@@ -201,11 +223,19 @@ async def handle_message(
     context = await build_context(db, user_id, cid, extra=extra, skills_in_use=skills_to_use)
     
     # Silly GIF skill: Proactive instruction (not intent-based)
-    if "silly_gif" in enabled: 
+    if "silly_gif" in enabled:
         context += (
             "\n\n[SKILL: SILLY GIF ENABLED]\n"
             "You can occasionally (10-20% chance) send a relevant GIF by adding `[gif: search term]` at the end of your message. "
             "Only do this when the mood is friendly or fun. Example: 'That's awesome! [gif: happy dance]'"
+        )
+
+    # Short acknowledgment: force a one-phrase reply (model often ignores SOUL otherwise)
+    if _is_short_acknowledgment(text):
+        context += (
+            "\n\n[IMPORTANT] The user just sent a very short acknowledgment (e.g. ok, thanks). "
+            "Reply with ONE short phrase only (e.g. 'Got it!', 'Anytime!', 'Take care!'). "
+            "Do not add extra sentences like 'Let me know if you need anything.'"
         )
 
     # Load recent messages; skip old assistant error messages so the model doesn't repeat "check your API key"

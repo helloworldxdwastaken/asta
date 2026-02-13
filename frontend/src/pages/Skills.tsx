@@ -36,7 +36,7 @@ function SkillCard({
             {skill.action_hint}
           </Link>
         ) : (
-          <span className="skill-pill skill-pill-pending">Configure</span>
+          <span className="skill-pill skill-pill-pending">Not configured</span>
         )}
       </div>
     </div>

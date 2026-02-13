@@ -1,4 +1,6 @@
 import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
+import type { CronJob } from "../api/client";
 import { api } from "../api/client";
 
 const KEY_LABELS: Record<string, string> = {
@@ -111,6 +113,114 @@ function RestartBackendButton() {
       )}
       <p className="help">This sends a stop request to the backend process. Start it again in your terminal afterwards.</p>
     </div>
+  );
+}
+
+function AutoUpdaterSettings({
+  cronJobs,
+  onSave,
+  saving,
+  setSaving,
+  message,
+  setMessage,
+}: {
+  cronJobs: CronJob[];
+  onSave: () => void;
+  saving: boolean;
+  setSaving: (v: boolean) => void;
+  message: string | null;
+  setMessage: (v: string | null) => void;
+}) {
+  const job = cronJobs.find((j) => (j.name || "").trim() === "Daily Auto-Update");
+  const [cronExpr, setCronExpr] = useState(job?.cron_expr ?? "0 4 * * *");
+  const [tz, setTz] = useState(job?.tz ?? "");
+  useEffect(() => {
+    if (job) {
+      setCronExpr(job.cron_expr ?? "0 4 * * *");
+      setTz(job.tz ?? "");
+    }
+  }, [job?.id, job?.cron_expr, job?.tz]);
+
+  if (!job) {
+    return (
+      <details>
+        <summary>
+          <span>Auto-updater</span>
+          <span className="acc-meta">Daily Asta &amp; skills update</span>
+        </summary>
+        <div className="acc-body">
+          <p className="help">
+            The Daily Auto-Update cron is created automatically when the auto-updater skill is installed (<code>workspace/skills/auto-updater-100</code>). Restart the backend to create it, or manage cron jobs in the <Link to="/cron" className="link">Cron</Link> tab.
+          </p>
+        </div>
+      </details>
+    );
+  }
+
+  const handleSave = async () => {
+    setSaving(true);
+    setMessage(null);
+    try {
+      await api.updateCronJob(job.id, { cron_expr: cronExpr.trim() || undefined, tz: tz.trim() || undefined });
+      setMessage("Auto-updater schedule saved.");
+      onSave();
+    } catch (e) {
+      setMessage("Error: " + (e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <details>
+      <summary>
+        <span>Auto-updater</span>
+        <span className="acc-meta">Daily Asta &amp; skills update</span>
+      </summary>
+      <div className="acc-body">
+        <p className="help">
+          Run a daily check for Asta and skill updates. The cron job sends a message to the AI at the scheduled time; the reply is delivered to you (web or channels).
+        </p>
+        <div className="field">
+          <label className="label" htmlFor="auto-updater-cron">Schedule (5-field cron)</label>
+          <input
+            id="auto-updater-cron"
+            type="text"
+            value={cronExpr}
+            onChange={(e) => setCronExpr(e.target.value)}
+            placeholder="0 4 * * *"
+            className="input"
+            style={{ maxWidth: 220 }}
+          />
+          <p className="help">e.g. <code>0 4 * * *</code> = daily at 4:00 AM</p>
+        </div>
+        <div className="field">
+          <label className="label" htmlFor="auto-updater-tz">Timezone (optional)</label>
+          <input
+            id="auto-updater-tz"
+            type="text"
+            value={tz}
+            onChange={(e) => setTz(e.target.value)}
+            placeholder="e.g. America/Los_Angeles"
+            className="input"
+            style={{ maxWidth: 280 }}
+          />
+        </div>
+        <div className="actions">
+          <button type="button" onClick={handleSave} disabled={saving} className="btn btn-primary">
+            {saving ? "Saving…" : "Save schedule"}
+          </button>
+        </div>
+        {message && (
+          <div className={message.startsWith("Error") ? "alert alert-error" : "alert"} style={{ marginTop: "0.75rem" }}>
+            {message}
+          </div>
+        )}
+        <p className="help" style={{ marginTop: "0.5rem" }}>
+          View or remove this job in the <Link to="/cron" className="link">Cron</Link> tab.
+        </p>
+      </div>
+    </details>
   );
 }
 
@@ -559,10 +669,14 @@ export default function Settings() {
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [cronJobs, setCronJobs] = useState<CronJob[]>([]);
+  const [autoUpdaterSaving, setAutoUpdaterSaving] = useState(false);
+  const [autoUpdaterMessage, setAutoUpdaterMessage] = useState<string | null>(null);
 
   useEffect(() => {
     api.providers().then((r) => setProviders(r.providers));
     api.getSettingsKeys().then(setKeysStatus);
+    api.getCronJobs().then((r) => setCronJobs(r.cron_jobs || [])).catch(() => setCronJobs([]));
   }, []);
 
   const handleSaveKeys = async () => {
@@ -742,6 +856,15 @@ export default function Settings() {
             <SpotifySetup keysStatus={keysStatus} onSaved={() => api.getSettingsKeys().then(setKeysStatus)} />
           </div>
         </details>
+
+        <AutoUpdaterSettings
+          cronJobs={cronJobs}
+          onSave={() => api.getCronJobs().then((r) => setCronJobs(r.cron_jobs || []))}
+          saving={autoUpdaterSaving}
+          setSaving={setAutoUpdaterSaving}
+          message={autoUpdaterMessage}
+          setMessage={setAutoUpdaterMessage}
+        />
 
         <details>
           <summary>

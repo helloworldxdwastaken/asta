@@ -1,12 +1,68 @@
+import os
+import platform
+import subprocess
 import psutil
 import time
 from datetime import datetime
+
+
+def _get_cpu_model() -> str:
+    """Best-effort CPU model string (e.g. 'Apple M1', 'Intel Core i7-9750H')."""
+    try:
+        system = platform.system()
+        if system == "Linux":
+            with open("/proc/cpuinfo", "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if line.strip().startswith("model name"):
+                        return line.split(":", 1)[1].strip().strip('"')
+            return platform.processor() or "Unknown"
+        if system == "Darwin":  # macOS
+            out = subprocess.run(
+                ["sysctl", "-n", "machdep.cpu.brand_string"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            if out.returncode == 0 and out.stdout.strip():
+                return out.stdout.strip()
+            # Apple Silicon may use a different key
+            out = subprocess.run(
+                ["sysctl", "-n", "hw.model"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            if out.returncode == 0 and out.stdout.strip():
+                return out.stdout.strip()
+            return platform.processor() or "Apple"
+        if system == "Windows":
+            try:
+                flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+                out = subprocess.run(
+                    ["wmic", "cpu", "get", "name"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                    creationflags=flags,
+                )
+                if out.returncode == 0 and out.stdout:
+                    lines = [l.strip() for l in out.stdout.strip().splitlines() if l.strip() and l.strip().lower() != "name"]
+                    if lines:
+                        return lines[0]
+            except (FileNotFoundError, OSError):
+                pass
+        return platform.processor() or "Unknown"
+    except Exception:
+        return platform.processor() or "Unknown"
+
 
 def get_server_status():
     """Returns a dictionary of system metrics."""
     try:
         # CPU
         cpu_percent = psutil.cpu_percent(interval=None)
+        cpu_model = _get_cpu_model()
+        cpu_count = psutil.cpu_count(logical=True) or 0
         
         # RAM
         ram = psutil.virtual_memory()
@@ -55,6 +111,8 @@ def get_server_status():
             "ok": True,
             "version": version,
             "cpu_percent": cpu_percent,
+            "cpu_model": cpu_model,
+            "cpu_count": cpu_count,
             "ram": {
                 "total_gb": round(ram_total, 2),
                 "used_gb": round(ram_used, 2),

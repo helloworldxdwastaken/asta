@@ -4,7 +4,7 @@ import re
 from urllib.parse import urlparse
 
 import httpx
-from telegram import Update, constants
+from telegram import Update, constants, ReactionTypeEmoji
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, AIORateLimiter
 import asyncio
 from collections import defaultdict
@@ -44,6 +44,39 @@ def to_telegram_format(text: str) -> str:
     text = re.sub(r"```(.*?)```", r"<pre>\1</pre>", text, flags=re.DOTALL)
 
     return text
+
+
+def _is_short_agreement(reply: str) -> bool:
+    """True if reply looks like a short yes/no or agreement (for reaction on user's message)."""
+    if not reply or len(reply) > 80:
+        return False
+    t = (reply or "").strip().lower()
+    # Exact or near-exact short answers
+    if t in (
+        "yes", "no", "yep", "nope", "ok", "okay", "sure", "done", "got it",
+        "will do", "on it", "sounds good", "sounds great", "agreed", "absolutely",
+        "of course", "no problem", "np", "👍", "✅", "ok!", "yes!", "no!",
+    ):
+        return True
+    # Starts with common agreement and is short
+    if len(t) <= 40 and any(t.startswith(p) for p in (
+        "yes,", "no,", "ok,", "sure,", "done.", "got it.", "will do.",
+        "i agree", "agreed.", "sounds good", "no problem", "of course",
+    )):
+        return True
+    return False
+
+
+async def _set_reaction(chat_id: int, message_id: int, bot, emoji: str = "👍") -> None:
+    """Set a reaction on a message (OpenClaw-style; Telegram supports 👍 👎 ❤️ etc.)."""
+    try:
+        await bot.set_message_reaction(
+            chat_id=chat_id,
+            message_id=message_id,
+            reaction=[ReactionTypeEmoji(emoji)],
+        )
+    except Exception as e:
+        logger.debug("Could not set reaction on message: %s", e)
 
 
 async def _reply_text_safe_html(message, text: str) -> None:
@@ -226,6 +259,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 out = (reply or "").strip()[:TELEGRAM_MAX_MESSAGE_LENGTH] or "No response."
                 await _reply_text_safe_html(update.message, out)
                 logger.info("Telegram reply sent to %s", user_id)
+            # React to user's message when reply is a short yes/no or agreement (OpenClaw-style)
+            if _is_short_agreement(reply):
+                await _set_reaction(update.effective_chat.id, update.message.message_id, context.bot)
         except Exception as e:
             logger.exception("Telegram handler error")
             err_text = f"Error: {str(e)[:500]}"

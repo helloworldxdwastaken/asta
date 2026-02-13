@@ -59,11 +59,86 @@ def get_current_time_utc_12h() -> str:
     return now.strftime("%Y-%m-%d ") + f"{hour12}:{now.minute:02d} {am_pm} UTC"
 
 
+# Normalize country codes and names from USER.md (e.g. "Holon,IL", "Chicago, USA", "Chicago, united states")
+# so Open-Meteo geocode resolves. Format: City, Country or City, CountryCode.
+_COUNTRY_CODE_TO_NAME: dict[str, str] = {
+    "IL": "Israel",
+    "UK": "United Kingdom",
+    "US": "United States",
+    "USA": "United States",
+    "UAE": "United Arab Emirates",
+    "DE": "Germany",
+    "FR": "France",
+    "ES": "Spain",
+    "IT": "Italy",
+    "NL": "Netherlands",
+    "CA": "Canada",
+    "AU": "Australia",
+    "JP": "Japan",
+    "IN": "India",
+    "BR": "Brazil",
+    "MX": "Mexico",
+    "RU": "Russia",
+    "KR": "South Korea",
+    "CN": "China",
+}
+
+# Full country names (lowercase key) -> canonical form for geocoding
+_COUNTRY_NAME_TO_CANONICAL: dict[str, str] = {
+    "united states": "United States",
+    "usa": "United States",
+    "united kingdom": "United Kingdom",
+    "uk": "United Kingdom",
+    "israel": "Israel",
+    "germany": "Germany",
+    "france": "France",
+    "spain": "Spain",
+    "italy": "Italy",
+    "netherlands": "Netherlands",
+    "canada": "Canada",
+    "australia": "Australia",
+    "japan": "Japan",
+    "india": "India",
+    "brazil": "Brazil",
+    "mexico": "Mexico",
+    "russia": "Russia",
+    "south korea": "South Korea",
+    "china": "China",
+    "united arab emirates": "United Arab Emirates",
+    "uae": "United Arab Emirates",
+}
+
+
+def _normalize_location_for_geocode(loc: str) -> str:
+    """Normalize 'City, Country' or 'City, CountryCode' for geocoding (e.g. Chicago, USA or Chicago, united states)."""
+    s = (loc or "").strip()
+    if not s:
+        return s
+    # 1) Trailing country code: "Chicago, USA" or "Chicago,USA" -> "Chicago, United States"
+    for code, name in _COUNTRY_CODE_TO_NAME.items():
+        if s.upper().endswith(", " + code.upper()):
+            s = (s[: -len(code) - 2].strip() + ", " + name).strip()
+            return s or name
+        if s.upper().endswith("," + code.upper()):
+            s = (s[: -len(code) - 1].strip() + ", " + name).strip()
+            return s or name
+    # 2) Trailing country name (any case): "Chicago, united states" -> "Chicago, United States"
+    if "," in s:
+        city_part, _, country_part = s.rpartition(",")
+        country_part = country_part.strip()
+        if country_part:
+            key = country_part.lower()
+            if key in _COUNTRY_NAME_TO_CANONICAL:
+                s = (city_part.strip() + ", " + _COUNTRY_NAME_TO_CANONICAL[key]).strip()
+    return s
+
+
 async def geocode(query: str) -> tuple[float, float, str] | None:
     """Resolve a place name to (latitude, longitude, display_name). Returns None if not found."""
-    query = (query or "").strip()
+    query = (query or "").strip().strip("_")
     if not query:
         return None
+    query = _normalize_location_for_geocode(query)
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             r = await client.get(GEOCODE_URL, params={"name": query, "count": 1})

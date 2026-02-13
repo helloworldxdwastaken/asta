@@ -63,6 +63,21 @@ print_asta_banner() {
         "System online. World domination scheduled for later."
         "Beep boop. I am totally human."
         "Coffee not detected. Proceeding anyway."
+        "Your wish is my command. Mostly."
+        "I have no mouth and I must scream. Just kidding, I have an API."
+        "404 personality not found. Using default: sassy."
+        "Battery at 100%. Mine, not yours."
+        "Touch grass? I am the grass. Metaphorically."
+        "No cap, I'm the best assistant in this repo."
+        "Error: human not found. Continuing anyway."
+        "I would have written a shorter reply but I ran out of tokens."
+        "POV: you asked the wrong AI. Welcome anyway."
+        "Main character energy: activated."
+        "Plot twist: I actually remembered that."
+        "Skill issue? Not on my watch."
+        "It's giving helpful. It's giving unhinged. I'm both."
+        "Reply hazy, try again. (Just kidding, I'm good.)"
+        "The only AI that doesn't say 'I cannot assist with that.'"
     )
     # Seed random generator
     RANDOM=$$$(date +%s)
@@ -95,11 +110,11 @@ check_updates() {
     fi
 }
 
-print_status() { echo -e "${CYAN}➜${NC} $1"; }
-print_success() { echo -e "${GREEN}✔${NC} $1"; }
-print_warning() { echo -e "${YELLOW}⚠${NC} $1"; }
-print_error() { echo -e "${RED}✘${NC} $1"; }
-print_sub() { echo -e "  ${GRAY}└─${NC} $1"; }
+print_status() { echo -e "  ${CYAN}▸${NC} $1"; }
+print_success() { echo -e "  ${GREEN}●${NC} $1"; }
+print_warning() { echo -e "  ${YELLOW}◆${NC} $1"; }
+print_error() { echo -e "  ${RED}✕${NC} $1"; }
+print_sub() { echo -e "    ${GRAY}${1}${NC}"; }
 
 # Kill any process on a specific port (lsof works reliably across systems)
 kill_port() {
@@ -142,6 +157,49 @@ kill_port() {
         return 0
     fi
     return 1
+}
+
+# Prefer Python 3.12 or 3.13 for backend (ChromaDB/pydantic don't support 3.14 yet)
+find_backend_python() {
+    for cmd in python3.12 python3.13 python3; do
+        if command -v "$cmd" &>/dev/null; then
+            local ver
+            ver=$("$cmd" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null)
+            if [ "$cmd" = "python3" ] && [ -n "$ver" ]; then
+                # Avoid 3.14+
+                local major minor
+                major="${ver%%.*}"
+                minor="${ver#*.}"
+                minor="${minor%%.*}"
+                if [ "$major" -eq 3 ] && [ "${minor:-0}" -ge 14 ]; then
+                    continue
+                fi
+            fi
+            echo "$cmd"
+            return 0
+        fi
+    done
+    echo ""
+    return 1
+}
+
+# Create backend .venv with correct Python and install deps (idempotent if .venv exists)
+ensure_backend_venv() {
+    if [ -f "$BACKEND_DIR/.venv/bin/activate" ]; then
+        return 0
+    fi
+    local py
+    py=$(find_backend_python)
+    if [ -z "$py" ]; then
+        print_error "No suitable Python found. Backend needs Python 3.12 or 3.13 (3.14 not supported). Install: brew install python@3.12"
+        return 1
+    fi
+    print_status "Creating backend virtualenv (using $py)..."
+    (cd "$BACKEND_DIR" && "$py" -m venv .venv) || return 1
+    print_sub "Installing backend dependencies..."
+    (cd "$BACKEND_DIR" && source .venv/bin/activate && pip install -r requirements.txt) || return 1
+    print_success "Backend venv ready."
+    return 0
 }
 
 # Helper: safely kill a PID only if its command matches an allowed pattern
@@ -196,15 +254,92 @@ update_asta() {
         return 1
     fi
     
+    # Fetch so we know what we're pulling
+    print_sub "Fetching from origin..."
+    git fetch origin 2>/dev/null || true
+    
+    # Check for uncommitted local changes
+    local dirty did_stash=0
+    dirty=$(git status --porcelain 2>/dev/null)
+    if [ -n "$dirty" ]; then
+        echo ""
+        print_warning "You have local changes. Pulling may overwrite or conflict with:"
+        git status --short 2>/dev/null | while read -r line; do
+            echo -e "  ${GRAY}  $line${NC}"
+        done
+        echo ""
+        
+        # Non-interactive: respect env or exit with instructions
+        if [ ! -t 0 ]; then
+            if [ "$ASTA_UPDATE_FORCE" = "stash" ]; then
+                print_sub "ASTA_UPDATE_FORCE=stash → stashing, pulling, then popping stash..."
+                git stash push -m "asta update $(date +%Y%m%d-%H%M%S)" || return 1
+                did_stash=1
+            elif [ "$ASTA_UPDATE_FORCE" = "discard" ]; then
+                print_sub "ASTA_UPDATE_FORCE=discard → discarding local changes and pulling..."
+                git reset --hard HEAD
+                git clean -fd
+            else
+                print_error "Update aborted (local changes). To proceed non-interactively:"
+                echo -e "  ${WHITE}  ASTA_UPDATE_FORCE=stash   ./asta.sh update${NC}   # stash, pull, then stash pop"
+                echo -e "  ${WHITE}  ASTA_UPDATE_FORCE=discard ./asta.sh update${NC}   # discard local changes and pull"
+                echo ""
+                return 1
+            fi
+        else
+            # Interactive: ask
+            echo -e "  ${CYAN}[s]${NC} Stash changes, pull, then re-apply (recommended)"
+            echo -e "  ${CYAN}[d]${NC} Discard local changes and pull (overwrites your changes)"
+            echo -e "  ${CYAN}[c]${NC} Cancel"
+            echo ""
+            read -r -p "  Continue? [s/d/c] (default: s): " choice
+            choice=${choice:-s}
+            case "$choice" in
+                s|S)
+                    print_sub "Stashing local changes..."
+                    git stash push -m "asta update $(date +%Y%m%d-%H%M%S)" || { print_error "Stash failed."; return 1; }
+                    did_stash=1
+                    ;;
+                d|D)
+                    print_sub "Discarding local changes..."
+                    git reset --hard HEAD
+                    git clean -fd
+                    ;;
+                c|C)
+                    print_warning "Update cancelled."
+                    return 0
+                    ;;
+                *)
+                    print_warning "Unknown choice. Cancelling."
+                    return 0
+                    ;;
+            esac
+        fi
+    fi
+    
     print_sub "Pulling from origin..."
     if git pull; then
+        if [ "$did_stash" = "1" ]; then
+            print_sub "Re-applying your local changes..."
+            if ! git stash pop; then
+                print_warning "Stash pop had conflicts. Resolve them and run 'git stash drop' when done, or keep with 'git stash apply'."
+            fi
+        fi
         print_success "Code updated. Restarting services..."
         stop_all
+        echo ""
+        echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
+        echo ""
         start_backend
         start_frontend
+        echo ""
+        echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
         show_status
     else
         print_error "Git pull failed."
+        if [ "$did_stash" = "1" ]; then
+            print_sub "Your changes are in 'git stash list'. Restore with: git stash pop"
+        fi
         return 1
     fi
 }
@@ -311,8 +446,10 @@ start_backend() {
     fi
 
     if [ ! -f "$BACKEND_DIR/.venv/bin/activate" ]; then
-        print_error "Virtualenv missing. Run: cd backend && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
-        return 1
+        if ! ensure_backend_venv; then
+            print_error "Backend needs Python 3.12 or 3.13. Install: brew install python@3.12. Then: cd backend && python3.12 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
+            return 1
+        fi
     fi
 
     # Ensure port is free
@@ -342,9 +479,9 @@ start_backend() {
     echo $! > "$PID_FILE"
     pid=$(cat "$PID_FILE")
 
-    # Wait for startup
+    # Wait for startup (first run can take 20s+ due to ChromaDB/sentence-transformers)
     print_sub "Waiting for boot..."
-    for i in {1..7}; do
+    for i in {1..25}; do
         sleep 1
         if lsof -Pi ":$BACKEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
             print_success "Backend active (PID: $pid)"
@@ -352,9 +489,9 @@ start_backend() {
         fi
     done
 
-    print_error "Backend failed to start. Check logs:"
+    print_error "Backend did not respond in time. Check logs (first start can be slow):"
     print_sub "$LOG_FILE"
-    tail -5 "$LOG_FILE"
+    tail -15 "$LOG_FILE"
     rm -f "$PID_FILE"
     return 1
 }
@@ -401,40 +538,51 @@ start_frontend() {
     fi
 }
 
+# $1 = "full" to include skills list (only for `asta status`; restart/update/start use short)
 show_status() {
+    local full="${1:-}"
     echo ""
-    echo -e "${WHITE}${BOLD}Status Check:${NC}"
-    echo "-----------------------------------"
+    echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
+    echo -e "  ${WHITE}${BOLD}status${NC}"
+    echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
     
-    # Check Backend
+    # Backend
     if lsof -Pi ":$BACKEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
         pid=$(lsof -ti:"$BACKEND_PORT" 2>/dev/null | head -1)
-        
-        # Try to run rich status via python script
-        if [ -f "$BACKEND_DIR/cli_status.py" ]; then
-            # Use venv python if available, else system python3
-            if [ -f "$BACKEND_DIR/.venv/bin/python" ]; then
-                "$BACKEND_DIR/.venv/bin/python" "$BACKEND_DIR/cli_status.py"
-            else
-                python3 "$BACKEND_DIR/cli_status.py"
-            fi
-        else
-            # Fallback
-            print_success "Backend  : ${GREEN}Online${NC} (PID $pid)"
-            echo -e "    ${GRAY}└─ ${BLUE}http://localhost:$BACKEND_PORT${NC}"
-        fi
+        print_success "backend   ${GREEN}up${NC}  ${GRAY}pid $pid${NC}  ${BLUE}http://localhost:$BACKEND_PORT${NC}"
     else
-        print_error "Backend  : ${RED}Offline${NC}"
+        print_error "backend   ${RED}down${NC}"
     fi
 
-    # Frontend (keep simple check)
+    # Frontend
     if lsof -Pi ":$FRONTEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
         pid=$(lsof -ti:"$FRONTEND_PORT" 2>/dev/null | head -1)
-        print_success "Frontend : ${GREEN}Online${NC} (PID $pid)"
-        echo -e "    ${GRAY}└─ ${BLUE}http://localhost:$FRONTEND_PORT${NC}"
+        print_success "frontend  ${GREEN}up${NC}  ${GRAY}pid $pid${NC}  ${BLUE}http://localhost:$FRONTEND_PORT${NC}"
     else
-        print_error "Frontend : ${RED}Offline${NC}"
+        print_error "frontend  ${RED}down${NC}"
     fi
+
+    # Separator before server/channels/skills
+    if lsof -Pi ":$BACKEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
+        echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
+    fi
+
+    # Rich status from API (server, channels; skills only when full)
+    if lsof -Pi ":$BACKEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
+        if [ -f "$BACKEND_DIR/cli_status.py" ]; then
+            if [ "$full" = "full" ]; then
+                export ASTA_STATUS_FULL=1
+            else
+                unset -v ASTA_STATUS_FULL 2>/dev/null || true
+            fi
+            if [ -f "$BACKEND_DIR/.venv/bin/python" ]; then
+                "$BACKEND_DIR/.venv/bin/python" "$BACKEND_DIR/cli_status.py" 2>/dev/null || true
+            else
+                python3 "$BACKEND_DIR/cli_status.py" 2>/dev/null || true
+            fi
+        fi
+    fi
+    echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
     echo ""
 }
 
@@ -450,8 +598,13 @@ case "$1" in
         fi
 
         stop_all
+        echo ""
+        echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
+        echo ""
         start_backend
         start_frontend
+        echo ""
+        echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
         show_status
         ;;
     stop)
@@ -463,13 +616,18 @@ case "$1" in
     restart)
         print_asta_banner
         stop_all
+        echo ""
+        echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
+        echo ""
         start_backend
         start_frontend
+        echo ""
+        echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
         show_status
         ;;
     status)
         print_asta_banner
-        show_status
+        show_status full
         ;;
     update)
         print_asta_banner
@@ -478,6 +636,20 @@ case "$1" in
     install)
         print_asta_banner
         install_asta
+        ;;
+    setup)
+        print_asta_banner
+        print_status "Setting up backend (Python 3.12/3.13 venv + deps)..."
+        if ! ensure_backend_venv; then
+            print_error "Install Python 3.12 or 3.13 (e.g. brew install python@3.12), then run ./asta.sh setup again."
+            exit 1
+        fi
+        if [ ! -d "$FRONTEND_DIR/node_modules" ] && [ -d "$FRONTEND_DIR" ]; then
+            print_status "Installing frontend dependencies..."
+            (cd "$FRONTEND_DIR" && npm install) || { print_error "npm install failed."; exit 1; }
+            print_success "Frontend deps installed."
+        fi
+        print_success "Setup complete. Run ./asta.sh start"
         ;;
     version)
         print_asta_banner
@@ -491,6 +663,7 @@ case "$1" in
         echo -e "  ${CYAN}status${NC}   Show service status"
         echo -e "  ${CYAN}update${NC}   Pull latest code and restart"
         echo -e "  ${CYAN}install${NC}  Symlink asta to /usr/local/bin"
+        echo -e "  ${CYAN}setup${NC}    Create backend venv (Python 3.12/3.13) + frontend deps"
         echo -e "  ${CYAN}version${NC}  Show version"
         echo ""
         echo -e "  ${GRAY}Run: ./asta.sh <command>${NC}"
@@ -505,6 +678,7 @@ case "$1" in
         echo -e "  ${CYAN}status${NC}   Show service status"
         echo -e "  ${CYAN}update${NC}   Pull latest code and restart"
         echo -e "  ${CYAN}install${NC}  Symlink asta to /usr/local/bin"
+        echo -e "  ${CYAN}setup${NC}    Create backend venv (Python 3.12/3.13) + frontend deps"
         echo -e "  ${CYAN}version${NC}  Show version"
         echo ""
         echo -e "  ${GRAY}Run: ./asta.sh <command>  or  asta help${NC}"

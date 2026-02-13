@@ -95,7 +95,7 @@ def get_location_from_workspace_user_md() -> str | None:
         # Match **Location:** value or - **Location:** value
         m = re.search(r"\*\*Location\*\*:\s*(.+)$", line, re.IGNORECASE)
         if m:
-            loc = m.group(1).strip().strip("-").strip()
+            loc = m.group(1).strip().strip("_-").strip()
             if loc:
                 return loc
         if ":" in line:

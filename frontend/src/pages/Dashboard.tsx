@@ -61,6 +61,8 @@ export default function Dashboard() {
   const [serverStatus, setServerStatus] = useState<any>(null);
   const [models, setModels] = useState<Record<string, string>>({});
   const [defaults, setDefaults] = useState<Record<string, string>>({});
+  const [availableModels, setAvailableModels] = useState<{ ollama: string[] }>({ ollama: [] });
+  const [cronCount, setCronCount] = useState(0);
   const [updateInfo, setUpdateInfo] = useState<{ available: boolean; local: string; remote: string } | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
 
@@ -74,6 +76,8 @@ export default function Dashboard() {
     api.getDefaultAi().then((r) => setDefaultAi(r.provider)).catch(() => setDefaultAi(null));
     api.getServerStatus().then(r => setServerStatus(r)).catch(() => setServerStatus(null));
     api.getModels().then((r) => { setModels(r.models); setDefaults(r.defaults); }).catch(() => { });
+    api.getAvailableModels().then(setAvailableModels).catch(() => setAvailableModels({ ollama: [] }));
+    api.getCronJobs().then((r) => setCronCount((r.cron_jobs || []).length)).catch(() => setCronCount(0));
     api.checkUpdate().then(r => setUpdateInfo({ available: r.update_available, local: r.local, remote: r.remote })).catch(() => { });
   }, []);
 
@@ -125,6 +129,7 @@ export default function Dashboard() {
   const apis = status?.apis ?? {};
   const integrations = status?.integrations ?? {};
   const skills = status?.skills ?? [];
+  const activeSkillsCount = skills.filter(s => s.enabled && s.available).length;
   const connected = !error && status;
   const pendingReminders = notifications.filter(n => n.status === 'pending');
 
@@ -173,13 +178,21 @@ export default function Dashboard() {
               ]
                 .filter(({ key }) => apis[key])
                 .map(({ key, label }) => {
-                  const modelName = models[key] || defaults[key] || "Default";
+                  const configured = models[key] || defaults[key] || "Default";
+                  const ollamaList = key === "ollama" ? (availableModels.ollama || []) : [];
+                  const configuredInList = key === "ollama" && ollamaList.length > 0 &&
+                    ollamaList.some((m: string) => m === configured || m.startsWith(configured + ":"));
+                  const modelName = key === "ollama" && ollamaList.length > 0 && !configuredInList
+                    ? ollamaList[0]
+                    : configured;
                   return (
                     <div key={key} className="status-row active">
-                      <ProviderLogo providerKey={key} size={36} />
                       <div className="status-row-content">
                         <span className="label">{label}</span>
                         <span className="model-name">{modelName}</span>
+                        {ollamaList.length > 1 && (
+                          <span className="model-list">{ollamaList.join(", ")}</span>
+                        )}
                       </div>
                       <span className="state">Active</span>
                     </div>
@@ -205,11 +218,16 @@ export default function Dashboard() {
             {serverStatus?.ok ? (
               <div className="vitals-grid">
                 <div className="vital-item">
-                  <span className="vital-label">CPU Load</span>
+                  <span className="vital-label">CPU</span>
                   <div className="progress-bar">
-                    <div className="fill" style={{ width: `${serverStatus.cpu_percent}%` }}></div>
+                    <div className="fill" style={{ width: `${Math.min(100, serverStatus.cpu_percent)}%` }}></div>
                   </div>
-                  <span className="vital-value">{serverStatus.cpu_percent}%</span>
+                  <div className="vital-stats">
+                    <span className="vital-value">{serverStatus.cpu_percent}%</span>
+                    <span className="vital-sub">
+                      {[serverStatus.cpu_model, serverStatus.cpu_count ? `${serverStatus.cpu_count} cores` : null].filter(Boolean).join(" · ") || "—"}
+                    </span>
+                  </div>
                 </div>
                 <div className="vital-item">
                   <span className="vital-label">RAM Usage</span>
@@ -247,6 +265,46 @@ export default function Dashboard() {
             )}
           </div>
 
+          {/* ─── 2b. THE EYES (Vision) — next to Brain & Body ─── */}
+          <div className="bento-card vision-section">
+            <div className="card-header">
+              <div className="icon">👀</div>
+              <div>
+                <h2>The Eyes</h2>
+                <p className="desc">Visual Intelligence</p>
+              </div>
+            </div>
+            <div className="vision-status">
+              <div className="model-badge">
+                <span className="model-label">Multimodal VL</span>
+                <span className="model-name">{apis.openrouter ? "Nemotron-Nano 12B" : "—"}</span>
+              </div>
+              {apis.openrouter ? (
+                <>
+                  <div className="vision-active">
+                    <div className="vision-dot"></div>
+                    <span>Vision Ready</span>
+                  </div>
+                  <p className="vision-info">
+                    Detects images on <strong>Telegram</strong> and uses a vision model for analysis.
+                  </p>
+                  <div style={{ marginTop: 'auto', textAlign: 'center', fontSize: '0.75rem', opacity: 0.6 }}>
+                    nvidia/nemotron-nano-12b-v2-vl:free
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="vision-inactive" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                    <span style={{ opacity: 0.7 }}>Vision not configured</span>
+                  </div>
+                  <p className="vision-info">
+                    Add an <strong>OpenRouter</strong> API key in Settings to enable image support on Telegram.
+                  </p>
+                </>
+              )}
+            </div>
+          </div>
+
           {/* ─── 3. CONNECTORS (Channels) ─── */}
           <div className="bento-card connectors-section">
             <div className="card-header">
@@ -279,18 +337,18 @@ export default function Dashboard() {
             <Link to="/channels" className="setup-link">Configure Channels →</Link>
           </div>
 
-          {/* ─── 4. MEMORY (Reminders) ─── */}
+          {/* ─── 3b. TASKS (Reminders) ─── */}
           <div className="bento-card memory-section">
             <div className="card-header">
               <div className="icon">📝</div>
               <div>
                 <h2>Tasks</h2>
-                <p className="desc">Pending Tasks & Reminders</p>
+                <p className="desc">Pending reminders</p>
               </div>
             </div>
             <div className="memory-list">
               {pendingReminders.length === 0 ? (
-                <div className="empty-state">No active reminders. Memory is clear.</div>
+                <div className="empty-state">No active reminders.</div>
               ) : (
                 <ul>
                   {pendingReminders.slice(0, 5).map(n => (
@@ -305,61 +363,35 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* ─── 5. CAPABILITIES (Skills) ─── */}
+          {/* ─── 3c. CRON ─── */}
+          <div className="bento-card cron-section">
+            <div className="card-header">
+              <div className="icon">⏰</div>
+              <div>
+                <h2>Schedule</h2>
+                <p className="desc">Recurring jobs</p>
+              </div>
+            </div>
+            <div className="stat-and-link">
+              <div className="stat-value">{cronCount}</div>
+              <div className="stat-label">{cronCount === 1 ? "scheduled job" : "scheduled jobs"}</div>
+              <Link to="/cron" className="setup-link">Cron →</Link>
+            </div>
+          </div>
+
+          {/* ─── 4. CAPABILITIES (Skills count) ─── */}
           <div className="bento-card skills-section">
             <div className="card-header">
               <div className="icon">⚡</div>
               <div>
                 <h2>Capabilities</h2>
-                <p className="desc">Active Skill Modules</p>
+                <p className="desc">Active skills</p>
               </div>
             </div>
-            <div className="skills-cloud">
-              {skills.filter(s => s.enabled).map(s => (
-                <span key={s.id} className="skill-tag">{s.name}</span>
-              ))}
-              {skills.every(s => !s.enabled) && <span className="empty-state">No skills loaded.</span>}
-            </div>
-            <Link to="/skills" className="setup-link">Manage Skills →</Link>
-          </div>
-
-          {/* ─── 6. THE EYES (Vision) ─── */}
-          <div className="bento-card vision-section">
-            <div className="card-header">
-              <div className="icon">👀</div>
-              <div>
-                <h2>The Eyes</h2>
-                <p className="desc">Visual Intelligence & Multimodal Model</p>
-              </div>
-            </div>
-            <div className="vision-status">
-              <div className="model-badge">
-                <span className="model-label">Multimodal VL</span>
-                <span className="model-name">{apis.openrouter ? "Nemotron-Nano 12B" : "—"}</span>
-              </div>
-              {apis.openrouter ? (
-                <>
-                  <div className="vision-active">
-                    <div className="vision-dot"></div>
-                    <span>Vision Ready</span>
-                  </div>
-                  <p className="vision-info">
-                    Detects images on <strong>Telegram</strong> and automatically uses a vision model (e.g. Nemotron VL) for analysis.
-                  </p>
-                  <div style={{ marginTop: 'auto', textAlign: 'center', fontSize: '0.8rem', opacity: 0.6 }}>
-                    nvidia/nemotron-nano-12b-v2-vl:free
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="vision-inactive" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
-                    <span style={{ opacity: 0.7 }}>Vision not configured</span>
-                  </div>
-                  <p className="vision-info">
-                    Add an <strong>OpenRouter</strong> API key in Settings → API keys to enable image (vision) support on Telegram.
-                  </p>
-                </>
-              )}
+            <div className="stat-and-link">
+              <div className="stat-value">{activeSkillsCount}</div>
+              <div className="stat-label">{activeSkillsCount === 1 ? "active skill" : "active skills"}</div>
+              <Link to="/skills" className="setup-link">Manage Skills →</Link>
             </div>
           </div>
 
@@ -378,16 +410,18 @@ export default function Dashboard() {
 
       <style>{`
         .dashboard-container {
-            max-width: 1200px;
+            width: 100%;
+            max-width: 1600px;
             margin: 0 auto;
-            padding-bottom: 4rem;
+            padding: 0 2.5rem 4rem;
+            box-sizing: border-box;
         }
         .dashboard-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 2rem;
-            padding: 1.25rem 0;
+            margin-bottom: 2.5rem;
+            padding: 1.5rem 0;
             border-bottom: 1px solid var(--border);
         }
         .dashboard-header .title {
@@ -455,18 +489,17 @@ export default function Dashboard() {
         }
         .retry-btn { margin-top: 1rem; }
 
-        /* BENTO GRID */
+        /* BENTO GRID — 4 cols, more space */
         .bento-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            grid-template-rows: auto auto;
-            gap: 1.5rem;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 2rem;
         }
         .bento-card {
             background: #ffffff;
             border: 1px solid var(--border);
-            border-radius: 18px;
-            padding: 1.5rem;
+            border-radius: 20px;
+            padding: 2rem;
             display: flex;
             flex-direction: column;
             transition: transform 0.2s ease, box-shadow 0.25s ease, border-color 0.2s;
@@ -479,19 +512,19 @@ export default function Dashboard() {
         }
         .card-header {
             display: flex;
-            gap: 1rem;
-            margin-bottom: 1.25rem;
+            gap: 1.25rem;
+            margin-bottom: 1.5rem;
             border-bottom: 1px solid var(--border);
-            padding-bottom: 1rem;
+            padding-bottom: 1.25rem;
         }
         .icon {
-            font-size: 1.75rem;
-            width: 52px;
-            height: 52px;
+            font-size: 1.9rem;
+            width: 56px;
+            height: 56px;
             display: flex;
             align-items: center;
             justify-content: center;
-            border-radius: 14px;
+            border-radius: 16px;
             flex-shrink: 0;
         }
         .brain-section .icon { background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(139, 92, 246, 0.15)); border: 1px solid rgba(99, 102, 241, 0.2); }
@@ -500,31 +533,51 @@ export default function Dashboard() {
         .memory-section .icon { background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(234, 179, 8, 0.15)); border: 1px solid rgba(245, 158, 11, 0.25); }
         .skills-section .icon { background: linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(139, 92, 246, 0.15)); border: 1px solid rgba(168, 85, 247, 0.2); }
         .vision-section .icon { background: linear-gradient(135deg, rgba(236, 72, 153, 0.2), rgba(244, 114, 182, 0.15)); border: 1px solid rgba(236, 72, 153, 0.2); }
-        .card-header h2 { margin: 0; font-size: 1.15rem; font-weight: 700; letter-spacing: -0.02em; }
-        .card-header .desc { margin: 0; font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
+        .card-header h2 { margin: 0; font-size: 1.2rem; font-weight: 700; letter-spacing: -0.02em; }
+        .card-header .desc { margin: 0; font-size: 0.85rem; color: var(--muted); margin-top: 3px; }
 
-        /* Sections specific sizing */
-        .brain-section { grid-column: span 1; grid-row: span 2; }
+        /* Row 1: Brain | Body | Eyes. Row 2: Channels | Tasks | Cron | Skills */
+        .brain-section { grid-column: span 1; }
         .body-section { grid-column: span 2; }
+        .vision-section { grid-column: span 1; }
         .connectors-section { grid-column: span 1; }
         .memory-section { grid-column: span 1; }
+        .cron-section { grid-column: span 1; }
         .skills-section { grid-column: span 1; }
-        .vision-section { grid-column: span 1; }
+
+        .cron-section .icon { background: linear-gradient(135deg, rgba(20, 184, 166, 0.2), rgba(6, 182, 212, 0.15)); border: 1px solid rgba(20, 184, 166, 0.25); }
+        .stat-and-link {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.25rem;
+            margin-top: 0.25rem;
+        }
+        .stat-value { font-size: 2rem; font-weight: 800; color: var(--text); letter-spacing: -0.03em; line-height: 1; }
+        .stat-label { font-size: 0.85rem; color: var(--muted); }
+        .stat-and-link .setup-link { margin-top: 0.5rem; }
 
         /* Responsive */
-        @media (max-width: 900px) {
-            .bento-grid { grid-template-columns: 1fr; }
-            .brain-section, .body-section, .connectors-section, .memory-section, .skills-section { grid-column: span 1; }
+        @media (max-width: 1100px) {
+            .bento-grid { grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+            .brain-section, .body-section, .vision-section, .connectors-section, .memory-section, .cron-section, .skills-section { grid-column: span 1; }
+            .body-section { grid-column: span 2; }
+        }
+        @media (max-width: 700px) {
+            .dashboard-container { padding: 0 1rem 3rem; }
+            .bento-grid { grid-template-columns: 1fr; gap: 1.25rem; }
+            .body-section { grid-column: span 1; }
+            .bento-card { padding: 1.5rem; }
         }
 
         /* Brain Lists */
-        .status-list { display: flex; flex-direction: column; gap: 0.65rem; }
+        .status-list { display: flex; flex-direction: column; gap: 0.75rem; }
         .status-list .empty-state { text-align: center; padding: 1.5rem; color: var(--muted); font-size: 0.9rem; font-style: italic; }
         .status-row {
             display: flex;
             align-items: center;
             gap: 0.85rem;
-            padding: 0.7rem 1rem;
+            padding: 0.85rem 1.15rem;
             border-radius: 12px;
             background: var(--bg-main);
             transition: all 0.2s;
@@ -537,6 +590,7 @@ export default function Dashboard() {
         .status-row .label { font-weight: 600; color: var(--text); font-size: 0.95rem; }
         .status-row.active .label { color: var(--success-dark, #15803d); }
         .status-row .model-name { font-size: 0.75rem; opacity: 0.85; color: var(--muted); }
+        .status-row .model-list { font-size: 0.75rem; opacity: 0.8; color: var(--muted); display: block; margin-top: 0.2rem; }
         .status-row .state { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--success); }
         .provider-logo-img { border: 1px solid var(--border); }
 
@@ -544,13 +598,13 @@ export default function Dashboard() {
         .vitals-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
-            gap: 1rem;
+            gap: 1.25rem;
             align-items: center;
         }
         .vital-item {
             text-align: center;
             background: var(--bg-main);
-            padding: 1rem;
+            padding: 1.25rem 1rem;
             border-radius: 14px;
             border: 1px solid transparent;
         }
@@ -594,12 +648,12 @@ export default function Dashboard() {
         .btn-sm { padding: 4px 12px; font-size: 0.8rem; }
 
         /* Connectors */
-        .connectors-list { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
+        .connectors-list { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.25rem; }
         .connector-card {
             display: flex;
             align-items: center;
-            gap: 0.85rem;
-            padding: 0.9rem 1rem;
+            gap: 1rem;
+            padding: 1rem 1.25rem;
             border-radius: 14px;
             background: var(--bg-main);
             border: 1px solid var(--border);
@@ -626,8 +680,8 @@ export default function Dashboard() {
         .memory-list ul { list-style: none; padding: 0; margin: 0; }
         .memory-list li {
             display: flex;
-            gap: 0.75rem;
-            padding: 0.75rem 0;
+            gap: 0.85rem;
+            padding: 0.85rem 0;
             border-bottom: 1px solid var(--border);
             font-size: 0.9rem;
         }
@@ -637,15 +691,6 @@ export default function Dashboard() {
         .del-btn:hover { color: var(--destroy); }
         .empty-state { text-align: center; padding: 2rem; color: var(--muted); font-size: 0.9rem; font-style: italic; }
 
-        /* Skills */
-        .skills-cloud { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1rem; }
-        .skill-tag {
-            background: var(--bg-main);
-            padding: 0.25rem 0.75rem;
-            border-radius: 20px;
-            font-size: 0.8rem;
-            border: 1px solid var(--border);
-        }
         .setup-link {
             display: block;
             text-align: right;

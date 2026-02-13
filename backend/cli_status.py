@@ -35,44 +35,29 @@ def main():
         print(f"{RED}Error: Could not reach API at {api_base}{RESET}")
         sys.exit(1)
 
-    # --- Server Health ---
+    # --- Server & Channels (compact) ---
     if server and server.get("ok"):
         cpu = server.get("cpu_percent", 0)
         ram = server.get("ram", {})
         uptime = server.get("uptime_str", "?")
-        
         ram_str = f"{ram.get('used_gb', 0)}/{ram.get('total_gb', 0)}GB"
-        
-        print(f"{WHITE}{BOLD}Server Health:{RESET}")
-        print(f"  CPU: {CYAN}{cpu}%{RESET} | RAM: {CYAN}{ram_str}{RESET} | Uptime: {CYAN}{uptime}{RESET}")
-        print("")
+        print(f"  {WHITE}server{RESET}   {CYAN}cpu {cpu}%{RESET}  {CYAN}ram {ram_str}{RESET}  {CYAN}uptime {uptime}{RESET}")
 
-    # --- Channels (Integrations) ---
     integrations = status.get("integrations", {})
-    t_status = f"{GREEN}Active{RESET}" if integrations.get("telegram") else f"{GRAY}Disconnected{RESET}"
-    w_status = f"{GREEN}Active{RESET}" if integrations.get("whatsapp") else f"{GRAY}Disconnected{RESET}"
+    t = f"{GREEN}active{RESET}" if integrations.get("telegram") else f"{GRAY}off{RESET}"
+    w = f"{GREEN}active{RESET}" if integrations.get("whatsapp") else f"{GRAY}off{RESET}"
+    print(f"  {WHITE}channels{RESET} telegram {t}  whatsapp {w}")
 
-    print(f"{WHITE}{BOLD}Channels:{RESET}")
-    print(f"  Telegram : {t_status}")
-    print(f"  WhatsApp : {w_status}")
-    print("")
-
-    # --- Skills ---
-    skills = status.get("skills", [])
-    enabled_skills = [s for s in skills if s.get("enabled")]
-    
-    if enabled_skills:
-        print(f"{WHITE}{BOLD}Active Skills:{RESET}")
-        # Print in columns or simple list
-        # Let's do a simple space-separated list with bullets
-        skill_names = [f"● {s['name']}" for s in enabled_skills]
-        # Join them with some spacing, maybe 3 per line or just wrap
-        # Simple join for now
-        print(f"  {BLUE}" + f"{RESET}   {BLUE}".join(skill_names) + f"{RESET}")
-    else:
-        print(f"{WHITE}{BOLD}Active Skills:{RESET}")
-        print(f"  {GRAY}None{RESET}")
-    print("")
+    # Skills list only when running `asta status` (not on restart/update/start)
+    show_skills = os.environ.get("ASTA_STATUS_FULL") == "1" or "--full" in sys.argv
+    if show_skills:
+        skills = status.get("skills", [])
+        enabled_skills = [s for s in skills if s.get("enabled")]
+        if enabled_skills:
+            skill_names = [f"● {s['name']}" for s in enabled_skills]
+            print(f"  {WHITE}skills{RESET}   {BLUE}" + f"{RESET}   {BLUE}".join(skill_names) + f"{RESET}")
+        else:
+            print(f"  {WHITE}skills{RESET}   {GRAY}none{RESET}")
 
 if __name__ == "__main__":
     main()

@@ -13,6 +13,12 @@ A personal AI workspace that runs on **web**, **Telegram**, and **WhatsApp** wit
 - Unified memory: chat history, allowed local files, learned knowledge (RAG), and channel history.
 - Native setup: no Docker required.
 
+## Requirements
+
+- **Backend:** Python 3.12 or 3.13 (see `backend/requirements.txt`). Python 3.14 is not yet supported (pydantic/ChromaDB).
+- **Frontend:** Node 18+ (npm or pnpm).
+- **Optional:** Ollama for local AI and RAG embeddings (`ollama pull nomic-embed-text`).
+
 ## Quick Start
 
 ### 1. Clone and configure
@@ -27,7 +33,10 @@ Add API keys in `backend/.env` if needed.
 
 ### 2. Start with the control script (recommended)
 
+Backend uses **Python 3.12 or 3.13** (auto-picked; 3.14 not supported). On first run, the script creates a venv and installs deps.
+
 ```bash
+./asta.sh setup     # optional: create backend venv + frontend deps first
 ./asta.sh install   # optional: add 'asta' command to your path
 asta start          # or: ./asta.sh start
 ```
@@ -39,10 +48,12 @@ Open:
 
 ### 3. Manual start (alternative)
 
+Backend needs **Python 3.12 or 3.13** (3.14 not yet supported by pydantic/ChromaDB). If you only have 3.14: `brew install python@3.12`.
+
 ```bash
 # Backend
 cd backend
-python3 -m venv .venv
+python3.12 -m venv .venv   # or python3.13 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8010
@@ -66,9 +77,11 @@ If the panel shows "API off", start the backend first or use **Settings -> Run t
 
 ## Core Features
 
+- **Dashboard**: system overview — Brain (AI providers), Body (CPU/RAM/disk + model), Eyes (vision), Channels, Tasks, Schedule (cron), Capabilities (skills count).
 - **Chat**: provider routing + automatic skill execution.
 - **Files**: local knowledge files + allowed paths. User context (who you are) lives in **workspace/USER.md**.
 - **Learning**: "learn about X for Y minutes" with retrievable context.
+- **Cron**: list, add, update, and remove recurring jobs (e.g. daily auto-updater). Settings → Auto-updater for schedule.
 - **Audio Notes**: upload/voice transcription and summary (faster-whisper).
 - **Channels**: Telegram + WhatsApp integrations in one place.
 - **Settings/Skills**: key management, default model, toggles, and backend controls.

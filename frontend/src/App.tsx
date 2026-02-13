@@ -9,6 +9,7 @@ import AudioNotes from "./pages/AudioNotes";
 import Skills from "./pages/Skills";
 import Settings from "./pages/Settings";
 import Channels from "./pages/Channels";
+import Cron from "./pages/Cron";
 import { api } from "./api/client";
 import "./index.css";
 
@@ -68,6 +69,12 @@ const ICONS = {
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </svg>
+  ),
+  cron: (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" />
+      <polyline points="12 6 12 12 16 14" />
     </svg>
   ),
 };
@@ -141,7 +148,7 @@ export default function App() {
             </NavLink>
             <NavLink to="/learning" onClick={() => setNavOpen(false)}>
               <span className="nav-icon">{ICONS.learning}</span>
-              <span className="nav-label">Learning</span>
+              <span className="nav-label">RAG</span>
             </NavLink>
             <NavLink to="/audio-notes" onClick={() => setNavOpen(false)}>
               <span className="nav-icon">{ICONS.audio}</span>
@@ -155,6 +162,10 @@ export default function App() {
             <NavLink to="/channels" onClick={() => setNavOpen(false)}>
               <span className="nav-icon">{ICONS.channels}</span>
               <span className="nav-label">Channels</span>
+            </NavLink>
+            <NavLink to="/cron" onClick={() => setNavOpen(false)}>
+              <span className="nav-icon">{ICONS.cron}</span>
+              <span className="nav-label">Cron</span>
             </NavLink>
             <NavLink to="/settings" onClick={() => setNavOpen(false)}>
               <span className="nav-icon">{ICONS.settings}</span>
@@ -173,6 +184,7 @@ export default function App() {
               <Route path="/audio-notes" element={<AudioNotes />} />
               <Route path="/skills" element={<Skills />} />
               <Route path="/channels" element={<Channels />} />
+              <Route path="/cron" element={<Cron />} />
               <Route path="/settings" element={<Settings />} />
             </Routes>
           </div>

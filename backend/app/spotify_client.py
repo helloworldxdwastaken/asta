@@ -94,6 +94,28 @@ async def search_spotify_tracks(query: str, access_token: str, max_results: int 
         return []
 
 
+async def search_spotify_artists(query: str, access_token: str, max_results: int = 3) -> list[dict[str, Any]]:
+    """Search Spotify for artists; return list of {name, uri}."""
+    query = (query or "").strip()
+    if not query:
+        return []
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                SEARCH_URL,
+                params={"q": query, "type": "artist", "limit": max_results},
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=10.0,
+            )
+            r.raise_for_status()
+            data = r.json()
+        artists = data.get("artists", {}).get("items") or []
+        return [{"name": a.get("name") or "", "uri": a.get("uri") or ""} for a in artists if a.get("uri")]
+    except Exception as e:
+        logger.warning("Spotify artist search failed: %s", e)
+        return []
+
+
 async def spotify_search_if_configured(query: str) -> list[dict[str, Any]]:
     """If Spotify credentials are set (Settings UI or env), get token and search; else return []."""
     from app.keys import get_api_key

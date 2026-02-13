@@ -2,6 +2,32 @@
 
 All notable changes to Asta are documented here.
 
+## [1.1.0] - 2026-02-14
+
+### Added
+
+- **Cron tab** — New sidebar page to list and remove scheduled cron jobs. Shows name, schedule (5-field cron), timezone, message, created date, and Remove button. API: `PUT /api/cron/{id}` to update schedule/timezone/message.
+- **Auto-updater cron** — When the auto-updater skill is present (`workspace/skills/auto-updater-100`), backend creates a "Daily Auto-Update" cron job on startup (4 AM daily) if none exists. Settings → Auto-updater lets you change schedule and timezone.
+- **Dashboard: Schedule & Capabilities** — Schedule card shows count of scheduled cron jobs with link to Cron tab. Capabilities card shows total active skills count (no full list) with link to Skills.
+- **Dashboard: The Eyes next to Brain & Body** — Vision panel moved to top row (Brain | Body | Eyes). Four-column layout; row 2: Channels, Tasks, Schedule, Capabilities.
+- **Dashboard: CPU model** — Body panel shows CPU model name and core count (e.g. "Apple M2 · 8 cores") from server status. Backend `GET /api/settings/server-status` now returns `cpu_model` and `cpu_count`.
+- **Ollama models in status** — Backend `GET /api/settings/available-models` returns list of Ollama local models for the dashboard.
+
+### Fixed
+
+- **Local time from USER.md** — Location value was read with markdown italics (e.g. `_Holon,IL_`). Strip underscores when parsing; normalize country codes (e.g. "Holon,IL" → "Holon, Israel", "Chicago, USA" → "Chicago, United States") before geocoding so "What time is it?" returns user's local time.
+- **Spotify: Play artist** — "Play Bob Dylan" now works: when no track matches, Asta searches artists and starts playback with `context_uri=spotify:artist:...` so you hear the artist’s content instead of "I couldn't find...".
+- **Dashboard: Ollama model display** — Only show an Ollama model that is actually installed. If the configured default (e.g. llama3.2) is not in `ollama list`, show the first available model instead of the missing one.
+- **Dashboard: centered layout** — Main content uses full width (main-inner `max-width: 100%`); dashboard container centers with `max-width: 1600px` and equal padding so the panel no longer looks shifted right.
+
+### Changed
+
+- **Dashboard layout** — Wider (1600px max), more padding and gap (2rem). Brain no longer shows provider logos; all providers use the same style (label + model line; Ollama adds comma-separated list of installed models).
+- **Cron API** — `PUT /api/cron/{job_id}` with body `{ cron_expr?, tz?, message? }` updates a job and reschedules it.
+- **Requirements** — No change; Python 3.12 or 3.13, `pydantic<2.12`. See `backend/requirements.txt` and `docs/INSTALL.md`.
+
+---
+
 ## [1.0.0] - 2026-02-13
 
 ### Added

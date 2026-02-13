@@ -22,6 +22,8 @@ export type Status = {
 export type ServerStatus = {
   ok: boolean;
   cpu_percent: number;
+  cpu_model?: string;
+  cpu_count?: number;
   ram: { total_gb: number; used_gb: number; percent: number };
   disk: { total_gb: number; used_gb: number; percent: number };
   uptime_str: string;
@@ -36,6 +38,18 @@ export type Skill = {
   available: boolean;
   /** When not available: "Connect" | "Configure paths" | "Set API key" etc. */
   action_hint?: string | null;
+};
+
+export type CronJob = {
+  id: number;
+  name: string;
+  cron_expr: string;
+  tz: string | null;
+  message: string;
+  channel: string;
+  channel_target: string;
+  enabled: number;
+  created_at: string;
 };
 
 export const api = {
@@ -91,6 +105,10 @@ export const api = {
     }),
   driveStatus: () => req<{ connected: boolean; summary: string }>("/drive/status"),
   driveList: () => req<{ files: unknown[]; connected: boolean }>("/drive/list"),
+  ragStatus: () =>
+    req<{ ok: boolean; message: string; provider: string | null; detail?: string | null; ollama_url?: string | null; ollama_reason?: string; ollama_ok?: boolean; store_error?: boolean }>("/rag/status"),
+  ragCheckOllama: (url: string) =>
+    req<{ ok: boolean; detail: string | null; ollama_url: string; ollama_reason?: string }>(`/rag/check-ollama?url=${encodeURIComponent(url)}`),
   ragLearn: (topic: string, text: string) =>
     req<{ ok: boolean; topic: string }>("/rag/learn", {
       method: "POST",
@@ -145,6 +163,9 @@ export const api = {
     }),
   getModels: () =>
     req<{ models: Record<string, string>; defaults: Record<string, string> }>("/settings/models"),
+  /** Available models per provider (e.g. Ollama local models for Dashboard Brain) */
+  getAvailableModels: () =>
+    req<{ ollama: string[] }>("/settings/available-models"),
   setModel: (provider: string, model: string) =>
     req<{ provider: string; model: string }>("/settings/models", {
       method: "PUT",
@@ -187,5 +208,21 @@ export const api = {
   getServerStatus: () => req<ServerStatus>("/settings/server-status"),
   checkUpdate: () => req<{ update_available: boolean; local: string; remote: string; error?: string }>("/settings/check-update"),
   triggerUpdate: () => req<{ ok: boolean; message: string }>("/settings/update", { method: "POST" }),
+
+  /** Cron (scheduled recurring jobs) */
+  getCronJobs: (userId = "default") =>
+    req<{ cron_jobs: CronJob[] }>(`/cron?user_id=${encodeURIComponent(userId)}`),
+  deleteCronJob: (jobId: number) =>
+    req<{ ok: boolean; id: number }>(`/cron/${jobId}`, { method: "DELETE" }),
+  updateCronJob: (jobId: number, body: { cron_expr?: string; tz?: string; message?: string }) =>
+    req<{ ok: boolean; id: number; cron_expr: string; tz: string | null }>(`/cron/${jobId}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  addCronJob: (body: { name: string; cron_expr: string; message: string; tz?: string; channel?: string; channel_target?: string }) =>
+    req<{ id: number; name: string; cron_expr: string }>("/cron", {
+      method: "POST",
+      body: JSON.stringify({ ...body, channel: body.channel ?? "web", channel_target: body.channel_target ?? "" }),
+    }),
 };
 

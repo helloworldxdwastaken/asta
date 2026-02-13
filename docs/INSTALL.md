@@ -1,6 +1,6 @@
 # Asta — Installation (macOS, Linux, Windows)
 
-**Native install only** (no Docker). You need **Python 3.11+** and **Node 18+**.
+**Native install only** (no Docker). You need **Python 3.12 or 3.13** (3.14 not yet supported by pydantic/ChromaDB) and **Node 18+**.
 
 ---
 
@@ -27,9 +27,11 @@ Copy `.env.example` to **`backend/.env`** and add API keys (optional for first r
 
 ### 2. Backend (macOS / Linux)
 
+Use **Python 3.12 or 3.13** (e.g. `brew install python@3.12`). Then:
+
 ```bash
 cd backend
-python3 -m venv .venv
+python3.12 -m venv .venv   # or python3.13 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8010

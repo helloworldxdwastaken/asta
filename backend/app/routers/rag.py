@@ -2,9 +2,22 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from app.rag.service import get_rag
+from app.rag.service import get_rag, check_rag_status, check_ollama_at_url
 
 router = APIRouter()
+
+
+@router.get("/rag/status")
+async def rag_status():
+    """Check if RAG is working (ChromaDB + at least one embedding provider)."""
+    return await check_rag_status()
+
+
+@router.get("/rag/check-ollama")
+async def rag_check_ollama(url: str):
+    """Check if Ollama is reachable at the given URL (no ChromaDB). For UI 'Check connection'."""
+    import asyncio
+    return await asyncio.to_thread(check_ollama_at_url, url)
 
 
 @router.get("/rag/learned")
@@ -23,7 +36,7 @@ class LearnIn(BaseModel):
 
 @router.post("/rag/learn")
 async def rag_learn(body: LearnIn):
-    """Ingest text under a topic for later RAG. Uses Ollama, then OpenAI, then Google for embeddings."""
+    """Ingest text under a topic for later RAG. Uses Ollama (nomic-embed-text) for embeddings."""
     rag = get_rag()
     await rag.add(body.topic, body.text, doc_id=body.doc_id)
     return {"ok": True, "topic": body.topic}

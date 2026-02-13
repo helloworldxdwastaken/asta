@@ -17,14 +17,43 @@ router = APIRouter()
 
 
 async def _ollama_reachable() -> bool:
-    """Return True only if Ollama is running and responding at the configured base URL."""
-    base = get_settings().ollama_base_url.rstrip("/")
+    """Return True only if Ollama is running and responding at the configured base URL (and response looks like Ollama)."""
+    base = (get_settings().ollama_base_url or "").strip() or "http://localhost:11434"
+    base = base.rstrip("/")
     try:
-        async with httpx.AsyncClient(timeout=2.0) as client:
+        async with httpx.AsyncClient(timeout=3.0) as client:
             r = await client.get(f"{base}/api/tags")
-            return r.status_code == 200
+            if r.status_code != 200:
+                return False
+            data = r.json()
+            # Ollama /api/tags returns {"models": [...]}; ensure we got a real Ollama response
+            return isinstance(data, dict) and "models" in data
     except Exception:
         return False
+
+
+async def _ollama_list_models() -> list[str]:
+    """Return list of Ollama model names (e.g. ['llama3.2', 'mistral']). Empty if Ollama unreachable."""
+    base = (get_settings().ollama_base_url or "").strip() or "http://localhost:11434"
+    base = base.rstrip("/")
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            r = await client.get(f"{base}/api/tags")
+            if r.status_code != 200:
+                return []
+            data = r.json()
+            models = data.get("models") if isinstance(data, dict) else []
+            if not isinstance(models, list):
+                return []
+            names = []
+            for m in models:
+                if isinstance(m, dict) and m.get("name"):
+                    names.append(str(m["name"]).strip())
+                elif isinstance(m, dict) and m.get("model"):
+                    names.append(str(m["model"]).strip())
+            return sorted(names)
+    except Exception:
+        return []
 
 
 async def _spotify_configured(db) -> bool:
@@ -143,6 +172,17 @@ async def get_models(user_id: str = "default"):
     }
 
 
+@router.get("/settings/available-models")
+@router.get("/api/settings/available-models")
+async def get_available_models():
+    """List available models per provider (e.g. Ollama local models). For dashboard Brain section."""
+    ollama_models = await _ollama_list_models()
+    return {
+        "ollama": ollama_models,
+        # Other providers use API keys; we don't list their model catalogs here
+    }
+
+
 class ModelIn(BaseModel):
     provider: str
     model: str  # empty string = use provider default
@@ -208,7 +248,7 @@ async def get_status(user_id: str = "default"):
     skills_available = {
         "files": files_avail,
         "drive": False,  # OAuth not wired yet; stub only
-        "rag": True,
+        "rag": ollama_ok,
         "time": True,
         "weather": True,
         "google_search": True,
@@ -428,6 +468,7 @@ async def get_skills(user_id: str = "default"):
     s = get_settings()
     toggles = await db.get_all_skill_toggles(user_id)
     api_status = await db.get_api_keys_status()
+    ollama_ok = await _ollama_reachable()
     files_available = bool(s.asta_allowed_paths and s.asta_allowed_paths.strip()) or bool(s.workspace_path)
     try:
         files_available = files_available or bool(await db.get_allowed_paths(user_id))
@@ -436,7 +477,7 @@ async def get_skills(user_id: str = "default"):
     skills_available = {
         "files": files_available,
         "drive": False,  # OAuth not wired yet
-        "rag": True,
+        "rag": ollama_ok,
         "time": True,
         "weather": True,
         "google_search": True,
@@ -453,6 +494,7 @@ async def get_skills(user_id: str = "default"):
     action_hints = {
         "files": "Configure paths",
         "drive": "Connect",
+        "rag": "Set up Ollama",
         "spotify": "Connect",
         "silly_gif": "Set API key",
     }

@@ -1,7 +1,7 @@
 fastapi
 uvicorn
 python-multipart
-pydantic
+pydantic<2.12
 pydantic-settings
 python-dotenv
 aiosqlite

@@ -8,13 +8,9 @@ class SillyGifSkill(Skill):
         return "silly_gif"
 
     def check_eligibility(self, text: str, user_id: str) -> bool:
-        # Proactive skill: conversational messages, not questions (reduces over-triggering)
+        # Proactive skill: conversational messages, not questions. GIF rate is controlled by the 10–20% instruction in the handler.
         t = (text or "").strip()
         if len(t) < 5 or len(t) >= 100 or "?" in t:
-            return False
-        # Don't trigger on short affirmations (e.g. "Yeah do that") so file-save follow-ups use files skill
-        lower = t.lower()
-        if lower in ("yeah", "yes", "do that", "ok", "sure", "go ahead", "please", "do it", "yep", "okay") or (len(t) < 25 and any(w in lower for w in ("do it", "go ahead", "yes", "yeah", "ok", "sure"))):
             return False
         return True
 

@@ -66,12 +66,22 @@ Quick reference for errors you might see and how to fix them.
 |---------|-------|----------|
 | **Connect Spotify / reconnect** | Token expired or credentials changed | Settings → Spotify → Connect Spotify again. |
 | **No devices available** | Spotify app not open on any device | Open Spotify on phone, computer, or speaker, then try again. |
+| **"I couldn't find X on Spotify"** for an artist | Old behavior only searched tracks | From 1.1.0, "Play [Artist]" searches artists and plays the artist context. Ensure backend is up to date. |
 
 ### Time & weather
 
 | Symptom | Cause | Solution |
 |---------|-------|----------|
 | **I don't know your location** | No location saved | Add **Location** in workspace/USER.md or say "I'm in City, Country" in Chat. |
+| **Always get UTC, not local time** | Location in USER.md not geocoding | Use **City, Country** or **City, CountryCode** (e.g. `Holon, Israel` or `Holon,IL`, `Chicago, USA`). Don’t wrap in italics only; we strip `_`. If it still fails, use full country name (e.g. `Israel`, `United States`). |
+
+### Learning / RAG
+
+| Symptom | Cause | Solution |
+|---------|-------|----------|
+| **RAG not available** / **Ollama not available** | RAG uses Ollama for embeddings; Ollama is not running or the model is missing | <code>curl -fsSL https://ollama.com/install.sh | sh</code> then <code>ollama pull nomic-embed-text</code>. Set <code>OLLAMA_BASE_URL</code> in <code>backend/.env</code> if Ollama is on another host. Then refresh the Learning page. |
+| **RAG store failed: …** | ChromaDB or FTS DB could not be created | Check disk space and write permissions for <code>backend/chroma_db</code> and <code>backend/rag_fts.db</code>. Default paths can be overridden with <code>ASTA_CHROMA_PATH</code> and <code>ASTA_FTS_PATH</code> in <code>backend/.env</code>. |
+| **Learned content but AI doesn’t use it** | RAG skill disabled or no relevant chunks | Enable **Learning (RAG)** in Settings → Skills. Ask questions that match the topic you learned. If you used a different topic name, refer to it (e.g. “What do you know about [topic]?”). |
 
 ---
 
@@ -108,6 +118,15 @@ Quick reference for errors you might see and how to fix them.
 |---------|-------|----------|
 | **Telegram handler error** | Bot token invalid or network issue | Check `TELEGRAM_BOT_TOKEN` in Settings or `backend/.env`. Get token from [@BotFather](https://t.me/BotFather). |
 | **WhatsApp QR / bridge not connecting** | Bridge not running | Start `services/whatsapp` with `ASTA_API_URL=http://localhost:8010`. Set `ASTA_WHATSAPP_BRIDGE_URL` in `.env` if bridge runs elsewhere. |
+
+---
+
+### Cron
+
+| Symptom | Cause | Solution |
+|---------|-------|----------|
+| **Daily Auto-Update not created** | Auto-updater skill missing or backend not restarted | Ensure `workspace/skills/auto-updater-100` exists and restart backend. Or add a cron manually in the **Cron** tab or via `POST /api/cron`. |
+| **Cron job not firing** | Scheduler not loaded or job disabled | Restart backend (cron jobs reload on startup). In Cron tab, ensure the job is listed and enabled. |
 
 ---
 

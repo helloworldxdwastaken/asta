@@ -30,8 +30,31 @@ async def lifespan(app: FastAPI):
         from app.reminders import reload_pending_reminders
         await reload_pending_reminders()
         try:
-            from app.cron_runner import reload_cron_jobs
+            from app.cron_runner import reload_cron_jobs, add_cron_job_to_scheduler
+            from app.tasks.scheduler import get_scheduler
             await reload_cron_jobs()
+            # Auto-updater skill: ensure "Daily Auto-Update" cron exists when skill is present
+            try:
+                ws = get_settings().workspace_path
+                auto_updater_skill = ws and (ws / "skills" / "auto-updater-100").is_dir()
+                if auto_updater_skill:
+                    db = get_db()
+                    jobs = await db.get_cron_jobs("default")
+                    has_auto_update = any((j.get("name") or "").strip() == "Daily Auto-Update" for j in jobs)
+                    if not has_auto_update:
+                        job_id = await db.add_cron_job(
+                            "default",
+                            "Daily Auto-Update",
+                            "0 4 * * *",
+                            "Run daily auto-updates: check for Asta updates and update all skills. Report what was updated.",
+                            tz="",
+                            channel="web",
+                            channel_target="",
+                        )
+                        add_cron_job_to_scheduler(get_scheduler(), job_id, "0 4 * * *", None)
+                        logger.info("Created Daily Auto-Update cron job for auto-updater skill")
+            except Exception as e:
+                logger.debug("Could not ensure auto-updater cron: %s", e)
         except Exception as e:
             logger.exception("Failed to reload cron jobs: %s", e)
     except Exception as e:

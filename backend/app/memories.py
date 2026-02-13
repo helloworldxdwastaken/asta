@@ -1,4 +1,4 @@
-"""Legacy data/User.md: location, preferred name, facts. Primary user context = workspace/USER.md; location is read from workspace first, then this file as fallback."""
+"""User context: workspace/USER.md when workspace is set, else data/User.md (legacy). Single source for 'About you'."""
 from __future__ import annotations
 import os
 import re
@@ -8,7 +8,7 @@ MAX_FACTS = 10
 
 
 def _data_dir() -> Path:
-    """Asta data directory (for User.md)."""
+    """Asta data directory (for User.md when no workspace)."""
     root = Path(__file__).resolve().parent.parent.parent
     data = root / "data"
     data.mkdir(exist_ok=True)
@@ -16,7 +16,14 @@ def _data_dir() -> Path:
 
 
 def _user_md_path(user_id: str) -> Path:
-    """Path to User.md for the given user."""
+    """Path to User.md: workspace/USER.md when workspace is set, else data/User.md (legacy)."""
+    try:
+        from app.workspace import get_workspace_dir
+        root = get_workspace_dir()
+        if root:
+            return root / "USER.md"
+    except Exception:
+        pass
     data = _data_dir()
     safe_id = "".join(c for c in user_id if c.isalnum() or c in "._-") or "default"
     if safe_id == "default":
@@ -26,17 +33,28 @@ def _user_md_path(user_id: str) -> Path:
     return user_dir / "User.md"
 
 
-USER_MD_TEMPLATE = """# About you
+USER_MD_TEMPLATE = """# USER.md - About You
 
-- **Location:** 
-- **Preferred name:** 
-- **Important:**
-  - 
+_So Asta can help you better. This is the single place for who you are; Asta uses it for context, time/weather, and reminders. Fill in the value after each colon (don't remove the bold labels)._
+
+- **Name:** _(your full name)_
+- **What to call you:** _(what Asta should call you — nickname or preferred name)_
+- **Location:** _(e.g. City, Country — used for timezone, weather, reminders)_
+- **Timezone:** _(optional)_
+- **Notes:**
+
+## Context
+
+_(Projects, preferences, things that matter. Asta uses this when answering.)_
+
+---
+
+The more you put here, the better Asta can adapt — without leaking this outside your workspace.
 """
 
 
 def ensure_user_md(user_id: str) -> None:
-    """Create User.md with template if it doesn't exist."""
+    """Create User.md with template if it doesn't exist (at workspace/USER.md or data/User.md)."""
     p = _user_md_path(user_id)
     if not p.is_file():
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -61,7 +79,7 @@ def get_location_from_memories(user_id: str) -> str | None:
 
 
 def load_user_memories(user_id: str) -> str:
-    """Load User.md content. Returns empty string if file doesn't exist."""
+    """Load User.md content from workspace/USER.md or data/User.md. Returns empty string if file doesn't exist."""
     p = _user_md_path(user_id)
     if not p.is_file():
         return ""
@@ -72,7 +90,7 @@ def load_user_memories(user_id: str) -> str:
 
 
 def save_user_memories(user_id: str, content: str) -> None:
-    """Save User.md content."""
+    """Save User.md content to workspace/USER.md or data/User.md."""
     p = _user_md_path(user_id)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content.strip() + "\n", encoding="utf-8")
@@ -106,18 +124,34 @@ def _parse_memories(content: str) -> dict[str, str | list[str]]:
 
 
 def _format_memories(data: dict[str, str | list[str]]) -> str:
-    """Format structured dict back to User.md markdown."""
-    lines = ["# About you", ""]
-    if data.get("location"):
-        lines.append(f"- **Location:** {data['location']}")
-    if data.get("preferred_name"):
-        lines.append(f"- **Preferred name:** {data['preferred_name']}")
+    """Format structured dict back to User.md markdown (same structure as USER_MD_TEMPLATE)."""
+    name = (data.get("preferred_name") or "").strip()
+    loc = (data.get("location") or "").strip()
+    lines = [
+        "# USER.md - About You",
+        "",
+        "_So Asta can help you better. This is the single place for who you are; Asta uses it for context, time/weather, and reminders._",
+        "",
+        f"- **Name:** {name}",
+        f"- **What to call you:** {name}",
+        f"- **Location:** {loc or '_(e.g. City, Country — used for timezone, weather, reminders)_'}",
+        "- **Timezone:** _(optional)_",
+        "- **Notes:**",
+        "",
+        "## Context",
+        "",
+        "_(Projects, preferences, things that matter. Asta uses this when answering.)_",
+        "",
+    ]
     important = data.get("important") or []
+    for item in important[:MAX_FACTS]:
+        if isinstance(item, str) and item.strip():
+            lines.append(f"- {item.strip()}")
     if important:
-        lines.append("- **Important:**")
-        for item in important[:MAX_FACTS]:
-            if isinstance(item, str) and item.strip():
-                lines.append(f"  - {item.strip()}")
+        lines.append("")
+    lines.append("---")
+    lines.append("")
+    lines.append("The more you put here, the better Asta can adapt — without leaking this outside your workspace.")
     return "\n".join(lines).strip() + "\n"
 
 

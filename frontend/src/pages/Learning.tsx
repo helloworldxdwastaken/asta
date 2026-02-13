@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { api } from "../api/client";
 
 type LearnedTopic = { topic: string; chunks_count: number };
@@ -11,6 +11,10 @@ export default function Learning() {
   const [result, setResult] = useState<string | null>(null);
   const [learned, setLearned] = useState<{ has_learned: boolean; topics: LearnedTopic[] } | null>(null);
   const [learnedError, setLearnedError] = useState<string | null>(null);
+  const [ragStatus, setRagStatus] = useState<{ ok: boolean; message: string; provider: string | null; detail?: string | null; ollama_url?: string | null; ollama_reason?: string; ollama_ok?: boolean; store_error?: boolean } | null>(null);
+  const [ollamaUrl, setOllamaUrl] = useState("http://localhost:11434");
+  const [ollamaCheck, setOllamaCheck] = useState<{ ok: boolean; detail: string | null; ollama_url: string; ollama_reason?: string } | null>(null);
+  const [ollamaChecking, setOllamaChecking] = useState(false);
   const [topicJob, setTopicJob] = useState("");
   const [expandedTopic, setExpandedTopic] = useState<string | null>(null);
   const [topicContent, setTopicContent] = useState<string>("");
@@ -36,6 +40,28 @@ export default function Learning() {
     fetchLearned();
   }, [result]);
 
+  const fetchRagStatus = useCallback(() => {
+    api.ragStatus()
+      .then((s) => {
+        setRagStatus(s);
+        if (s?.ollama_url) setOllamaUrl(s.ollama_url);
+      })
+      .catch(() => setRagStatus({ ok: false, message: "Could not check RAG status.", provider: null, detail: null }));
+  }, []);
+
+  useEffect(() => {
+    fetchRagStatus();
+  }, [fetchRagStatus]);
+
+  const checkOllama = () => {
+    setOllamaChecking(true);
+    setOllamaCheck(null);
+    api.ragCheckOllama(ollamaUrl)
+      .then((r) => setOllamaCheck(r))
+      .catch((e) => setOllamaCheck({ ok: false, detail: (e as Error).message, ollama_url: ollamaUrl }))
+      .finally(() => setOllamaChecking(false));
+  };
+
   const learnNow = () => {
     if (!topicNow.trim() || !textNow.trim()) return;
     setResult(null);
@@ -57,11 +83,149 @@ export default function Learning() {
 
   return (
     <div>
-      <h1 className="page-title">Learning / RAG</h1>
+      <h1 className="page-title">RAG</h1>
       <p className="page-description">
         Add knowledge by topic. The AI will use it when you ask related questions. Uses Ollama for embeddings (run
         <code> ollama pull nomic-embed-text</code>).
       </p>
+
+      {ragStatus !== null && (
+        <>
+          {/* Single clear status banner */}
+          <div
+            className="card"
+            style={{
+              marginBottom: "1rem",
+              backgroundColor: ragStatus.ok
+                ? "var(--success-dim)"
+                : ragStatus.store_error && ragStatus.ollama_ok
+                  ? "var(--warning-dim, rgba(220, 160, 0, 0.12))"
+                  : "var(--error-dim)",
+              borderLeft: `4px solid ${ragStatus.ok ? "var(--success)" : ragStatus.store_error && ragStatus.ollama_ok ? "var(--warning, #d4a000)" : "var(--error)"}`,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                <span
+                  style={{
+                    fontWeight: 700,
+                    color: ragStatus.ok
+                      ? "var(--success)"
+                      : ragStatus.store_error && ragStatus.ollama_ok
+                        ? "var(--warning, #b8860b)"
+                        : "var(--error)",
+                  }}
+                >
+                  {ragStatus.ok
+                    ? "✓ RAG ready"
+                    : ragStatus.store_error && ragStatus.ollama_ok
+                      ? "⚠ Ollama connected; RAG store unavailable"
+                      : "✗ RAG not available"}
+                </span>
+                {ragStatus.ok && ragStatus.provider && (
+                  <span className="muted" style={{ fontSize: "0.9rem" }}>(using {ragStatus.provider})</span>
+                )}
+              </div>
+              {!ragStatus.ok && (
+                <button type="button" onClick={fetchRagStatus} className="button" style={{ fontSize: "0.85rem" }}>
+                  Refresh status
+                </button>
+              )}
+            </div>
+            <p style={{ margin: "0.35rem 0 0 0", fontSize: "0.95rem", color: "var(--text-secondary)" }}>
+              {ragStatus.ok
+                ? ragStatus.message
+                : ragStatus.store_error && ragStatus.ollama_ok
+                  ? "Ollama and the embed model work. The RAG store (ChromaDB) failed to start — see how to fix below."
+                  : ragStatus.message}
+            </p>
+
+            {/* Case 1: Store failed but Ollama is OK — only show ChromaDB fix */}
+            {!ragStatus.ok && ragStatus.store_error && ragStatus.ollama_ok && (
+              <div className="help" style={{ marginTop: "1rem" }}>
+                <p style={{ fontWeight: 600, marginBottom: "0.5rem" }}>Fix the RAG store (ChromaDB)</p>
+                <p style={{ marginBottom: "0.5rem" }}>
+                  The RAG store (ChromaDB) needs <strong>Python 3.12 or 3.13</strong>. Python 3.14 is not yet supported (pydantic-core/PyO3). Use a venv with 3.12 or 3.13:
+                </p>
+                <p style={{ margin: "0 0 0.25rem 0" }}><code>cd backend</code></p>
+                <p style={{ margin: "0 0 0.25rem 0" }}>If needed: <code>brew install python@3.12</code></p>
+                <p style={{ margin: "0 0 0.25rem 0" }}><code>python3.12 -m venv .venv</code> (or <code>python3.13 -m venv .venv</code>)</p>
+                <p style={{ margin: "0 0 0.25rem 0" }}><code>source .venv/bin/activate</code></p>
+                <p style={{ margin: "0 0 0.5rem 0" }}><code>pip install -r requirements.txt</code></p>
+                <p style={{ marginBottom: 0 }}>Then <strong>restart the backend</strong> with this venv active and click Refresh status above.</p>
+                <p className="muted" style={{ marginTop: "0.5rem", marginBottom: 0, fontSize: "0.85rem" }}>
+                  Ollama is verified at <code>{ragStatus.ollama_url}</code>. No need to change it unless you use a different URL.
+                </p>
+              </div>
+            )}
+
+            {/* Case 2: Ollama not OK — show Ollama guidance + address box */}
+            {!ragStatus.ok && !ragStatus.ollama_ok && (() => {
+              const reason = ragStatus.ollama_reason || "unknown";
+              return (
+                <>
+                  <div className="help" style={{ marginTop: "1rem" }}>
+                    {reason === "not_running" && (
+                      <>
+                        <p style={{ fontWeight: 600, marginBottom: "0.5rem" }}>Ollama isn’t running or not installed</p>
+                        <p style={{ marginBottom: "0.35rem" }}><strong>Install:</strong> <code>curl -fsSL https://ollama.com/install.sh | sh</code></p>
+                        <p style={{ marginBottom: "0.35rem" }}>Then: <code>ollama pull nomic-embed-text</code></p>
+                        <p style={{ marginBottom: "0.35rem" }}><strong>Start:</strong> <code>ollama serve</code> or open the Ollama app.</p>
+                        <p style={{ marginTop: "0.5rem", marginBottom: 0 }}>If it’s already running, the backend may be using the wrong address — use the box below to test; if Check works, set <code>OLLAMA_BASE_URL</code> in <code>backend/.env</code> and restart the backend.</p>
+                      </>
+                    )}
+                    {reason === "model_missing" && (
+                      <>
+                        <p style={{ fontWeight: 600, marginBottom: "0.5rem" }}>Ollama is running but the embed model isn’t loaded</p>
+                        <p style={{ margin: "0 0 0.5rem 0" }}><code>ollama pull nomic-embed-text</code></p>
+                        <p style={{ marginBottom: 0 }}>Then refresh this page or click Refresh status.</p>
+                      </>
+                    )}
+                    {reason === "wrong_config" && (
+                      <>
+                        <p style={{ fontWeight: 600, marginBottom: "0.5rem" }}>Embed model not set up correctly</p>
+                        <p style={{ margin: "0 0 0.5rem 0" }}><code>ollama pull nomic-embed-text</code></p>
+                        <p style={{ marginBottom: 0 }}>Keep Ollama running, then refresh or click Refresh status.</p>
+                      </>
+                    )}
+                    {(reason === "unknown" || !reason) && (
+                      <>
+                        <p style={{ fontWeight: 600, marginBottom: "0.5rem" }}>Asta can’t reach Ollama</p>
+                        <p style={{ marginBottom: 0 }}>Test the address below. If Ollama runs on this machine, set <code>OLLAMA_BASE_URL</code> in <code>backend/.env</code> and restart the backend.</p>
+                      </>
+                    )}
+                  </div>
+                  <div style={{ marginTop: "1rem", padding: "1rem", backgroundColor: "var(--bg)", borderRadius: "8px", border: "1px solid var(--border)" }}>
+                    <label style={{ display: "block", fontWeight: 600, marginBottom: "0.5rem", fontSize: "0.9rem" }}>Ollama address</label>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center" }}>
+                      <input
+                        type="url"
+                        value={ollamaUrl}
+                        onChange={(e) => setOllamaUrl(e.target.value)}
+                        placeholder="http://localhost:11434"
+                        style={{ flex: "1 1 200px", minWidth: "200px", padding: "0.5rem 0.6rem", borderRadius: "6px", border: "1px solid var(--border)", background: "var(--bg-secondary)", color: "var(--text)" }}
+                      />
+                      <button type="button" onClick={checkOllama} disabled={ollamaChecking} className="button primary">
+                        {ollamaChecking ? "Checking…" : "Check connection"}
+                      </button>
+                    </div>
+                    {ollamaCheck !== null && (
+                      <div style={{ marginTop: "0.75rem", fontSize: "0.9rem", color: ollamaCheck.ok ? "var(--success)" : "var(--error)" }}>
+                        {ollamaCheck.ok ? "✓ Ollama is reachable and nomic-embed-text works." : `✗ ${ollamaCheck.detail || "Connection failed."}`}
+                      </div>
+                    )}
+                    {ollamaCheck?.ok && (
+                      <p className="muted" style={{ marginTop: "0.5rem", marginBottom: 0, fontSize: "0.85rem" }}>
+                        Set <code>OLLAMA_BASE_URL={ollamaCheck.ollama_url}</code> in <code>backend/.env</code> and restart the backend, then click Refresh status.
+                      </p>
+                    )}
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        </>
+      )}
 
       <div className="card" style={{ backgroundColor: "var(--bg-secondary)", borderLeft: "3px solid var(--primary)" }}>
         <h3 style={{ marginTop: 0 }}>💡 Tip: Prepare content with AI</h3>
