@@ -306,8 +306,8 @@ export default function Dashboard() {
         <div className="update-overlay">
           <div className="update-modal">
             <div className="spinner"></div>
-            <h2>Updating Asta...</h2>
-            <p>Please wait while we pull the latest changes and restart the system. This usually takes 10-20 seconds.</p>
+            <h2>System Restarting...</h2>
+            <p>Asta is pulling the latest code and restarting all services to apply the update. This page will automatically refresh once the system is back online.</p>
           </div>
         </div>
       )}
@@ -368,8 +368,9 @@ export default function Dashboard() {
         .update-badge {
             margin-left: 0.5rem;
             background: var(--primary);
-            color: white;
+            color: #000000;
             font-size: 0.7rem;
+            font-weight: 700;
             padding: 2px 6px;
             border-radius: 4px;
             animation: bounce 2s infinite;
