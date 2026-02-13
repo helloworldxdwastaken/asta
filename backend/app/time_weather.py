@@ -135,7 +135,7 @@ def _normalize_location_for_geocode(loc: str) -> str:
 
 async def geocode(query: str) -> tuple[float, float, str] | None:
     """Resolve a place name to (latitude, longitude, display_name). Returns None if not found."""
-    query = (query or "").strip().strip("_")
+    query = (query or "").strip().strip("_*")
     if not query:
         return None
     query = _normalize_location_for_geocode(query)

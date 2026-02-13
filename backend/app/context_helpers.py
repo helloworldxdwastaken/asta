@@ -155,8 +155,6 @@ async def _get_time_section(db: "Db", user_id: str, extra: dict) -> list[str]:
     from app.time_weather import get_current_time_utc_12h, get_timezone_for_coords
     
     parts = ["--- Time ---"]
-    parts.append("Current time (UTC, 12-hour): " + get_current_time_utc_12h())
-    
     loc = await _get_effective_location(db, user_id)
     if loc:
         parts.append(f"User's location: {loc['location_name']}.")
@@ -176,16 +174,19 @@ async def _get_time_section(db: "Db", user_id: str, extra: dict) -> list[str]:
                 hour12, am_pm = hour - 12, "PM"
             local_str = f"{hour12}:{now_local.minute:02d} {am_pm}"
             logger.info("Context Time Computed: %s for %s (TZ: %s)", local_str, loc['location_name'], tz_name)
-            parts.append(f"User's LOCAL time is {local_str} in {loc['location_name']}. THIS IS THE LIVE VALUE — use it exactly.")
-        except Exception:
-            parts.append("If you cannot compute local time, you may fall back to UTC, but prefer the user's local time when answering.")
+            parts.append(f"User's LOCAL time: {local_str} in {loc['location_name']}. THIS IS THE VALUE TO USE.")
+            parts.append("When the user asks 'what time is it?' or similar: reply ONLY with their local time (e.g. 'It's 1:26 AM'). Do NOT say UTC or give UTC time.")
+        except Exception as e:
+            logger.warning("Local time computation failed for %s: %s", loc.get("location_name"), e)
+            parts.append("Current time (UTC, 12-hour): " + get_current_time_utc_12h())
+            parts.append("If the user asks for time, you may use UTC above, but prefer asking for their location so we can show local time next time.")
     else:
+        parts.append("Current time (UTC, 12-hour): " + get_current_time_utc_12h())
         parts.append("User has not set their location. If they ask for local time, ask where they are; when they reply with a place, the system will save it.")
     
     if extra.get("location_just_set"):
         parts.append(f"(User just set location to: {extra['location_just_set']}. Confirm briefly.)")
     
-    parts.append("When the user asks what time it is: use ONLY the 'User's LOCAL time' value above. Do NOT use any time from recent conversation or memory — that may be wrong. Reply with the exact value from the Time section.")
     parts.append("")
     return parts
 

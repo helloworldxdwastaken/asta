@@ -95,13 +95,14 @@ def get_location_from_workspace_user_md() -> str | None:
         # Match **Location:** value or - **Location:** value
         m = re.search(r"\*\*Location\*\*:\s*(.+)$", line, re.IGNORECASE)
         if m:
-            loc = m.group(1).strip().strip("_-").strip()
-            if loc:
+            loc = m.group(1).strip().strip("_*-").strip()
+            if loc and loc.lower() not in ("(optional)", "optional", ""):
                 return loc
         if ":" in line:
             _, _, v = line.partition(":")
-            if v.strip():
-                return v.strip()
+            v = v.strip().strip("_*-").strip()
+            if v and v.lower() not in ("(optional)", "optional"):
+                return v
     return None
 
 
