@@ -67,7 +67,7 @@ If the panel shows "API off", start the backend first or use **Settings -> Run t
 ## Core Features
 
 - **Chat**: provider routing + automatic skill execution.
-- **Files**: local knowledge files + editable memory (`User.md`) + allowed paths.
+- **Files**: local knowledge files + allowed paths. User context (who you are) lives in **workspace/USER.md**.
 - **Learning**: "learn about X for Y minutes" with retrievable context.
 - **Audio Notes**: upload/voice transcription and summary (faster-whisper).
 - **Channels**: Telegram + WhatsApp integrations in one place.

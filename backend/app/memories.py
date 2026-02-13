@@ -1,4 +1,4 @@
-"""User memories: User.md file with place, preferred name, max 10 important facts."""
+"""Legacy data/User.md: location, preferred name, facts. Primary user context = workspace/USER.md; location is read from workspace first, then this file as fallback."""
 from __future__ import annotations
 import os
 import re
@@ -44,7 +44,14 @@ def ensure_user_md(user_id: str) -> None:
 
 
 def get_location_from_memories(user_id: str) -> str | None:
-    """Extract location string from User.md (e.g. 'Holon, Israel'). Returns None if not set."""
+    """Extract location: first from workspace/USER.md, then from data/User.md (legacy). Returns None if not set."""
+    try:
+        from app.workspace import get_location_from_workspace_user_md
+        loc = get_location_from_workspace_user_md()
+        if loc:
+            return loc
+    except Exception:
+        pass
     content = load_user_memories(user_id)
     if not content:
         return None

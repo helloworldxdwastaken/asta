@@ -1,9 +1,10 @@
-"""Local file management (allowed paths only) + Asta knowledge + User memories."""
-import os
+"""Local file management (allowed paths only) + Asta knowledge + User memories. OpenClaw-style: request access when path not allowed."""
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from app.config import get_settings
+from app.db import get_db
 
 router = APIRouter()
 
@@ -11,29 +12,74 @@ router = APIRouter()
 class FileWriteIn(BaseModel):
     content: str
 
+
+async def write_to_allowed_path(user_id: str, path: str, content: str) -> str:
+    """Write content to an allowed path (or workspace-relative). Returns the absolute path written. Raises ValueError if not allowed."""
+    allowed = await _allowed_paths(user_id)
+    if not allowed:
+        raise ValueError("No allowed paths")
+    path_str = path.strip()
+    p = Path(path_str)
+    if not p.is_absolute():
+        s = get_settings()
+        if s.workspace_path:
+            p = (s.workspace_path / path_str).resolve()
+        elif allowed:
+            p = (Path(allowed[0]) / path_str).resolve()
+        else:
+            raise ValueError("Relative path requires workspace")
+    else:
+        p = p.resolve()
+    try:
+        _ensure_allowed(p, allowed)
+    except PathAccessRequest as e:
+        raise ValueError(f"Path not allowed: {e.requested_path}")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content, encoding="utf-8")
+    return str(p)
+
+
+class PathAccessRequest(Exception):
+    """Raised when a path is not in the allowlist — client can show 'Grant access' and call allow-path."""
+    def __init__(self, requested_path: Path) -> None:
+        self.requested_path = Path(requested_path).resolve()
+
+
 # Virtual roots for Asta knowledge and User memories
 ASTA_KNOWLEDGE = "asta:knowledge"
 USER_MEMORIES = "user:memories"
 
 
-def _allowed_paths() -> list[Path]:
+async def _allowed_paths(user_id: str = "default") -> list[Path]:
+    """Env ASTA_ALLOWED_PATHS + user's DB allowlist + workspace root if set (OpenClaw-style)."""
     s = get_settings()
-    if not s.asta_allowed_paths:
-        return []
-    return [Path(p.strip()).resolve() for p in s.asta_allowed_paths.split(",") if p.strip()]
+    out: list[Path] = []
+    if s.asta_allowed_paths:
+        for p in s.asta_allowed_paths.split(","):
+            if p.strip():
+                out.append(Path(p.strip()).resolve())
+    db = get_db()
+    await db.connect()
+    for p in await db.get_allowed_paths(user_id):
+        if p.strip():
+            out.append(Path(p).resolve())
+    if s.workspace_path:
+        out.append(s.workspace_path)
+    return list(dict.fromkeys(out))  # dedupe preserving order
 
 
-def _ensure_allowed(absolute: Path) -> None:
-    allowed = _allowed_paths()
+def _ensure_allowed(absolute: Path, allowed: list[Path]) -> None:
+    """Raise PathAccessRequest if path is not under any allowed base (so client can show Grant access)."""
+    absolute = absolute.resolve()
     if not allowed:
-        raise HTTPException(403, "No allowed paths configured (ASTA_ALLOWED_PATHS)")
+        raise HTTPException(403, "No allowed paths configured. Add ASTA_ALLOWED_PATHS in Settings or grant access to a path.")
     for base in allowed:
         try:
-            absolute.resolve().relative_to(base)
+            absolute.relative_to(base)
             return
         except ValueError:
             continue
-    raise HTTPException(403, "Path not in allowed list")
+    raise PathAccessRequest(absolute)
 
 
 def _asta_root() -> Path:
@@ -57,8 +103,8 @@ def _asta_docs() -> list[tuple[str, str]]:
 
 @router.get("/files/list")
 async def list_files(directory: str = "", user_id: str = "default"):
-    """List files. Supports virtual roots: asta:knowledge, user:memories."""
-    allowed = _allowed_paths()
+    """List files. Virtual roots: asta:knowledge. User context = workspace/USER.md (not listed here)."""
+    allowed = await _allowed_paths(user_id)
 
     if directory == ASTA_KNOWLEDGE:
         docs = _asta_docs()
@@ -73,16 +119,18 @@ async def list_files(directory: str = "", user_id: str = "default"):
         return {"root": USER_MEMORIES, "entries": entries}
 
     if not allowed:
-        roots = [ASTA_KNOWLEDGE, USER_MEMORIES]
+        roots = [ASTA_KNOWLEDGE]
         return {"roots": roots, "entries": []}
 
-    roots = [ASTA_KNOWLEDGE, USER_MEMORIES] + [str(a) for a in allowed]
+    roots = [ASTA_KNOWLEDGE] + [str(a) for a in allowed]
 
     if directory:
         # Real path
         try:
             p = Path(directory).resolve()
-            _ensure_allowed(p)
+            _ensure_allowed(p, allowed)
+        except PathAccessRequest:
+            raise HTTPException(403, "Path not in allowed list")
         except HTTPException:
             raise
         if not p.is_dir():
@@ -128,13 +176,24 @@ def _read_virtual(path: str, user_id: str) -> str:
 
 @router.get("/files/read")
 async def read_file(path: str, user_id: str = "default"):
-    """Read file content. Supports virtual paths (asta:knowledge/..., user:memories/User.md). Returns JSON {path, content}."""
+    """Read file content. If path not allowed, returns 403 with code PATH_ACCESS_REQUEST so client can show 'Grant access'."""
     if path.startswith(ASTA_KNOWLEDGE) or path.startswith(USER_MEMORIES):
         content = _read_virtual(path, user_id)
         return {"path": path, "content": content}
 
     p = Path(path).resolve()
-    _ensure_allowed(p)
+    allowed = await _allowed_paths(user_id)
+    try:
+        _ensure_allowed(p, allowed)
+    except PathAccessRequest as e:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": "Path not in allowed list. You can grant access in Settings → Allowed paths or use the Grant access button.",
+                "code": "PATH_ACCESS_REQUEST",
+                "requested_path": str(e.requested_path),
+            },
+        )
     if not p.is_file():
         raise HTTPException(404, "Not a file")
     content = p.read_text(encoding="utf-8", errors="replace")
@@ -143,9 +202,42 @@ async def read_file(path: str, user_id: str = "default"):
 
 @router.put("/files/write")
 async def write_file(path: str, body: FileWriteIn, user_id: str = "default"):
-    """Write content to a virtual file. Only user:memories/User.md is writable."""
-    if path != f"{USER_MEMORIES}/User.md" and path != "user:memories/User.md":
-        raise HTTPException(403, "Only user:memories/User.md can be edited via the API")
-    from app.memories import save_user_memories
-    save_user_memories(user_id, body.content)
-    return {"path": path, "ok": True}
+    """Write content. Supports: user:memories/User.md (memories) or any path under allowed/workspace (create file)."""
+    if path == f"{USER_MEMORIES}/User.md" or path == "user:memories/User.md":
+        from app.memories import save_user_memories
+        save_user_memories(user_id, body.content)
+        return {"path": path, "ok": True}
+
+    try:
+        written = await write_to_allowed_path(user_id, path, body.content)
+        return {"path": written, "ok": True}
+    except ValueError as e:
+        raise HTTPException(403, str(e))
+
+
+class AllowPathIn(BaseModel):
+    path: str
+
+
+@router.get("/files/allowed-paths")
+async def get_allowed_paths(user_id: str = "default"):
+    """List allowed path bases (env + user allowlist). For UI to show and manage."""
+    paths = await _allowed_paths(user_id)
+    return {"paths": [str(p) for p in paths]}
+
+
+@router.post("/files/allow-path")
+@router.put("/files/allow-path")
+async def allow_path(body: AllowPathIn, user_id: str = "default"):
+    """Add a path to the user's allowlist (OpenClaw-style: grant access when AI or user requests it). Path can be file or directory. If file, also add parent dir so listing works."""
+    p = Path(body.path.strip()).resolve()
+    if not p.exists():
+        raise HTTPException(400, "Path does not exist")
+    db = get_db()
+    await db.connect()
+    await db.add_allowed_path(user_id, str(p))
+    if p.is_file():
+        parent = p.parent
+        if parent != p and str(parent) != "/":
+            await db.add_allowed_path(user_id, str(parent))
+    return {"path": str(p), "ok": True}

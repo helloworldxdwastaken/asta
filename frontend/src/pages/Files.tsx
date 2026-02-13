@@ -5,7 +5,7 @@ type Entry = { name: string; path: string; dir: boolean; size?: number };
 
 const ROOT_LABELS: Record<string, string> = {
   "asta:knowledge": "Asta knowledge",
-  "user:memories": "About you (User.md)",
+  "user:memories": "About you (legacy)",
 };
 
 export default function Files() {
@@ -18,6 +18,8 @@ export default function Files() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  /** When read returns PATH_ACCESS_REQUEST, show "Grant access" for this path */
+  const [pathAccessRequest, setPathAccessRequest] = useState<string | null>(null);
 
   const isUserMd = (path: string | null) => path?.includes("user:memories") && path?.endsWith("User.md");
 
@@ -57,11 +59,40 @@ export default function Files() {
   }, []);
 
   const openDir = (path: string) => load(path);
-  const openFile = (path: string) => {
+  const openFile = async (path: string) => {
     setSelectedFile(path);
-    setContent("");
+    setContent("Loading…");
     setEditContent("");
-    api.filesRead(path).then((r) => { setContent(r.content); setEditContent(r.content); }).catch((e) => { const err = "Error: " + (e as Error).message; setContent(err); setEditContent(err); });
+    setPathAccessRequest(null);
+    setError(null);
+    try {
+      const result = await api.filesReadWithAccess(path);
+      if ("code" in result && result.code === "PATH_ACCESS_REQUEST") {
+        setPathAccessRequest(result.requested_path);
+        setContent("");
+        setError(result.error || "Path not in allowed list. Grant access below.");
+        return;
+      }
+      if ("content" in result) {
+        setContent(result.content);
+        setEditContent(result.content);
+      }
+    } catch (e) {
+      const msg = (e as Error).message;
+      setError(msg);
+      setContent("Error: " + msg);
+    }
+  };
+  const grantAccessAndRetry = async () => {
+    if (!pathAccessRequest || !selectedFile) return;
+    setError(null);
+    try {
+      await api.filesAllowPath(pathAccessRequest);
+      setPathAccessRequest(null);
+      await openFile(selectedFile);
+    } catch (e) {
+      setError((e as Error).message);
+    }
   };
 
   const saveUserMd = () => {
@@ -86,9 +117,24 @@ export default function Files() {
     <div>
       <h1 className="page-title">Files</h1>
       <p className="page-description">
-        Asta knowledge (docs), your memories (User.md), and allowed paths. AI uses this context when you chat.
+        Asta knowledge (docs) and allowed paths. User context (who you are) is in workspace/USER.md. AI uses this when you chat.
       </p>
       {error && <div className="alert alert-error">{error}</div>}
+      {pathAccessRequest && (
+        <div className="card" style={{ marginTop: "0.5rem" }}>
+          <p><strong>Path not allowed.</strong> Asta (or you) requested access to:</p>
+          <code style={{ wordBreak: "break-all", display: "block", margin: "0.5rem 0" }}>{pathAccessRequest}</code>
+          <p className="help">Granting adds this path to your allowlist so the AI can read files here. You can revoke by removing it from backend/.env or a future Settings UI.</p>
+          <div className="actions">
+            <button type="button" className="btn btn-primary" onClick={grantAccessAndRetry}>
+              Grant access
+            </button>
+            <button type="button" className="btn btn-secondary" onClick={() => { setPathAccessRequest(null); setError(null); setContent(""); }}>
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
       {roots.length === 0 && !error && (
         <div className="card">
           <p>No roots available. Add ASTA_ALLOWED_PATHS (comma-separated dirs) in backend/.env and restart.</p>
@@ -105,7 +151,7 @@ export default function Files() {
                 </button>
               ))}
             </div>
-            <p className="help">Asta knowledge = docs. About you = User.md memories. Add ASTA_ALLOWED_PATHS for more.</p>
+            <p className="help">Asta knowledge = docs. Who you are = workspace/USER.md. Env ASTA_ALLOWED_PATHS + granted paths (and workspace) are allowed. If a path is denied, open the file to see &quot;Grant access&quot;.</p>
           </div>
         </div>
       )}

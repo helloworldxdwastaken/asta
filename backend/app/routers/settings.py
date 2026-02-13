@@ -1,7 +1,13 @@
 """User settings (mood, API keys), status, skills, and notifications list."""
+import io
 import os
+import re
+import shutil
+import tempfile
+import zipfile
 import httpx
-from fastapi import APIRouter, Request
+from pathlib import Path
+from fastapi import APIRouter, Request, UploadFile, File, HTTPException
 from pydantic import BaseModel
 
 from app.config import get_settings
@@ -42,7 +48,7 @@ SKILLS = [
     {"id": "reminders", "name": "Reminders", "description": "Wake me up or remind me at a time. Set your location so times are in your timezone. E.g. 'Wake me up tomorrow at 7am' or 'Remind me at 6pm to call mom'."},
     {"id": "audio_notes", "name": "Audio notes", "description": "Upload audio (meetings, calls, voice memos); Asta transcribes and formats as meeting notes, action items, or conversation summary. No API key for transcription (runs locally)."},
     {"id": "silly_gif", "name": "Silly GIF", "description": "Occasionally replies with a relevant GIF in friendly chats. Requires Giphy API key."},
-    {"id": "self_awareness", "name": "Self Awareness", "description": "Allows Asta to read its own documentation and source code context when asked about itself."},
+    {"id": "self_awareness", "name": "Self Awareness", "description": "When asked about Asta (features, docs, how to use): injects README + docs/*.md and workspace context so the model answers from real docs. User context comes from workspace/USER.md."},
     {"id": "server_status", "name": "Server Status", "description": "Monitor system metrics like CPU, RAM, Disk and Uptime. Ask 'server status' or '/status'."},
 ]
 
@@ -194,8 +200,13 @@ async def get_status(user_id: str = "default"):
         "whatsapp": bool(s.asta_whatsapp_bridge_url),
     }
     toggles = await db.get_all_skill_toggles(user_id)
+    files_avail = bool(s.asta_allowed_paths and s.asta_allowed_paths.strip()) or bool(s.workspace_path)
+    try:
+        files_avail = files_avail or bool(await db.get_allowed_paths(user_id))
+    except Exception:
+        pass
     skills_available = {
-        "files": bool(s.asta_allowed_paths and s.asta_allowed_paths.strip()),
+        "files": files_avail,
         "drive": False,  # OAuth not wired yet; stub only
         "rag": True,
         "time": True,
@@ -211,10 +222,10 @@ async def get_status(user_id: str = "default"):
         "server_status": True,
     }
     skills = []
-    for sk in SKILLS:
+    for sk in _get_all_skill_defs():
         sid = sk["id"]
         enabled = toggles.get(sid, True)
-        available = skills_available.get(sid, False)
+        available = skills_available.get(sid, True)
         skills.append({
             "id": sid,
             "name": sk["name"],
@@ -395,6 +406,19 @@ class SkillToggleIn(BaseModel):
     enabled: bool
 
 
+def _get_all_skill_defs():
+    """Built-in + OpenClaw-style workspace skills for API (id, name, description)."""
+    from app.workspace import discover_workspace_skills
+    out = list(SKILLS)
+    for r in discover_workspace_skills():
+        out.append({
+            "id": r.name,
+            "name": r.name.replace("-", " ").replace("_", " ").title(),
+            "description": r.description or "Workspace skill (SKILL.md).",
+        })
+    return out
+
+
 @router.get("/settings/skills")
 @router.get("/api/settings/skills")
 async def get_skills(user_id: str = "default"):
@@ -404,8 +428,13 @@ async def get_skills(user_id: str = "default"):
     s = get_settings()
     toggles = await db.get_all_skill_toggles(user_id)
     api_status = await db.get_api_keys_status()
+    files_available = bool(s.asta_allowed_paths and s.asta_allowed_paths.strip()) or bool(s.workspace_path)
+    try:
+        files_available = files_available or bool(await db.get_allowed_paths(user_id))
+    except Exception:
+        pass
     skills_available = {
-        "files": bool(s.asta_allowed_paths and s.asta_allowed_paths.strip()),
+        "files": files_available,
         "drive": False,  # OAuth not wired yet
         "rag": True,
         "time": True,
@@ -420,13 +449,23 @@ async def get_skills(user_id: str = "default"):
         "silly_gif": api_status.get("giphy_api_key", False),
         "server_status": True,
     }
+    # Hint for UI when skill is not available: "Connect", "Configure paths", "Set API key", etc.
+    action_hints = {
+        "files": "Configure paths",
+        "drive": "Connect",
+        "spotify": "Connect",
+        "silly_gif": "Set API key",
+    }
+    all_skill_defs = _get_all_skill_defs()
     out = []
-    for sk in SKILLS:
+    for sk in all_skill_defs:
         sid = sk["id"]
+        available = skills_available.get(sid, True)
         out.append({
             **sk,
             "enabled": toggles.get(sid, True),
-            "available": skills_available.get(sid, False),
+            "available": available,
+            "action_hint": action_hints.get(sid) if not available else None,
         })
     return {"skills": out}
 
@@ -434,14 +473,64 @@ async def get_skills(user_id: str = "default"):
 @router.put("/settings/skills")
 @router.put("/api/settings/skills")
 async def set_skill_toggle(body: SkillToggleIn, user_id: str = "default"):
-    """Enable or disable a skill for the AI."""
-    valid_ids = {s["id"] for s in SKILLS}
+    """Enable or disable a skill for the AI (built-in or workspace)."""
+    valid_ids = {s["id"] for s in _get_all_skill_defs()}
     if body.skill_id not in valid_ids:
         return {"error": f"Unknown skill_id: {body.skill_id}"}
     db = get_db()
     await db.connect()
     await db.set_skill_enabled(user_id, body.skill_id, body.enabled)
     return {"skill_id": body.skill_id, "enabled": body.enabled}
+
+
+@router.post("/settings/skills/upload")
+@router.post("/api/skills/upload")
+async def upload_skill_zip(file: UploadFile = File(...)):
+    """Upload a zip file containing an OpenClaw-style skill (folder with SKILL.md). Extracts to workspace/skills/<skill_id>/."""
+    from app.workspace import get_workspace_dir
+    root = get_workspace_dir()
+    if not root:
+        raise HTTPException(400, "Workspace not configured. Create a workspace/ directory or set ASTA_WORKSPACE_DIR.")
+    skills_dir = root / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    if not file.filename or not file.filename.lower().endswith(".zip"):
+        raise HTTPException(400, "Upload must be a .zip file.")
+    try:
+        body = await file.read()
+        if len(body) > 20 * 1024 * 1024:
+            raise HTTPException(400, "Zip file too large (max 20 MB).")
+    except Exception as e:
+        raise HTTPException(400, f"Failed to read file: {e}")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        try:
+            with zipfile.ZipFile(io.BytesIO(body), "r") as z:
+                z.extractall(tmp_path)
+        except zipfile.BadZipFile:
+            raise HTTPException(400, "Invalid zip file.")
+        entries = list(tmp_path.iterdir())
+        skill_id = None
+        source_dir = None
+        if len(entries) == 1 and entries[0].is_dir():
+            inner = entries[0]
+            if (inner / "SKILL.md").is_file():
+                skill_id = re.sub(r"[^a-z0-9_-]", "", inner.name.lower()) or inner.name
+                source_dir = inner
+        if not source_dir:
+            if (tmp_path / "SKILL.md").is_file():
+                stem = Path(file.filename).stem
+                skill_id = re.sub(r"[^a-z0-9_-]", "", stem.lower()) or stem
+                source_dir = tmp_path
+        if not skill_id or not source_dir:
+            raise HTTPException(
+                400,
+                "Zip must contain SKILL.md at the root or inside a single top-level folder (OpenClaw style).",
+            )
+        dest = skills_dir / skill_id
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.copytree(source_dir, dest)
+    return {"skill_id": skill_id, "ok": True}
 
 
 def _spotify_redirect_uri(request: Request | None = None) -> str:

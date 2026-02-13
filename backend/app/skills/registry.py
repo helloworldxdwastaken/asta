@@ -13,9 +13,11 @@ from app.skills.self_awareness import SelfAwarenessSkill
 from app.skills.learning import LearningSkill
 from app.skills.audio_notes import AudioNotesSkill
 from app.skills.silly_gif import SillyGifSkill
+from app.skills.markdown_skill import MarkdownSkill
+from app.workspace import discover_workspace_skills
 
-# Instantiate singleton skills
-_ALL_SKILLS: list[Skill] = [
+# Built-in skills (singletons)
+_BUILTIN_SKILLS: list[Skill] = [
     ServerStatusSkill(),
     TimeSkill(),
     WeatherSkill(),
@@ -32,10 +34,17 @@ _ALL_SKILLS: list[Skill] = [
     SillyGifSkill(),
 ]
 
-_SKILLS_BY_NAME = {s.name: s for s in _ALL_SKILLS}
 
 def get_all_skills() -> list[Skill]:
-    return _ALL_SKILLS
+    """All skills: built-in + OpenClaw-style workspace/skills/*/SKILL.md."""
+    out: list[Skill] = list(_BUILTIN_SKILLS)
+    for r in discover_workspace_skills():
+        out.append(MarkdownSkill(r))
+    return out
+
 
 def get_skill_by_name(name: str) -> Skill | None:
-    return _SKILLS_BY_NAME.get(name)
+    for s in get_all_skills():
+        if s.name == name:
+            return s
+    return None

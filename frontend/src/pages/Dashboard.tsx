@@ -5,6 +5,54 @@ import { api } from "../api/client";
 
 type NotificationItem = { id: number; message: string; run_at: string; status: string; channel: string; created_at: string };
 
+const PROVIDER_LOGOS: Record<string, { url: string; initial: string }> = {
+  groq: { url: "https://groq.com/favicon.ico", initial: "G" },
+  gemini: { url: "https://www.google.com/favicon.ico", initial: "G" },
+  google: { url: "https://www.google.com/favicon.ico", initial: "G" },
+  claude: { url: "https://anthropic.com/favicon.ico", initial: "C" },
+  openai: { url: "https://openai.com/favicon.ico", initial: "O" },
+  openrouter: { url: "https://openrouter.ai/favicon.ico", initial: "R" },
+  ollama: { url: "https://ollama.com/favicon.ico", initial: "O" },
+};
+
+function ProviderLogo({ providerKey, size = 32 }: { providerKey: string; size?: number }) {
+  const [fallback, setFallback] = useState(false);
+  const info = PROVIDER_LOGOS[providerKey] ?? { url: "", initial: providerKey.slice(0, 1).toUpperCase() };
+  if (fallback || !info.url) {
+    return (
+      <div
+        className="provider-logo-fallback"
+        style={{
+          width: size,
+          height: size,
+          borderRadius: 10,
+          background: "var(--accent-soft, rgba(99, 102, 241, 0.15))",
+          color: "var(--accent, #6366f1)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontWeight: 700,
+          fontSize: size * 0.5,
+          flexShrink: 0,
+        }}
+      >
+        {info.initial}
+      </div>
+    );
+  }
+  return (
+    <img
+      src={info.url}
+      alt=""
+      width={size}
+      height={size}
+      className="provider-logo-img"
+      style={{ borderRadius: 10, objectFit: "contain", background: "var(--bg-main)", flexShrink: 0 }}
+      onError={() => setFallback(true)}
+    />
+  );
+}
+
 export default function Dashboard() {
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -123,21 +171,25 @@ export default function Dashboard() {
                 { key: "openrouter", label: "OpenRouter" },
                 { key: "ollama", label: "Ollama" },
               ]
-                .sort((a, b) => (apis[b.key] ? 1 : 0) - (apis[a.key] ? 1 : 0))
+                .filter(({ key }) => apis[key])
                 .map(({ key, label }) => {
-                  const isActive = apis[key];
                   const modelName = models[key] || defaults[key] || "Default";
                   return (
-                    <div key={key} className={`status-row ${isActive ? 'active' : 'inactive'}`}>
-                      <span className="status-dot"></span>
-                      <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                    <div key={key} className="status-row active">
+                      <ProviderLogo providerKey={key} size={36} />
+                      <div className="status-row-content">
                         <span className="label">{label}</span>
-                        {isActive && <span style={{ fontSize: '0.75rem', opacity: 0.8 }}>{modelName}</span>}
+                        <span className="model-name">{modelName}</span>
                       </div>
-                      <span className="state">{isActive ? 'Active' : 'Offline'}</span>
+                      <span className="state">Active</span>
                     </div>
                   );
                 })}
+              {Object.keys(apis).every(k => !apis[k]) && (
+                <div className="empty-state">
+                  No AI providers connected. <Link to="/settings" className="dashboard-inline-link">Add API keys in Settings</Link>.
+                </div>
+              )}
             </div>
           </div>
 
@@ -283,19 +335,31 @@ export default function Dashboard() {
             <div className="vision-status">
               <div className="model-badge">
                 <span className="model-label">Multimodal VL</span>
-                <span className="model-name">Nemotron-Nano 12B</span>
+                <span className="model-name">{apis.openrouter ? "Nemotron-Nano 12B" : "—"}</span>
               </div>
-              <div className="vision-active">
-                <div className="vision-dot"></div>
-                <span>Vision Ready</span>
-              </div>
-              <p className="vision-info">
-                Detects images on <strong>Telegram</strong> and automatically switches to
-                Nemotron VL for perceptual analysis.
-              </p>
-            </div>
-            <div style={{ marginTop: 'auto', textAlign: 'center', fontSize: '0.8rem', opacity: 0.6 }}>
-              nvidia/nemotron-nano-12b-v2-vl:free
+              {apis.openrouter ? (
+                <>
+                  <div className="vision-active">
+                    <div className="vision-dot"></div>
+                    <span>Vision Ready</span>
+                  </div>
+                  <p className="vision-info">
+                    Detects images on <strong>Telegram</strong> and automatically uses a vision model (e.g. Nemotron VL) for analysis.
+                  </p>
+                  <div style={{ marginTop: 'auto', textAlign: 'center', fontSize: '0.8rem', opacity: 0.6 }}>
+                    nvidia/nemotron-nano-12b-v2-vl:free
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="vision-inactive" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                    <span style={{ opacity: 0.7 }}>Vision not configured</span>
+                  </div>
+                  <p className="vision-info">
+                    Add an <strong>OpenRouter</strong> API key in Settings → API keys to enable image (vision) support on Telegram.
+                  </p>
+                </>
+              )}
             </div>
           </div>
 
@@ -317,26 +381,27 @@ export default function Dashboard() {
             max-width: 1200px;
             margin: 0 auto;
             padding-bottom: 4rem;
-            /* darker bg for contrast if needed, but grid needs it */
         }
         .dashboard-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 2rem;
-            padding: 1rem 0;
+            padding: 1.25rem 0;
             border-bottom: 1px solid var(--border);
         }
         .dashboard-header .title {
-            font-size: 1.8rem;
-            font-weight: 700;
+            font-size: 1.85rem;
+            font-weight: 800;
             margin: 0;
             color: var(--text-main);
+            letter-spacing: -0.03em;
         }
         .dashboard-header .subtitle {
             margin: 0;
             color: var(--muted);
             font-size: 0.95rem;
+            margin-top: 0.2rem;
         }
         .system-status-badge {
             display: flex;
@@ -400,37 +465,43 @@ export default function Dashboard() {
         .bento-card {
             background: #ffffff;
             border: 1px solid var(--border);
-            border-radius: 16px;
+            border-radius: 18px;
             padding: 1.5rem;
             display: flex;
             flex-direction: column;
-            transition: transform 0.2s, box-shadow 0.2s;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            transition: transform 0.2s ease, box-shadow 0.25s ease, border-color 0.2s;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 6px 16px -4px rgba(0,0,0,0.08);
         }
         .bento-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
-            border-color: var(--accent-dim);
+            transform: translateY(-3px);
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.07), 0 12px 24px -8px rgba(0,0,0,0.12);
+            border-color: var(--accent-dim, rgba(99, 102, 241, 0.25));
         }
         .card-header {
             display: flex;
             gap: 1rem;
-            margin-bottom: 1.5rem;
+            margin-bottom: 1.25rem;
             border-bottom: 1px solid var(--border);
             padding-bottom: 1rem;
         }
         .icon {
-            font-size: 2rem;
-            background: var(--bg-main);
-            width: 50px;
-            height: 50px;
+            font-size: 1.75rem;
+            width: 52px;
+            height: 52px;
             display: flex;
             align-items: center;
             justify-content: center;
-            border-radius: 12px;
+            border-radius: 14px;
+            flex-shrink: 0;
         }
-        .card-header h2 { margin: 0; font-size: 1.1rem; }
-        .card-header .desc { margin: 0; font-size: 0.8rem; color: var(--muted); }
+        .brain-section .icon { background: linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(139, 92, 246, 0.15)); border: 1px solid rgba(99, 102, 241, 0.2); }
+        .body-section .icon { background: linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(16, 185, 129, 0.15)); border: 1px solid rgba(34, 197, 94, 0.2); }
+        .connectors-section .icon { background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(14, 165, 233, 0.15)); border: 1px solid rgba(59, 130, 246, 0.2); }
+        .memory-section .icon { background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(234, 179, 8, 0.15)); border: 1px solid rgba(245, 158, 11, 0.25); }
+        .skills-section .icon { background: linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(139, 92, 246, 0.15)); border: 1px solid rgba(168, 85, 247, 0.2); }
+        .vision-section .icon { background: linear-gradient(135deg, rgba(236, 72, 153, 0.2), rgba(244, 114, 182, 0.15)); border: 1px solid rgba(236, 72, 153, 0.2); }
+        .card-header h2 { margin: 0; font-size: 1.15rem; font-weight: 700; letter-spacing: -0.02em; }
+        .card-header .desc { margin: 0; font-size: 0.8rem; color: var(--muted); margin-top: 2px; }
 
         /* Sections specific sizing */
         .brain-section { grid-column: span 1; grid-row: span 2; }
@@ -447,32 +518,27 @@ export default function Dashboard() {
         }
 
         /* Brain Lists */
-        .status-list { display: flex; flex-direction: column; gap: 0.75rem; }
+        .status-list { display: flex; flex-direction: column; gap: 0.65rem; }
+        .status-list .empty-state { text-align: center; padding: 1.5rem; color: var(--muted); font-size: 0.9rem; font-style: italic; }
         .status-row {
             display: flex;
             align-items: center;
-            gap: 0.75rem;
-            padding: 0.75rem 1rem;
-            border-radius: 8px;
+            gap: 0.85rem;
+            padding: 0.7rem 1rem;
+            border-radius: 12px;
             background: var(--bg-main);
             transition: all 0.2s;
         }
         .status-row.active {
-            background: rgba(var(--rgb-success), 0.15);
-            border: 1px solid rgba(var(--rgb-success), 0.3);
+            background: linear-gradient(135deg, rgba(var(--rgb-success), 0.12), rgba(var(--rgb-success), 0.06));
+            border: 1px solid rgba(var(--rgb-success), 0.25);
         }
-        .status-row.inactive { opacity: 0.6; }
-        .status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: var(--muted);
-        }
-        .status-row.active .status-dot { background: var(--success); box-shadow: 0 0 5px var(--success); }
-        .status-row .label { flex: 1; font-weight: 500; color: var(--text); }
-        .status-row.active .label { color: var(--success-dark); font-weight: 600; }
-        .status-row .state { font-size: 0.75rem; color: var(--muted); }
-        .status-row.active .state { color: var(--success); }
+        .status-row-content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+        .status-row .label { font-weight: 600; color: var(--text); font-size: 0.95rem; }
+        .status-row.active .label { color: var(--success-dark, #15803d); }
+        .status-row .model-name { font-size: 0.75rem; opacity: 0.85; color: var(--muted); }
+        .status-row .state { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--success); }
+        .provider-logo-img { border: 1px solid var(--border); }
 
         /* Body Vitals */
         .vitals-grid {
@@ -485,7 +551,8 @@ export default function Dashboard() {
             text-align: center;
             background: var(--bg-main);
             padding: 1rem;
-            border-radius: 12px;
+            border-radius: 14px;
+            border: 1px solid transparent;
         }
         .vital-label { font-size: 0.75rem; color: var(--muted); display: block; margin-bottom: 0.5rem; }
         .vital-stats { display: flex; flex-direction: column; align-items: center; }
@@ -531,13 +598,14 @@ export default function Dashboard() {
         .connector-card {
             display: flex;
             align-items: center;
-            gap: 0.75rem;
-            padding: 0.75rem;
-            border-radius: 12px;
+            gap: 0.85rem;
+            padding: 0.9rem 1rem;
+            border-radius: 14px;
             background: var(--bg-main);
-            border: 1px solid transparent;
+            border: 1px solid var(--border);
+            transition: border-color 0.2s, background 0.2s;
         }
-        .connector-card.on { border-color: rgba(var(--rgb-success), 0.3); background: rgba(var(--rgb-success), 0.05); }
+        .connector-card.on { border-color: rgba(var(--rgb-success), 0.35); background: linear-gradient(135deg, rgba(var(--rgb-success), 0.08), rgba(var(--rgb-success), 0.03)); }
         .connector-icon {
             width: 32px;
             height: 32px;
@@ -587,26 +655,30 @@ export default function Dashboard() {
             margin-top: auto;
         }
         .setup-link:hover { text-decoration: underline; }
+        .dashboard-inline-link { color: var(--primary); font-weight: 500; text-decoration: none; }
+        .dashboard-inline-link:hover { text-decoration: underline; }
 
         /* Vision Section specific */
         .vision-section {
-            background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+            background: linear-gradient(160deg, #ffffff 0%, #faf5ff 35%, #f8fafc 100%);
+            border-color: rgba(236, 72, 153, 0.12);
         }
         .vision-status {
             display: flex;
             flex-direction: column;
             gap: 1rem;
         }
-        .model-badge {
-            background: var(--bg-main);
-            padding: 0.75rem;
-            border-radius: 12px;
+        .vision-section .model-badge {
+            background: rgba(255,255,255,0.8);
+            padding: 0.85rem 1rem;
+            border-radius: 14px;
             display: flex;
             flex-direction: column;
-            border: 1px dashed var(--border);
+            border: 1px solid rgba(236, 72, 153, 0.15);
+            box-shadow: 0 1px 2px rgba(0,0,0,0.04);
         }
-        .model-label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
-        .model-name { font-weight: 700; color: var(--primary); font-size: 1rem; }
+        .model-label { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+        .vision-section .model-name { font-weight: 700; color: var(--primary); font-size: 1rem; }
         .vision-active {
             display: flex;
             align-items: center;
@@ -631,11 +703,12 @@ export default function Dashboard() {
         .vision-info {
             font-size: 0.85rem;
             color: var(--text);
-            line-height: 1.4;
+            line-height: 1.45;
             margin: 0;
-            padding: 0.5rem;
-            background: rgba(var(--rgb-primary), 0.03);
-            border-radius: 8px;
+            padding: 0.65rem 0.85rem;
+            background: rgba(236, 72, 153, 0.04);
+            border-radius: 10px;
+            border: 1px solid rgba(236, 72, 153, 0.08);
         }
 
         .update-overlay {

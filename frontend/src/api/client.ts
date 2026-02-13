@@ -34,6 +34,8 @@ export type Skill = {
   description: string;
   enabled: boolean;
   available: boolean;
+  /** When not available: "Connect" | "Configure paths" | "Set API key" etc. */
+  action_hint?: string | null;
 };
 
 export const api = {
@@ -45,7 +47,22 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ skill_id: skillId, enabled }),
     }),
+  /** Upload a .zip containing an OpenClaw-style skill (folder with SKILL.md). Returns { skill_id, ok }. */
+  skillsUploadZip: async (file: File): Promise<{ skill_id: string; ok: boolean }> => {
+    const form = new FormData();
+    form.append("file", file);
+    const r = await fetch(API_BASE + "/skills/upload", {
+      method: "POST",
+      body: form,
+    });
+    if (!r.ok) throw new Error(await r.text().then((t) => t.slice(0, 300)));
+    return r.json();
+  },
   providers: () => req<{ providers: string[] }>("/providers"),
+  getChatMessages: (conversationId: string, userId = "default", limit = 50) =>
+    req<{ conversation_id: string; messages: { role: string; content: string }[] }>(
+      `/chat/messages?conversation_id=${encodeURIComponent(conversationId)}&user_id=${encodeURIComponent(userId)}&limit=${limit}`
+    ),
   chat: (text: string, provider: string = "groq", conversationId?: string) =>
     req<{ reply: string; conversation_id: string; provider: string }>("/chat", {
       method: "POST",
@@ -56,6 +73,17 @@ export const api = {
       "/files/list" + (directory ? `?directory=${encodeURIComponent(directory)}` : "")
     ),
   filesRead: (path: string) => req<{ path: string; content: string }>("/files/read?path=" + encodeURIComponent(path)),
+  /** Returns 403 body when path not allowed: { code: "PATH_ACCESS_REQUEST", requested_path } */
+  filesReadWithAccess: async (path: string): Promise<{ path: string; content: string } | { code: string; requested_path: string; error: string }> => {
+    const r = await fetch(API_BASE + "/files/read?path=" + encodeURIComponent(path), { headers: { "Content-Type": "application/json" } });
+    const body = await r.json().catch(() => ({}));
+    if (r.status === 403 && body.code === "PATH_ACCESS_REQUEST") return body as { code: string; requested_path: string; error: string };
+    if (!r.ok) throw new Error((body as { error?: string })?.error || r.statusText);
+    return body as { path: string; content: string };
+  },
+  filesAllowPath: (path: string) =>
+    req<{ path: string; ok: boolean }>("/files/allow-path", { method: "POST", body: JSON.stringify({ path }) }),
+  filesAllowedPaths: () => req<{ paths: string[] }>("/files/allowed-paths"),
   filesWrite: (path: string, content: string) =>
     req<{ path: string; ok: boolean }>("/files/write?path=" + encodeURIComponent(path), {
       method: "PUT",

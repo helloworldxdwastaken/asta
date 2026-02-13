@@ -127,8 +127,23 @@ async def _fetch_audio_from_url(url: str) -> tuple[bytes, str] | None:
         return None
 
 
+def _telegram_user_allowed(update: Update) -> bool:
+    """OpenClaw-style allowlist: if ASTA_TELEGRAM_ALLOWED_IDS is set, only those user IDs can use the bot."""
+    from app.config import get_settings
+    allowed = get_settings().telegram_allowed_ids
+    if not allowed:
+        return True
+    user = update.effective_user if update else None
+    if not user:
+        return False
+    return str(user.id) in allowed
+
+
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message or not update.message.text:
+        return
+    if not _telegram_user_allowed(update):
+        await update.message.reply_text("You're not authorized to use this bot.")
         return
     # Same user as web panel (personal assistant: one user for all channels)
     user_id = "default"
@@ -213,13 +228,27 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 logger.info("Telegram reply sent to %s", user_id)
         except Exception as e:
             logger.exception("Telegram handler error")
-            await update.message.reply_text(f"Error: {str(e)[:500]}")
+            err_text = f"Error: {str(e)[:500]}"
+            await update.message.reply_text(err_text)
+            # Persist user + error so web UI Telegram preview shows the same as Telegram (handler may have saved user already; duplicate is ok)
+            try:
+                from app.db import get_db
+                db = get_db()
+                await db.connect()
+                cid = await db.get_or_create_conversation("default", "telegram")
+                await db.add_message(cid, "user", text)
+                await db.add_message(cid, "assistant", err_text, None)
+            except Exception as db_err:
+                logger.warning("Could not persist Telegram error to DB: %s", db_err)
 
 
 
 async def on_voice_or_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle voice messages and audio files: transcribe and format as meeting notes."""
     if not update.message:
+        return
+    if not _telegram_user_allowed(update):
+        await update.message.reply_text("You're not authorized to use this bot.")
         return
     # Same user as web panel (personal assistant: one user for all channels)
     user_id = "default"
@@ -314,6 +343,9 @@ def build_telegram_app(token: str) -> Application:
 async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle photos: download highest res, then call handle_message with image_bytes."""
     if not update.message or not update.message.photo:
+        return
+    if not _telegram_user_allowed(update):
+        await update.message.reply_text("You're not authorized to use this bot.")
         return
     user_id = "default"
     chat_id = update.effective_chat.id if update.effective_chat else 0

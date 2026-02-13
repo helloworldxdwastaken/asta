@@ -10,7 +10,13 @@ class SillyGifSkill(Skill):
     def check_eligibility(self, text: str, user_id: str) -> bool:
         # Proactive skill: conversational messages, not questions (reduces over-triggering)
         t = (text or "").strip()
-        return 5 < len(t) < 100 and "?" not in t
+        if len(t) < 5 or len(t) >= 100 or "?" in t:
+            return False
+        # Don't trigger on short affirmations (e.g. "Yeah do that") so file-save follow-ups use files skill
+        lower = t.lower()
+        if lower in ("yeah", "yes", "do that", "ok", "sure", "go ahead", "please", "do it", "yep", "okay") or (len(t) < 25 and any(w in lower for w in ("do it", "go ahead", "yes", "yeah", "ok", "sure"))):
+            return False
+        return True
 
     async def execute(self, user_id: str, text: str, extra: dict[str, Any]) -> dict[str, Any]:
         # No data to gather; handler adds proactive instruction when this skill is in use

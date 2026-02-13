@@ -122,6 +122,26 @@ class Db:
                 value TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS allowed_paths (
+                user_id TEXT NOT NULL,
+                path TEXT NOT NULL,
+                added_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, path)
+            );
+            CREATE TABLE IF NOT EXISTS cron_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                name TEXT NOT NULL,
+                cron_expr TEXT NOT NULL,
+                tz TEXT,
+                message TEXT NOT NULL,
+                channel TEXT NOT NULL DEFAULT 'web',
+                channel_target TEXT NOT NULL DEFAULT '',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                UNIQUE (user_id, name)
+            );
+            CREATE INDEX IF NOT EXISTS idx_cron_jobs_enabled ON cron_jobs(user_id, enabled);
         """)
         await self._conn.commit()
         # Check if column exists before adding
@@ -306,6 +326,34 @@ class Db:
         )
         await self._conn.commit()
 
+    async def get_allowed_paths(self, user_id: str) -> list[str]:
+        """Paths the user has allowed for file access (OpenClaw-style; merged with env ASTA_ALLOWED_PATHS in files router)."""
+        if not self._conn:
+            await self.connect()
+        try:
+            cursor = await self._conn.execute(
+                "SELECT path FROM allowed_paths WHERE user_id = ? ORDER BY added_at",
+                (user_id,),
+            )
+            rows = await cursor.fetchall()
+            return [r["path"] for r in rows]
+        except Exception as e:
+            self.logger.exception("Failed to get allowed paths: %s", e)
+            return []
+
+    async def add_allowed_path(self, user_id: str, path: str) -> None:
+        """Add a path to the user's allowlist (e.g. after 'request access'). Path should be absolute and resolved."""
+        if not self._conn:
+            await self.connect()
+        path = str(Path(path).resolve()) if path.strip() else ""
+        if not path:
+            return
+        await self._conn.execute(
+            "INSERT OR IGNORE INTO allowed_paths (user_id, path, added_at) VALUES (?, ?, datetime('now'))",
+            (user_id, path),
+        )
+        await self._conn.commit()
+
     async def get_user_provider_model(self, user_id: str, provider: str) -> str | None:
         if not self._conn:
             await self.connect()
@@ -419,6 +467,73 @@ class Db:
         if not self._conn:
             await self.connect()
         cursor = await self._conn.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
+        await self._conn.commit()
+        return cursor.rowcount > 0
+
+    # Cron jobs (Claw-style recurring)
+    async def add_cron_job(
+        self,
+        user_id: str,
+        name: str,
+        cron_expr: str,
+        message: str,
+        tz: str | None = None,
+        channel: str = "web",
+        channel_target: str = "",
+    ) -> int:
+        """Insert or replace cron job by (user_id, name). Returns id."""
+        if not self._conn:
+            await self.connect()
+        await self._conn.execute(
+            """INSERT INTO cron_jobs (user_id, name, cron_expr, tz, message, channel, channel_target, enabled, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1, datetime('now'))
+               ON CONFLICT(user_id, name) DO UPDATE SET cron_expr=excluded.cron_expr, tz=excluded.tz,
+               message=excluded.message, channel=excluded.channel, channel_target=excluded.channel_target, enabled=1""",
+            (user_id, name.strip(), cron_expr.strip(), tz or "", message.strip(), channel, channel_target or ""),
+        )
+        await self._conn.commit()
+        cursor = await self._conn.execute("SELECT id FROM cron_jobs WHERE user_id = ? AND name = ?", (user_id, name.strip()))
+        row = await cursor.fetchone()
+        return row["id"] if row else 0
+
+    async def get_cron_jobs(self, user_id: str) -> list[dict[str, Any]]:
+        """List cron jobs for user."""
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute(
+            "SELECT id, name, cron_expr, tz, message, channel, channel_target, enabled, created_at FROM cron_jobs WHERE user_id = ? ORDER BY name",
+            (user_id,),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_all_enabled_cron_jobs(self) -> list[dict[str, Any]]:
+        """All enabled cron jobs (for scheduler reload)."""
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute(
+            "SELECT id, user_id, name, cron_expr, tz, message, channel, channel_target FROM cron_jobs WHERE enabled = 1"
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_cron_job(self, job_id: int) -> dict[str, Any] | None:
+        """Get one cron job by id."""
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute("SELECT * FROM cron_jobs WHERE id = ?", (job_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def delete_cron_job(self, job_id: int) -> bool:
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute("DELETE FROM cron_jobs WHERE id = ?", (job_id,))
+        await self._conn.commit()
+        return cursor.rowcount > 0
+
+    async def delete_cron_job_by_name(self, user_id: str, name: str) -> bool:
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute("DELETE FROM cron_jobs WHERE user_id = ? AND name = ?", (user_id, name.strip()))
         await self._conn.commit()
         return cursor.rowcount > 0
 

@@ -11,8 +11,6 @@ import sqlite3
 import hashlib
 import httpx
 from pathlib import Path
-import chromadb
-from chromadb.config import Settings as ChromaSettings
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +115,9 @@ async def _get_embedding_any(text: str) -> list[float]:
 
 class RAGService:
     def __init__(self) -> None:
+        # Defer chromadb import so backend can start on Python 3.14 (chromadb has pydantic compat issues)
+        import chromadb
+        from chromadb.config import Settings as ChromaSettings
         self._client = chromadb.PersistentClient(
             path=CHROMA_PATH,
             settings=ChromaSettings(anonymized_telemetry=False),

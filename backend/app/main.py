@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.db import get_db
-from app.routers import chat, files, drive, rag, providers, tasks, settings as settings_router, spotify as spotify_router, audio as audio_router
+from app.routers import chat, files, drive, rag, providers, tasks, settings as settings_router, spotify as spotify_router, audio as audio_router, cron as cron_router
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,11 @@ async def lifespan(app: FastAPI):
     try:
         from app.reminders import reload_pending_reminders
         await reload_pending_reminders()
+        try:
+            from app.cron_runner import reload_cron_jobs
+            await reload_cron_jobs()
+        except Exception as e:
+            logger.exception("Failed to reload cron jobs: %s", e)
     except Exception as e:
         logger.exception("Failed to reload pending reminders: %s", e)
     # Telegram bot: do NOT block API startup if Telegram is unreachable or misconfigured.
@@ -91,6 +96,7 @@ app.include_router(tasks.router, prefix="/api", tags=["tasks"])
 app.include_router(settings_router.router, prefix="/api", tags=["settings"])
 app.include_router(spotify_router.router, prefix="/api", tags=["spotify"])
 app.include_router(audio_router.router, prefix="/api", tags=["audio"])
+app.include_router(cron_router.router, prefix="/api", tags=["cron"])
 # Also mount at root so /settings/keys works if proxy strips /api
 app.include_router(settings_router.router, tags=["settings"])
 

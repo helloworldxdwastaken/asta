@@ -1,5 +1,5 @@
 """Chat and incoming webhook routes."""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.handler import handle_message
@@ -7,6 +7,21 @@ from app.db import get_db
 from app.providers.registry import list_providers
 
 router = APIRouter()
+
+
+@router.get("/chat/messages")
+async def get_chat_messages(
+    conversation_id: str = Query(..., description="Conversation ID, e.g. default:web or default:telegram"),
+    user_id: str = Query("default", description="User ID"),
+    limit: int = Query(50, ge=1, le=100),
+):
+    """Return recent messages for a conversation so the web UI can show Web vs Telegram thread."""
+    if not conversation_id.startswith(user_id + ":"):
+        raise HTTPException(403, "Conversation does not belong to this user")
+    db = get_db()
+    await db.connect()
+    rows = await db.get_recent_messages(conversation_id, limit=limit)
+    return {"conversation_id": conversation_id, "messages": rows}
 
 
 class ChatIn(BaseModel):

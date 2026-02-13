@@ -20,6 +20,65 @@ const PROVIDER_LABELS: Record<string, string> = {
   openrouter: "OpenRouter",
 };
 
+/** Logo URL or fallback initial for provider cards */
+const PROVIDER_LOGOS: Record<string, { url: string; initial: string }> = {
+  groq: { url: "https://groq.com/favicon.ico", initial: "G" },
+  google: { url: "https://www.google.com/favicon.ico", initial: "G" },
+  claude: { url: "https://anthropic.com/favicon.ico", initial: "C" },
+  openai: { url: "https://openai.com/favicon.ico", initial: "O" },
+  openrouter: { url: "https://openrouter.ai/favicon.ico", initial: "R" },
+  giphy: { url: "https://giphy.com/favicon.ico", initial: "G" },
+};
+
+/** AI providers: single key each (except Google has two optional keys) */
+const AI_PROVIDER_ENTRIES: { id: string; name: string; keys: { key: string; label: string }[]; logoKey: string; testKey?: string; getKeyUrl: string }[] = [
+  { id: "groq", name: "Groq", keys: [{ key: "groq_api_key", label: "API key" }], logoKey: "groq", testKey: "groq_api_key", getKeyUrl: "https://console.groq.com/keys" },
+  { id: "google", name: "Google (Gemini)", keys: [{ key: "gemini_api_key", label: "Gemini API key" }, { key: "google_ai_key", label: "Google AI key (alt)" }], logoKey: "google", getKeyUrl: "https://aistudio.google.com/apikey" },
+  { id: "claude", name: "Anthropic (Claude)", keys: [{ key: "anthropic_api_key", label: "API key" }], logoKey: "claude", getKeyUrl: "https://console.anthropic.com/settings/keys" },
+  { id: "openai", name: "OpenAI", keys: [{ key: "openai_api_key", label: "API key" }], logoKey: "openai", getKeyUrl: "https://platform.openai.com/api-keys" },
+  { id: "openrouter", name: "OpenRouter", keys: [{ key: "openrouter_api_key", label: "API key" }], logoKey: "openrouter", getKeyUrl: "https://openrouter.ai/keys" },
+];
+
+/** Channel extras (Telegram is on Channels page) */
+const OTHER_KEYS: { id: string; name: string; key: string; logoKey: string; getKeyUrl: string }[] = [
+  { id: "giphy", name: "Giphy (GIF skill)", key: "giphy_api_key", logoKey: "giphy", getKeyUrl: "https://developers.giphy.com/dashboard/" },
+];
+
+function ProviderLogo({ logoKey, size = 40 }: { logoKey: string; size?: number }) {
+  const [fallback, setFallback] = useState(false);
+  const info = PROVIDER_LOGOS[logoKey] ?? { url: "", initial: "?" };
+  if (fallback || !info.url) {
+    return (
+      <div
+        style={{
+          width: size,
+          height: size,
+          borderRadius: 10,
+          background: "var(--accent-soft)",
+          color: "var(--accent)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontWeight: 700,
+          fontSize: size * 0.5,
+        }}
+      >
+        {info.initial}
+      </div>
+    );
+  }
+  return (
+    <img
+      src={info.url}
+      alt=""
+      width={size}
+      height={size}
+      style={{ borderRadius: 10, objectFit: "contain", background: "var(--surface-hover)" }}
+      onError={() => setFallback(true)}
+    />
+  );
+}
+
 function RestartBackendButton() {
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState<string | null>(null);
@@ -105,11 +164,16 @@ const DEFAULT_AI_LABELS: Record<string, string> = {
 
 function DefaultAiSelect() {
   const [provider, setProvider] = useState("");
+  const [model, setModel] = useState("");
+  const [defaults, setDefaults] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
+  const [savingModel, setSavingModel] = useState(false);
   const [connected, setConnected] = useState<Record<string, boolean>>({});
   useEffect(() => {
-    Promise.all([api.getDefaultAi(), api.status()]).then(([r, status]) => {
+    Promise.all([api.getDefaultAi(), api.status(), api.getModels()]).then(([r, status, modelsResp]) => {
       setConnected(status.apis ?? {});
+      setDefaults(modelsResp.defaults ?? {});
+      setModel((modelsResp.models ?? {})[r.provider] ?? "");
       setLoading(false);
       setProvider(r.provider);
     });
@@ -125,9 +189,21 @@ function DefaultAiSelect() {
       api.setDefaultAi(fallback).catch(() => { });
     }
   }, [loading, connected, provider]);
+  useEffect(() => {
+    if (!provider || loading) return;
+    api.getModels().then((r) => {
+      setModel(r.models[provider] ?? "");
+      setDefaults(r.defaults ?? {});
+    });
+  }, [provider, loading]);
   const change = (p: string) => {
     setProvider(p);
     api.setDefaultAi(p).catch(() => setProvider(provider));
+  };
+  const saveModel = () => {
+    if (!provider) return;
+    setSavingModel(true);
+    api.setModel(provider, model.trim()).finally(() => setSavingModel(false));
   };
   const connectedProviders = (["groq", "google", "claude", "ollama", "openai", "openrouter"] as const).filter(
     (id) => connected[PROVIDER_STATUS_KEYS[id]]
@@ -141,18 +217,44 @@ function DefaultAiSelect() {
     );
   }
   const value = connectedProviders.includes(provider as typeof connectedProviders[number]) ? provider : connectedProviders[0];
+  const defaultModel = defaults[provider] ?? "";
   return (
-    <div className="field">
-      <select value={value} onChange={(e) => change(e.target.value)} className="select" style={{ maxWidth: 320 }}>
-        {connectedProviders.map((id) => (
-          <option key={id} value={id}>
-            {DEFAULT_AI_LABELS[id]}
-          </option>
-        ))}
-      </select>
-      <p className="help" style={{ marginTop: "0.35rem" }}>
-        Choose which connected API to use by default. Set the model name in &quot;Model per provider&quot; below (e.g. for OpenRouter: any model from openrouter.ai/models).
-      </p>
+    <div>
+      <div className="field">
+        <label className="label" htmlFor="default-ai-select">Default AI provider</label>
+        <select id="default-ai-select" value={value} onChange={(e) => change(e.target.value)} className="select" style={{ maxWidth: 320 }}>
+          {connectedProviders.map((id) => (
+            <option key={id} value={id}>
+              {DEFAULT_AI_LABELS[id]}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="field">
+        <div className="field-row">
+          <label className="label" htmlFor="default-ai-model">Model (optional)</label>
+          {defaultModel && <span className="help">default: {defaultModel}</span>}
+        </div>
+        <div className="actions" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
+          <input
+            id="default-ai-model"
+            type="text"
+            placeholder={provider === "openrouter" ? "e.g. anthropic/claude-3.5-sonnet or model,fallback (comma-separated)" : (defaultModel || "e.g. llama-3.3-70b-versatile")}
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            onBlur={saveModel}
+            className="input"
+            style={{ maxWidth: 420, flex: "1 1 200px" }}
+          />
+          <button type="button" onClick={saveModel} disabled={savingModel} className="btn btn-secondary">
+            {savingModel ? "Saving…" : "Save model"}
+          </button>
+        </div>
+        <p className="help" style={{ marginTop: "0.35rem" }}>
+          Leave blank to use the provider default. For OpenRouter, use a model ID from{" "}
+          <a href="https://openrouter.ai/models" target="_blank" rel="noreferrer" className="link">openrouter.ai/models</a>.
+        </p>
+      </div>
     </div>
   );
 }
@@ -496,39 +598,98 @@ export default function Settings() {
         <details open>
           <summary>
             <span>API keys</span>
-            <span className="acc-meta">Groq, Gemini, Claude, OpenRouter…</span>
+            <span className="acc-meta">Providers & channels</span>
           </summary>
           <div className="acc-body">
-            <p className="help">
+            <p className="help" style={{ marginBottom: "1rem" }}>
               Keys are stored in your local database (<code>backend/asta.db</code>) and are never committed to git. Restart the backend if you change the Telegram token.
             </p>
-
             <RestartBackendButton />
 
-            {Object.entries(KEY_LABELS).map(([keyName, label]) => (
-              <div key={keyName} className="field">
-                <div className="field-row">
-                  <label className="label" htmlFor={keyName}>{label}</label>
-                  {keysStatus[keyName] && <span className="status-ok">Set</span>}
+            <h3 className="settings-section-title">AI providers</h3>
+            <div className="provider-cards">
+              {AI_PROVIDER_ENTRIES.map((entry) => (
+                <div key={entry.id} className="provider-card">
+                  <div className="provider-card-header">
+                    <ProviderLogo logoKey={entry.logoKey} size={44} />
+                    <div className="provider-card-title-wrap">
+                      <span className="provider-card-title">{entry.name}</span>
+                      {entry.keys.every((k) => keysStatus[k.key]) && (
+                        <span className="status-ok">All set</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="provider-card-fields">
+                    {entry.keys.map(({ key: keyName, label }) => (
+                      <div key={keyName} className="field">
+                        <div className="field-row">
+                          <label className="label" htmlFor={keyName}>{label}</label>
+                          {keysStatus[keyName] && <span className="status-ok">Set</span>}
+                        </div>
+                        <div className="actions" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
+                          <input
+                            id={keyName}
+                            type="password"
+                            placeholder={keysStatus[keyName] ? "Leave blank to keep current" : "Paste key"}
+                            value={keys[keyName] ?? ""}
+                            onChange={(e) => setKeys((k) => ({ ...k, [keyName]: e.target.value }))}
+                            className="input"
+                            style={{ flex: "1 1 200px", minWidth: 0 }}
+                          />
+                          {entry.testKey === keyName && <TestGroqButton />}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="actions" style={{ marginTop: "0.5rem" }}>
+                    <button type="button" onClick={handleSaveKeys} disabled={saving} className="btn btn-primary">
+                      {saving ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                  <p className="help provider-card-get-key">
+                    Get your API key: <a href={entry.getKeyUrl} target="_blank" rel="noreferrer" className="link">{entry.getKeyUrl}</a>
+                  </p>
                 </div>
-                <div className="actions">
-                  <input
-                    id={keyName}
-                    type="password"
-                    placeholder={keysStatus[keyName] ? "Leave blank to keep current" : "Paste key"}
-                    value={keys[keyName] ?? ""}
-                    onChange={(e) => setKeys((k) => ({ ...k, [keyName]: e.target.value }))}
-                    className="input"
-                    style={{ maxWidth: 520 }}
-                  />
-                  {keyName === "groq_api_key" ? <TestGroqButton /> : null}
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
 
-            <div className="actions">
+            <h3 className="settings-section-title">Channels & extras</h3>
+            <div className="provider-cards provider-cards--small">
+              {OTHER_KEYS.map((entry) => (
+                <div key={entry.id} className="provider-card">
+                  <div className="provider-card-header">
+                    <ProviderLogo logoKey={entry.logoKey} size={36} />
+                    <div className="provider-card-title-wrap">
+                      <span className="provider-card-title">{entry.name}</span>
+                      {keysStatus[entry.key] && <span className="status-ok">Set</span>}
+                    </div>
+                  </div>
+                  <div className="provider-card-fields">
+                    <input
+                      id={entry.key}
+                      type="password"
+                      placeholder={keysStatus[entry.key] ? "Leave blank to keep current" : "Paste key"}
+                      value={keys[entry.key] ?? ""}
+                      onChange={(e) => setKeys((k) => ({ ...k, [entry.key]: e.target.value }))}
+                      className="input"
+                      style={{ width: "100%" }}
+                    />
+                  </div>
+                  <div className="actions" style={{ marginTop: "0.5rem" }}>
+                    <button type="button" onClick={handleSaveKeys} disabled={saving} className="btn btn-primary">
+                      {saving ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                  <p className="help provider-card-get-key">
+                    Get your API key: <a href={entry.getKeyUrl} target="_blank" rel="noreferrer" className="link">{entry.getKeyUrl}</a>
+                  </p>
+                </div>
+              ))}
+            </div>
+
+            <div className="actions" style={{ marginTop: "1rem" }}>
               <button type="button" onClick={handleSaveKeys} disabled={saving} className="btn btn-primary">
-                {saving ? "Saving…" : "Save API keys"}
+                {saving ? "Saving…" : "Save all API keys"}
               </button>
             </div>
             {message && (

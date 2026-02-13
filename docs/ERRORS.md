@@ -49,7 +49,7 @@ Quick reference for errors you might see and how to fix them.
 | Symptom | Cause | Solution |
 |---------|-------|----------|
 | **Reminders not firing** | Pending reminders not loaded | Restart backend once: `./asta.sh restart`. Reminders are re-loaded on startup. |
-| **Wrong timezone (e.g. 6pm instead of 8pm)** | Timezone lookup failed (now uses offline timezonefinder) | Ensure location is set in Files → About you (User.md) or tell Asta "I'm in City, Country". Restart backend after setting. |
+| **Wrong timezone (e.g. 6pm instead of 8pm)** | Timezone lookup failed (now uses offline timezonefinder) | Set **Location** in workspace/USER.md (e.g. `**Location:** City, Country`) or tell Asta "I'm in City, Country". Restart backend after setting. |
 | **Asta asks “Where are you?” for “wake me up at 7am”** | No location/timezone set | Expected. Absolute-time reminders require a timezone. Set location once, then retry. |
 | **"I couldn't parse that reminder"** | Phrase not recognised | Use: "remind me in 5 min to X", "alarm in 5 min to X", "wake me up at 7am", "remind me at 6pm to X". |
 
@@ -71,7 +71,7 @@ Quick reference for errors you might see and how to fix them.
 
 | Symptom | Cause | Solution |
 |---------|-------|----------|
-| **I don't know your location** | No location saved | Add in Files → About you (User.md) or say "I'm in City, Country" in Chat. |
+| **I don't know your location** | No location saved | Add **Location** in workspace/USER.md or say "I'm in City, Country" in Chat. |
 
 ---
 
