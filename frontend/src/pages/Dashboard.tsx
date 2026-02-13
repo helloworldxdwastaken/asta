@@ -13,6 +13,8 @@ export default function Dashboard() {
   const [serverStatus, setServerStatus] = useState<any>(null);
   const [models, setModels] = useState<Record<string, string>>({});
   const [defaults, setDefaults] = useState<Record<string, string>>({});
+  const [updateInfo, setUpdateInfo] = useState<{ available: boolean; local: string; remote: string } | null>(null);
+  const [isUpdating, setIsUpdating] = useState(false);
 
   const refresh = useCallback(() => {
     setError(null);
@@ -24,6 +26,7 @@ export default function Dashboard() {
     api.getDefaultAi().then((r) => setDefaultAi(r.provider)).catch(() => setDefaultAi(null));
     api.getServerStatus().then(r => setServerStatus(r)).catch(() => setServerStatus(null));
     api.getModels().then((r) => { setModels(r.models); setDefaults(r.defaults); }).catch(() => { });
+    api.checkUpdate().then(r => setUpdateInfo({ available: r.update_available, local: r.local, remote: r.remote })).catch(() => { });
   }, []);
 
   useEffect(() => {
@@ -39,6 +42,35 @@ export default function Dashboard() {
       setNotifications((prev) => prev.filter((n) => n.id !== id));
     } catch (e) {
       alert("Failed to delete: " + e);
+    }
+  };
+
+  const handleUpdate = async () => {
+    if (!confirm("Are you sure you want to update Asta to the latest version? The system will restart.")) return;
+    setIsUpdating(true);
+    try {
+      await api.triggerUpdate();
+      // Poll for health
+      let attempts = 0;
+      const interval = setInterval(async () => {
+        attempts++;
+        try {
+          const res = await api.health();
+          if (res.status === 'ok') {
+            clearInterval(interval);
+            window.location.reload();
+          }
+        } catch (e) {
+          if (attempts > 30) { // 30s timeout
+            clearInterval(interval);
+            setIsUpdating(false);
+            alert("Update timed out or failed to restart correctly.");
+          }
+        }
+      }, 2000);
+    } catch (e) {
+      setIsUpdating(false);
+      alert("Failed to trigger update: " + e);
     }
   };
 
@@ -59,6 +91,7 @@ export default function Dashboard() {
         <div className={`system-status-badge ${connected ? 'ok' : 'error'}`}>
           <span className="dot"></span>
           {connected ? `System Online v${status?.version}` : 'System Offline'}
+          {updateInfo?.available && <span className="update-badge">Update Available</span>}
         </div>
       </header>
 
@@ -150,6 +183,12 @@ export default function Dashboard() {
                   <small>System Uptime</small>
                   <strong>{serverStatus.uptime_str}</strong>
                 </div>
+                {updateInfo?.available && (
+                  <div className="update-prompt">
+                    <p>New version ready ({updateInfo.remote})</p>
+                    <button onClick={handleUpdate} className="btn btn-primary btn-sm">Update Asta</button>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="loading-state">Checking Vitals...</div>
@@ -263,6 +302,16 @@ export default function Dashboard() {
         </div>
       )}
 
+      {isUpdating && (
+        <div className="update-overlay">
+          <div className="update-modal">
+            <div className="spinner"></div>
+            <h2>Updating Asta...</h2>
+            <p>Please wait while we pull the latest changes and restart the system. This usually takes 10-20 seconds.</p>
+          </div>
+        </div>
+      )}
+
       <style>{`
         .dashboard-container {
             max-width: 1200px;
@@ -315,6 +364,20 @@ export default function Dashboard() {
             border-radius: 50%;
             background: currentColor;
             box-shadow: 0 0 8px currentColor;
+        }
+        .update-badge {
+            margin-left: 0.5rem;
+            background: var(--primary);
+            color: white;
+            font-size: 0.7rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            animation: bounce 2s infinite;
+        }
+        @keyframes bounce {
+            0%, 20%, 50%, 80%, 100% {transform: translateY(0);}
+            40% {transform: translateY(-3px);}
+            60% {transform: translateY(-2px);}
         }
 
         .error-banner {
@@ -448,6 +511,19 @@ export default function Dashboard() {
             padding: 0 1.5rem;
             height: 40px;
         }
+        .update-prompt {
+            grid-column: span 3;
+            background: rgba(var(--rgb-primary), 0.1);
+            border: 1px solid var(--primary);
+            padding: 0.75rem 1.5rem;
+            border-radius: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 1rem;
+        }
+        .update-prompt p { margin: 0; font-weight: 600; font-size: 0.9rem; color: var(--primary); }
+        .btn-sm { padding: 4px 12px; font-size: 0.8rem; }
 
         /* Connectors */
         .connectors-list { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
@@ -559,6 +635,38 @@ export default function Dashboard() {
             padding: 0.5rem;
             background: rgba(var(--rgb-primary), 0.03);
             border-radius: 8px;
+        }
+
+        .update-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.8);
+            z-index: 9999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(4px);
+        }
+        .update-modal {
+            background: white;
+            padding: 3rem;
+            border-radius: 20px;
+            text-align: center;
+            max-width: 400px;
+        }
+        .update-modal h2 { margin-top: 1.5rem; }
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 5px solid var(--bg-main);
+            border-top: 5px solid var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
 
       `}</style>

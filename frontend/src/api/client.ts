@@ -157,4 +157,7 @@ export const api = {
     return req<{ ok: boolean }>(`/notifications/${id}`, { method: "DELETE" });
   },
   getServerStatus: () => req<ServerStatus>("/settings/server-status"),
+  checkUpdate: () => req<{ update_available: boolean; local: string; remote: string; error?: string }>("/settings/check-update"),
+  triggerUpdate: () => req<{ ok: boolean; message: string }>("/settings/update", { method: "POST" }),
 };
+

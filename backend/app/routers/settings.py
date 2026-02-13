@@ -507,3 +507,64 @@ async def server_status_endpoint():
     """Get system metrics for the dashboard."""
     from app.server_status import get_server_status
     return get_server_status()
+
+
+@router.get("/api/settings/check-update")
+@router.get("/settings/check-update")
+async def check_update():
+    """Check if a new version is available on GitHub."""
+    import subprocess
+    from pathlib import Path
+    
+    root = Path(__file__).resolve().parent.parent.parent.parent
+    try:
+        # 1. Fetch
+        subprocess.run(["git", "fetch", "origin", "main"], cwd=str(root), capture_output=True, timeout=5)
+        
+        # 2. Get local hash
+        local_res = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(root), capture_output=True, text=True)
+        local_hash = local_res.stdout.strip()
+        
+        # 3. Get remote hash
+        remote_res = subprocess.run(["git", "rev-parse", "origin/main"], cwd=str(root), capture_output=True, text=True)
+        remote_hash = remote_res.stdout.strip()
+        
+        available = (local_hash != remote_hash) and bool(remote_hash)
+        
+        return {
+            "update_available": available,
+            "local": local_hash[:7],
+            "remote": remote_hash[:7] if remote_hash else "Unknown"
+        }
+    except Exception as e:
+        return {"update_available": False, "error": str(e)}
+
+
+@router.post("/api/settings/update")
+@router.post("/settings/update")
+async def trigger_update():
+    """Run ./asta.sh update in the background."""
+    import subprocess
+    import threading
+    import os
+    import time
+    from pathlib import Path
+    
+    root = Path(__file__).resolve().parent.parent.parent.parent
+    script = root / "asta.sh"
+
+    if not script.exists():
+        return {"ok": False, "error": "asta.sh not found"}
+
+    def _do_update():
+        time.sleep(1) # wait for response
+        subprocess.Popen(
+            ["bash", str(script), "update"],
+            cwd=str(root),
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+
+    threading.Thread(target=_do_update, daemon=True).start()
+    return {"ok": true, "message": "Update triggered. System will restart shortly."}
