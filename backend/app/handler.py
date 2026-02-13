@@ -3,6 +3,7 @@ import logging
 from app.context import build_context
 from app.db import get_db
 from app.providers.registry import get_provider
+from app.providers.base import ProviderResponse, ProviderError
 from app.reminders import send_skill_status
 from app.time_weather import geocode, parse_location_from_message
 
@@ -11,7 +12,6 @@ from app.services.spotify_service import SpotifyService
 from app.services.reminder_service import ReminderService
 from app.services.learning_service import LearningService
 from app.services.giphy_service import GiphyService
-from app.server_status import get_server_status
 
 logger = logging.getLogger(__name__)
 
@@ -62,42 +62,45 @@ async def handle_message(
             extra["location_just_set"] = name
             # If we just set location, we might want to ACK it here or let the context know
         else:
-            # If we were pending and failed to geocode, maybe we shouldn't clear? 
-            # Or maybe we should to avoid getting stuck. Let's clear if it was an explicit "I'm in X" 
-            # but if it was pending, maybe they said "No thanks". 
+            # If we were pending and failed to geocode, maybe we shouldn't clear?
+            # Or maybe we should to avoid getting stuck. Let's clear if it was an explicit "I'm in X"
+            # but if it was pending, maybe they said "No thanks".
             # For now, let's just log and move on.
             if await db.get_pending_location_request(user_id):
                  await db.clear_pending_location_request(user_id) # Assume they replied something else
 
+    # Build enabled skills early so we can gate service calls by toggle
+    enabled = set()
+    for sid in ("time", "weather", "files", "drive", "rag", "google_search", "lyrics", "spotify", "reminders", "learn", "audio_notes", "silly_gif", "self_awareness", "server_status"):
+        if await db.get_skill_enabled(user_id, sid):
+            enabled.add(sid)
 
-    # --- SERVICE CALLS ---
+    # --- SERVICE CALLS (only when skill is enabled) ---
 
     # 1. Reminders
-    reminder_result = await ReminderService.process_reminder(user_id, text, channel, channel_target)
-    if reminder_result:
-        extra.update(reminder_result)
+    if "reminders" in enabled:
+        reminder_result = await ReminderService.process_reminder(user_id, text, channel, channel_target)
+        if reminder_result:
+            extra.update(reminder_result)
 
     # 2. Learning
-    learning_result = await LearningService.process_learning(user_id, text, channel, channel_target)
-    if learning_result:
-        extra.update(learning_result)
+    if "learn" in enabled:
+        learning_result = await LearningService.process_learning(user_id, text, channel, channel_target)
+        if learning_result:
+            extra.update(learning_result)
 
     # 3. Spotify
-    # Returns a string if it handled the request fully (e.g. "Playing X", "Skipped"); None otherwise.
-    spotify_reply = await SpotifyService.handle_message(user_id, text, extra)
-    if spotify_reply:
-         await db.add_message(cid, "user", text)
-         await db.add_message(cid, "assistant", spotify_reply, "script")
-         return spotify_reply
+    if "spotify" in enabled:
+        spotify_reply = await SpotifyService.handle_message(user_id, text, extra)
+        if spotify_reply:
+            await db.add_message(cid, "user", text)
+            await db.add_message(cid, "assistant", spotify_reply, "script")
+            return spotify_reply
 
     # --- END SERVICE CALLS ---
 
     # Intent-based skill selection: only run and show skills relevant to this message (saves tokens)
     from app.skill_router import get_skills_to_use, SKILL_STATUS_LABELS
-    enabled = set()
-    for sid in ("time", "weather", "files", "drive", "rag", "google_search", "lyrics", "spotify", "reminders", "audio_notes", "silly_gif", "self_awareness", "server_status"):
-        if await db.get_skill_enabled(user_id, sid):
-            enabled.add(sid)
     
     skills_to_use = get_skills_to_use(text, enabled)
     
@@ -106,6 +109,8 @@ async def handle_message(
         skills_to_use = skills_to_use | {"reminders"}
     if extra.get("is_learning"):
         skills_to_use = skills_to_use | {"learn"}
+    if extra.get("location_just_set"):
+        skills_to_use = skills_to_use | {"time", "weather"}
 
     # If user asks for time/weather but no location (DB or User.md), ask for their location
     # REMOVED: fast-fail check. We now let it fall through to build_context, which has instructions
@@ -118,98 +123,42 @@ async def handle_message(
     if skill_labels and channel in ("telegram", "whatsapp") and channel_target:
         await send_skill_status(channel, channel_target, skill_labels)
 
-    # RAG: only when relevant — retrieve context and actual learned topics (so the model cannot claim it learned things it didn't)
-    rag_found_content = False
-    if "rag" in skills_to_use:
-        try:
-            from app.rag.service import get_rag
-            rag = get_rag()
-            rag_summary = await rag.query(text, k=5)
-            if rag_summary and len(rag_summary.strip()) > 10:
-                # RAG found content - skip web search to avoid conflicting results
-                rag_found_content = True
-                extra["rag_summary"] = rag_summary
-                if "google_search" in skills_to_use:
-                    skills_to_use.discard("google_search")
-                    logger.info(f"Skipping web search because RAG found {len(rag_summary)} chars of content")
-            elif rag_summary:
-                extra["rag_summary"] = rag_summary
-            extra["learned_topics"] = rag.list_topics()
-        except Exception:
-            extra["learned_topics"] = []
+    # Execute skills to gather data (populate `extra`)
+    from app.skills.registry import get_skill_by_name, get_all_skills
 
-    # Web search: only when relevant (and RAG didn't find good content)
-    if "google_search" in skills_to_use:
-        import asyncio
-        from app.search_web import search_web
-        results, err = await asyncio.to_thread(search_web, text, 5)
-        extra["search_results"] = results
-        extra["search_error"] = err
+    # Sort skills: RAG before Google Search (Search sees RAG content); then registry order for stability
+    priority_order = ["rag", "google_search"]
+    skill_names = list(get_all_skills())
+    name_to_idx = {s.name: i for i, s in enumerate(skill_names)}
 
-    # Server Status: only when relevant
-    if "server_status" in skills_to_use:
-        extra["server_status"] = get_server_status()
+    def _skill_sort_key(name: str) -> tuple[int, int]:
+        prio = priority_order.index(name) if name in priority_order else 999
+        idx = name_to_idx.get(name, 999)
+        return (prio, idx)
 
-    # Lyrics: only when relevant
-    if "lyrics" in skills_to_use:
-        from app.lyrics import _extract_lyrics_query, fetch_lyrics
-        q = _extract_lyrics_query(text)
-        if q:
-            extra["lyrics_searched_query"] = q
-            extra["lyrics_result"] = await fetch_lyrics(q)
+    sorted_skills = sorted(skills_to_use, key=_skill_sort_key)
+    logger.info("Executing skills: %s (Original: %s)", sorted_skills, skills_to_use)
 
-    # Self Awareness: Asta documentation (README.md + docs/*.md)
-    if "self_awareness" in skills_to_use:
-        t_lower = text.lower()
-        if any(k in t_lower for k in ("asta", "help", "documentation", "manual", "how to use", "what is this", "what can you do", "features", "capabilities", "yourself", "who are you")):
+    for skill_name in sorted_skills:
+        skill = get_skill_by_name(skill_name)
+        if skill:
             try:
-                import os
-                import glob
-                # backend/app/handler.py -> ... -> asta root
-                root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-                docs = []
-                
-                # 1. README.md
-                readme_path = os.path.join(root, "README.md")
-                if os.path.exists(readme_path):
-                    docs.append(f"--- README.md ---\n{open(readme_path, encoding='utf-8').read()}")
-                
-                # 2. docs/*.md
-                docs_dir = os.path.join(root, "docs")
-                if os.path.exists(docs_dir):
-                    for f in sorted(glob.glob(os.path.join(docs_dir, "*.md"))):
-                        name = os.path.basename(f)
-                        content = open(f, encoding='utf-8').read()
-                        docs.append(f"--- docs/{name} ---\n{content}")
-                
-                if docs:
-                    extra["asta_docs"] = "\n\n".join(docs)
+                logger.info("Skill %s executing...", skill_name)
+                skill_result = await skill.execute(user_id, text, extra)
+                if skill_result:
+                    logger.info("Skill %s returned data: %s", skill_name, list(skill_result.keys()))
+                    extra.update(skill_result)
+                else:
+                    logger.debug("Skill %s returned None", skill_name)
             except Exception as e:
-                logger.error(f"Failed to read docs: {e}")
+                logger.error("Skill %s execution failed: %s", skill_name, e, exc_info=True)
 
-    # Past meetings: when user asks about "last meeting" / "remember the meeting" etc., inject saved meeting notes
-    if "audio_notes" in enabled:
-        t_lower = (text or "").strip().lower()
-        if any(
-            phrase in t_lower
-            for phrase in (
-                "last meeting", "remember the meeting", "previous meeting", "past meeting",
-                "what was discussed", "what was said in the meeting", "meeting with ", "meeting we had",
-                "remind me what", "do you remember the meeting", "recall the meeting",
-            )
-        ):
-            try:
-                past = await db.get_recent_audio_notes(user_id, limit=5)
-                if past:
-                    extra["past_meetings"] = past
-            except Exception:
-                pass
-    
-    # Build context (only sections for skills_in_use to save tokens)
-    context = await build_context(db, user_id, cid, extra, skills_in_use=skills_to_use)
+    # 4. Build Context (Prompt Engineering)
+    # The new `build_context` signature takes `skills_in_use`.
+    context = await build_context(db, user_id, cid, extra=extra, skills_in_use=skills_to_use)
     
     # Silly GIF skill: Proactive instruction (not intent-based)
-    if "silly_gif" in enabled:
+    if "silly_gif" in skills_to_use: 
         context += (
             "\n\n[SKILL: SILLY GIF ENABLED]\n"
             "You can occasionally (10-20% chance) send a relevant GIF by adding `[gif: search term]` at the end of your message. "
@@ -218,22 +167,11 @@ async def handle_message(
     # Load recent messages; skip old assistant error messages so the model doesn't repeat "check your API key"
     recent = await db.get_recent_messages(cid, limit=20)
 
-    def is_error_reply(content: str) -> bool:
-        s = (content or "").strip()
-        if s.startswith("Error:") or s.startswith("No AI provider"):
-            return True
-        if "invalid or expired" in s and "API key" in s:
-            return True
-        if "API key" in s and ("check" in s.lower() or "update" in s.lower() or "renew" in s.lower()):
-            return True
-        if "Connect Spotify" in s or "connect your Spotify account" in s:
-            return True
-        return False
-
     messages = [
         {"role": m["role"], "content": m["content"]}
         for m in recent
-        if not (m["role"] == "assistant" and is_error_reply(m["content"]))
+        # Simple heuristic for old string-based errors in DB, plus new structured ones if we saved them
+        if not (m["role"] == "assistant" and (m["content"].startswith("Error:") or m["content"].startswith("No AI provider")))
     ]
     messages.append({"role": "user", "content": text})
 
@@ -249,7 +187,7 @@ async def handle_message(
     user_model = await db.get_user_provider_model(user_id, provider.name)
 
     # Cross-provider fallback: if primary fails, try other configured providers
-    from app.providers.fallback import chat_with_fallback, get_available_fallback_providers, is_error_reply as is_provider_error
+    from app.providers.fallback import chat_with_fallback, get_available_fallback_providers
     fallback_names = await get_available_fallback_providers(db, user_id, exclude_provider=provider.name)
     # Collect each fallback's custom model (so we use the right model per provider)
     fallback_models = {}
@@ -257,11 +195,19 @@ async def handle_message(
         fb_model = await db.get_user_provider_model(user_id, fb_name)
         if fb_model:
             fallback_models[fb_name] = fb_model
-    reply = await chat_with_fallback(
+
+    response = await chat_with_fallback(
         provider, messages, fallback_names,
         context=context, model=user_model or None,
         _fallback_models=fallback_models,
     )
+    
+    reply = response.content
+    
+    # If there was a fatal error (Auth/RateLimit) and no content, show the error message to the user
+    if not reply and response.error:
+         reply = f"Error: {response.error_message or 'Unknown provider error'}"
+
     
     # Expand GIF tags
     if "[gif:" in reply:

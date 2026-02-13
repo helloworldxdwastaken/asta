@@ -1,8 +1,23 @@
-from datetime import datetime
+import re
 from typing import Any
 from app.db import get_db
 from app.reminders import parse_reminder, schedule_reminder
 from app.time_weather import get_timezone_for_coords
+
+# Absolute-time patterns: "at 7am", "at 6pm" require user timezone
+RE_WAKE_AT = re.compile(
+    r"(?:wake\s+me\s+up|wake\s+up|alarm)\s+(?:tomorrow\s+)?at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}:\d{2})",
+    re.I,
+)
+RE_REMIND_AT = re.compile(
+    r"remind\s+me\s+(?:tomorrow\s+)?at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}:\d{2})\s+(?:to\s+)?(.+)",
+    re.I,
+)
+def _is_absolute_time_reminder(text: str) -> bool:
+    """True if text looks like 'at 7am' / 'at 6pm' (needs timezone)."""
+    t = (text or "").strip()
+    return bool(RE_WAKE_AT.search(t) or RE_REMIND_AT.search(t))
+
 
 async def _get_effective_location(user_id: str):
     """Get location from DB, or from User.md if DB is empty (geocode and persist)."""
@@ -35,7 +50,14 @@ class ReminderService:
         loc = await _get_effective_location(user_id)
         if loc:
             tz_str = await get_timezone_for_coords(loc["latitude"], loc["longitude"], loc.get("location_name"))
-            
+
+        # Absolute times ("at 7am", "at 6pm") require timezone. Don't schedule in UTC when unknown.
+        if not tz_str and _is_absolute_time_reminder(text):
+            return {
+                "reminder_needs_location": True,
+                "is_reminder": True,
+            }
+
         reminder = parse_reminder(text, tz_str=tz_str)
         if reminder:
             run_at = reminder["run_at"]

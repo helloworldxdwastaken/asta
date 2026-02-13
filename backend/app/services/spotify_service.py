@@ -13,10 +13,30 @@ from app.spotify_client import (
     play_query_from_message,
     spotify_search_if_configured,
     _search_query_from_message,
+    _is_music_search,
     parse_volume_percent,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _has_spotify_intent(text: str, pending_play: bool) -> bool:
+    """True only when message has explicit Spotify/music intent (not generic text)."""
+    t = (text or "").strip().lower()
+    if pending_play and len(text.strip()) < 40:
+        return True
+    if any(k in t for k in ("skip", "next song", "next track")):
+        return True
+    if any(k in t for k in ("volume", "turn it up", "turn it down")):
+        return True
+    if extract_playlist_uri(text):
+        return True
+    if play_query_from_message(text):
+        return True
+    if _is_music_search(text):
+        return True
+    return False
+
 
 class SpotifyService:
     @staticmethod
@@ -25,12 +45,20 @@ class SpotifyService:
         Process user text for specific Spotify commands.
         Returns a reply string if handled (short-circuiting the LLM), or None if not handled/needs LLM.
         Updates extra_context in-place.
+        Only runs when message has explicit Spotify/music intent (avoids hijacking reminders, questions, etc).
         """
         t_lower = (text or "").strip().lower()
+        db = get_db()
+
+        # 0. Pending device selection state
+        pending = await db.get_pending_spotify_play(user_id)
+        pending_play = bool(pending and len(text.strip()) < 40)
+
+        # Early exit: no Spotify intent -> let LLM handle
+        if not _has_spotify_intent(text, pending_play):
+            return None
 
         # 1. Pending Device Selection (e.g. "1", "Kitchen")
-        db = get_db()
-        pending = await db.get_pending_spotify_play(user_id)
         if pending and len(text.strip()) < 40:
             try:
                 devices = json.loads(pending.get("devices_json") or "[]")

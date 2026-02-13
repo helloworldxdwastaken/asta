@@ -50,7 +50,7 @@ npm run dev
 
 ### 5. Optional
 
-In the panel: **Settings** → add API keys (Groq, Gemini, Claude, Telegram, Spotify), set default AI, toggle skills. Set your **location** in Chat (e.g. “Holon, Israel”) for time and weather.
+In the panel: **Settings** → add API keys (Groq, Gemini, Claude, OpenAI, OpenRouter, Telegram, Spotify), set default AI, toggle skills. Set your **location** in Chat (e.g. “Holon, Israel”) for time and weather.
 
 ---
 
@@ -101,6 +101,7 @@ From the repo root, **`./asta.sh`** starts/stops both backend and frontend:
 | `GROQ_API_KEY` / `GEMINI_API_KEY` / `GOOGLE_AI_KEY` | Groq / Google AI |
 | `ANTHROPIC_API_KEY` | Claude |
 | `OPENAI_API_KEY` | OpenAI |
+| `OPENROUTER_API_KEY` | OpenRouter |
 | `OLLAMA_BASE_URL` | e.g. `http://localhost:11434` (Ollama) |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot ([@BotFather](https://t.me/BotFather)) |
 | `ASTA_ALLOWED_PATHS` | Comma-separated dirs for file access |
@@ -131,9 +132,10 @@ See **docs/ERRORS.md** for a full list of common errors and fixes. Quick checks:
 
 - **“Address already in use” (8010 or 5173)** — Run `./asta.sh restart` to free ports and start fresh. Or use another port, e.g. `uvicorn app.main:app --reload --port 8001` and update `VITE_API_URL` / `ASTA_API_URL` accordingly.
 - **“Cannot reach Asta API” / “API off”** — Start the backend: `./asta.sh start` or run uvicorn as above. Panel talks to `http://localhost:8010/api` by default.
-- **“No AI provider available”** — Add at least one of: `GROQ_API_KEY`, `GEMINI_API_KEY`, or run Ollama and set `OLLAMA_BASE_URL`.
+- **“No AI provider available”** — Add at least one of: `GROQ_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, or run Ollama and set `OLLAMA_BASE_URL`.
 - **Backend can’t find .env** — Backend reads **`backend/.env`** only. Run `cp .env.example backend/.env` from the repo root.
 - **Lyrics / Spotify / Reminders** — Enable the skill in **Settings → Skills**. For Spotify, add Client ID and Secret in Settings → Spotify; for reminders, set location in Chat.
+- **“Wake me up at 7am” asks for location first** — Expected when no location is set. Asta now requires location/timezone for absolute-time reminders.
 - **Reminders not firing** — Restart the backend once so pending reminders are re-loaded (`./asta.sh restart`).
 - **Audio notes: “faster-whisper is not installed”** — Run `pip install -r requirements.txt` in the backend venv. First run may download the Whisper model (~140 MB).
 

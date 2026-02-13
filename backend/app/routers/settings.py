@@ -32,8 +32,8 @@ async def _spotify_configured(db) -> bool:
 SKILLS = [
     {"id": "files", "name": "Files", "description": "Local file access and summaries"},
     {"id": "drive", "name": "Google Drive", "description": "Drive files and summaries"},
-    {"id": "calendar", "name": "Google Calendar", "description": "Calendar events (coming soon)"},
     {"id": "rag", "name": "Learning (RAG)", "description": "Learned knowledge and documents"},
+    {"id": "learn", "name": "Learn about topic", "description": "Say 'learn about X for 30 min' to have Asta learn and store a topic in RAG."},
     {"id": "time", "name": "Time", "description": "Current time (12h AM/PM). Location is used for your timezone when set."},
     {"id": "weather", "name": "Weather", "description": "Current weather and forecast (today, tomorrow). Set your location once so Asta can answer."},
     {"id": "google_search", "name": "Google search", "description": "Search the web for current information"},
@@ -196,17 +196,19 @@ async def get_status(user_id: str = "default"):
     toggles = await db.get_all_skill_toggles(user_id)
     skills_available = {
         "files": bool(s.asta_allowed_paths and s.asta_allowed_paths.strip()),
-        "drive": True,  # stub; real check would be OAuth
-        "calendar": False,
+        "drive": False,  # OAuth not wired yet; stub only
         "rag": True,
         "time": True,
         "weather": True,
         "google_search": True,
         "lyrics": True,
         "spotify": await _spotify_configured(db),
+        "reminders": True,
+        "learn": True,
         "audio_notes": True,
         "self_awareness": True,
         "silly_gif": api_status.get("giphy_api_key", False),
+        "server_status": True,
     }
     skills = []
     for sk in SKILLS:
@@ -404,17 +406,19 @@ async def get_skills(user_id: str = "default"):
     api_status = await db.get_api_keys_status()
     skills_available = {
         "files": bool(s.asta_allowed_paths and s.asta_allowed_paths.strip()),
-        "drive": True,
-        "calendar": False,
+        "drive": False,  # OAuth not wired yet
         "rag": True,
         "time": True,
         "weather": True,
         "google_search": True,
         "lyrics": True,
         "spotify": await _spotify_configured(db),
+        "reminders": True,
+        "learn": True,
         "audio_notes": True,
         "self_awareness": True,
         "silly_gif": api_status.get("giphy_api_key", False),
+        "server_status": True,
     }
     out = []
     for sk in SKILLS:

@@ -164,8 +164,12 @@ async def fetch_weather(latitude: float, longitude: float) -> str:
         return "unavailable"
 
 
-async def fetch_weather_with_forecast(latitude: float, longitude: float) -> dict[str, str]:
-    """Fetch current weather plus today and tomorrow forecast. Returns dict with current, today, tomorrow (each a short line)."""
+async def fetch_weather_with_forecast(
+    latitude: float, longitude: float, timezone_str: str | None = None
+) -> dict[str, str]:
+    """Fetch current weather plus today and tomorrow forecast. Returns dict with current, today, tomorrow (each a short line).
+    timezone_str: IANA timezone (e.g. 'Asia/Jerusalem') for correct today/tomorrow boundaries. Default UTC."""
+    tz = timezone_str or "UTC"
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             r = await client.get(
@@ -175,7 +179,7 @@ async def fetch_weather_with_forecast(latitude: float, longitude: float) -> dict
                     "longitude": longitude,
                     "current": "temperature_2m,weather_code",
                     "daily": "weather_code,temperature_2m_max,temperature_2m_min",
-                    "timezone": "UTC",
+                    "timezone": tz,
                     "forecast_days": 3,
                 },
             )

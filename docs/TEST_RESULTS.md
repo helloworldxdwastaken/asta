@@ -1,12 +1,12 @@
 # Asta — Test Results
 
-Run the API smoke tests (with backend at http://localhost:8010):
+This file records the latest documented smoke-test run. Re-run before release:
 
 ```bash
 ./test_api.sh http://localhost:8010/api
 ```
 
-## API tests (run 2026-02-10)
+## API tests (documented run: 2026-02-10)
 
 | Endpoint | Result | Notes |
 |----------|--------|--------|

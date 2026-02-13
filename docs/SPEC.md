@@ -19,16 +19,16 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 ### 2.1 Implemented
 
 - **Control panel** — `frontend/`: Dashboard, Chat, Files, Drive, Learning, Audio notes, Settings. Skills toggles and API keys (including Spotify) in Settings.
-- **AI providers** — `backend/app/providers/`: Groq, Google (Gemini), Claude, Ollama. Set keys in Settings or `backend/.env`.
+- **AI providers** — `backend/app/providers/`: Groq, Google (Gemini), Claude, OpenAI, OpenRouter, Ollama. Set keys in Settings or `backend/.env`.
 - **Unified context** — AI receives: recent conversation, connected channels, **ground-truth state** (pending reminder count, location), allowed file paths, Drive summary (when connected), RAG snippets, time, weather, lyrics, Spotify, reminders. When reminders skill is used, the **actual pending reminders list** is injected so the AI doesn't hallucinate. `backend/app/context.py`, `handler.py`.
-- **Intent-based skills** — `backend/app/skill_router.py`: only relevant skills run per message (time, weather, lyrics, Spotify, etc.). Saves tokens; status in Telegram/WhatsApp shows only used skills (e.g. "🎵 Finding lyrics…").
+- **Intent-based skills** — `backend/app/skill_router.py`: only relevant skills run per message (time, weather, lyrics, Spotify, etc.). Saves tokens; status in Telegram/WhatsApp shows only used skills (e.g. "🎵 Finding lyrics…"). Service-style handlers (reminders, learning, Spotify) are gated by skill toggles.
 - **Time & Weather** — `backend/app/time_weather.py`: separate skills. Time in 12h AM/PM; weather with today/tomorrow forecast (Open-Meteo). User location stored for timezone and weather.
-- **Web search** — `backend/app/search_web.py`: DuckDuckGo (no API key). Triggered for "search for", "what is", questions.
+- **Web search** — `backend/app/search_web.py`: ddgs multi-backend search (no API key). Triggered mainly on explicit search intent ("search for", "look up", "check the web", "latest"), with RAG prioritized first when relevant.
 - **Lyrics** — `backend/app/lyrics.py`: LRCLIB (free). "Lyrics of X", "lyrics for X", follow-ups like "a song by Artist". Multiple query formats if first search fails.
 - **Spotify** — `backend/app/spotify_client.py`, `routers/spotify.py`: search (Client ID/Secret in Settings → Spotify or `.env`). Playback: OAuth connect, list devices, "play X on Spotify" with device picker (reply with number or name). `GET /api/spotify/connect`, `/api/spotify/callback`, `/api/spotify/devices`, `POST /api/spotify/play`.
-- **Reminders** — `backend/app/reminders.py`: "Wake me up at 7am", "remind me tomorrow at 8am to X", "remind me in 30 min", "alarm in 5 min to X", "timer 10 min", "set alarm for 2h". User timezone from location (DB or User.md). Friendly message at trigger time (Telegram/WhatsApp or web). APScheduler + DB. **On startup**, `reload_pending_reminders()` loads all pending reminders from DB. **Post-reply validation**: if AI claims it set a reminder but the parser didn't match, a correction is appended.
+- **Reminders** — `backend/app/reminders.py`: "Wake me up at 7am", "remind me tomorrow at 8am to X", "remind me in 30 min", "alarm in 5 min to X", "timer 10 min", "set alarm for 2h". User timezone from location (DB or User.md). Absolute-time reminders (like "at 7am") require location; if missing, Asta asks for location first instead of scheduling in UTC. Friendly message at trigger time (Telegram/WhatsApp or web). APScheduler + DB. **On startup**, `reload_pending_reminders()` loads all pending reminders from DB. **Post-reply validation**: if AI claims it set a reminder but the parser didn't match, a correction is appended.
 - **Audio notes** — `backend/app/audio_transcribe.py`, `app/audio_notes.py`, `routers/audio.py`: Upload audio (meetings, voice memos); transcribe with faster-whisper (local; model choice: base/small/medium); format with default AI. `POST /api/audio/process` (multipart: file, instruction, whisper_model, async_mode). With `async_mode=1`, returns 202 + job_id; poll `GET /api/audio/status/{job_id}` for progress (transcribing → formatting → done). Meeting notes (when instruction is "meeting") are saved in DB so user can ask "last meeting?" in Chat; context injects recent saved meetings. Telegram: voice/audio and audio-from-URL with progress messages ("Transcribing…", "Formatting…"). UI shows progress bar. Dependencies: `faster-whisper`, `python-multipart` (see `backend/requirements.txt`).
-- **WhatsApp bridge** — `services/whatsapp/` (whatsapp-web.js): receives messages, POSTs to `/api/incoming/whatsapp`, sends reply. Run with `ASTA_API_URL=http://localhost:8010 node index.js`.
+- **WhatsApp bridge** — `services/whatsapp/` (Baileys): receives messages, POSTs to `/api/incoming/whatsapp`, sends reply. Run with `ASTA_API_URL=http://localhost:8010 npm run start`.
 - **Telegram bot** — `backend/app/channels/telegram_bot.py`: long polling when `TELEGRAM_BOT_TOKEN` set; same message handler as panel/WhatsApp.
 - **File management** — `backend/app/routers/files.py`: list/read under `ASTA_ALLOWED_PATHS`. **Virtual roots**: "Asta knowledge" (README + docs/*.md), "About you (User.md)" — memories (location, preferred name, max 10 facts). User.md is editable in the panel; AI reads it for context. Location in User.md is used for time, weather, and reminders if DB location is empty.
 - **Google Drive** — Stub in `routers/drive.py`; OAuth and list can be wired next.
@@ -82,8 +82,8 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 |-----------|------|----------------|
 | **API** | FastAPI (Python 3.11+) | REST + WebSocket; auth; route to providers and tasks. |
 | **Panel** | React (Vite), TypeScript | Dashboard: chats, settings, file browser, Drive, learning jobs. |
-| **AI adapters** | Python modules | One module per provider (Google, Claude, Ollama); same interface: `chat(messages) -> response`. |
-| **WhatsApp** | Official API or whatsapp-web.js | Receive/send messages; forward to core message handler. |
+| **AI adapters** | Python modules | One module per provider (Groq, Google, Claude, OpenAI, OpenRouter, Ollama); same interface: `chat(messages) -> response`. |
+| **WhatsApp** | Baileys bridge service | Receive/send messages; forward to core message handler. |
 | **Telegram** | python-telegram-bot | Webhook or long polling; forward to core message handler. |
 | **Files** | Python (pathlib, aiofiles) | Local file ops in allowed dirs; list, read, search. |
 | **Google Drive** | Google Drive API + OAuth2 | List, search, download; optional upload. |
@@ -110,7 +110,7 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 
 - **New AI provider:** Implement `backend/app/providers/base.py` interface; add under `backend/app/providers/`. Register in provider registry.
 - **New skill:** Add intent and label in `skill_router.py`, run in `handler.py` (set `extra`), context in `context.py`, and entry in `routers/settings.py` SKILLS.
-- **WhatsApp:** `services/whatsapp/` (Node, whatsapp-web.js) — receives messages, POSTs to backend `/api/incoming/whatsapp`; outbound reminders use `ASTA_WHATSAPP_BRIDGE_URL` + `/send`.
+- **WhatsApp:** `services/whatsapp/` (Node + Baileys) — receives messages, POSTs to backend `/api/incoming/whatsapp`; outbound reminders use `ASTA_WHATSAPP_BRIDGE_URL` + `/send`.
 - **Telegram:** `backend/app/channels/telegram_bot.py` — long polling; same message handler as panel/WhatsApp.
 - **Panel:** `frontend/` — React app; new pages under `src/pages/`, API client in `src/api/`.
 - **RAG:** `backend/app/rag/` — ingest pipeline, embedding (Ollama or API), vector store; expose “learn” and “ask about topic” endpoints.
@@ -178,4 +178,4 @@ asta/
 
 ## 6. Changelog (spec)
 
-- **Current:** Control panel, AI providers (Groq, Google, Claude, Ollama), WhatsApp bridge, Telegram bot, files, RAG (learned knowledge), **intent-based skills** (time, weather, web search, lyrics, Spotify, reminders), **reminders** (wake me up, remind at time, alarm/timer in X min, user timezone), **Spotify** (search + OAuth playback with device picker), **lyrics** (LRCLIB), **time/weather** (Open-Meteo, location). **Memories (User.md)** in Files: location, preferred name, max 10 facts; editable in panel; used for time/weather/reminders. **Ground truth** in context: real pending reminders + location so AI doesn't hallucinate. **Post-reply validation** when AI claims reminder set but parser failed. Drive and recurring reminders planned.
+- **Current:** Control panel, AI providers (Groq, Google, Claude, OpenAI, OpenRouter, Ollama), WhatsApp bridge, Telegram bot, files, RAG (learned knowledge), **intent-based skills** (time, weather, web search, lyrics, Spotify, reminders), **reminders** (wake me up, remind at time, alarm/timer in X min, user timezone), **Spotify** (search + OAuth playback with device picker), **lyrics** (LRCLIB), **time/weather** (Open-Meteo, location-aware timezone). **Memories (User.md)** in Files: location, preferred name, max 10 facts; editable in panel; used for time/weather/reminders. **Ground truth** in context: real pending reminders + location so AI doesn't hallucinate. **Post-reply validation** when AI claims reminder set but parser failed. Drive and recurring reminders planned.

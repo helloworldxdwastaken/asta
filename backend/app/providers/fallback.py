@@ -3,49 +3,9 @@ Inspired by OpenClaw's model-fallback.ts — adapted for Asta's Python stack.
 """
 from __future__ import annotations
 import logging
-from enum import Enum
-from app.providers.base import BaseProvider, Message
+from app.providers.base import BaseProvider, Message, ProviderResponse, ProviderError
 
 logger = logging.getLogger(__name__)
-
-
-class ErrorKind(str, Enum):
-    """Classify provider errors so we know whether to retry."""
-    AUTH = "auth"                # API key invalid — don't retry with same provider
-    RATE_LIMIT = "rate_limit"   # Rate limited — try another provider
-    MODEL_NOT_FOUND = "model"   # Model doesn't exist — try another provider
-    TIMEOUT = "timeout"         # Timed out — try another provider
-    TRANSIENT = "transient"     # Unknown/transient error — try another provider
-    NONE = "none"               # Not an error
-
-
-def classify_error(reply: str) -> ErrorKind:
-    """Classify an error reply string from a provider. Returns NONE if not an error."""
-    if not reply:
-        return ErrorKind.NONE
-    s = reply.strip()
-    if not s.startswith("Error:"):
-        return ErrorKind.NONE
-    low = s.lower()
-    # Auth errors: won't be fixed by retrying with the same key
-    if any(k in low for k in ("invalid or expired", "api key not set", "authentication", "401", "key invalid")):
-        return ErrorKind.AUTH
-    # Rate limit
-    if any(k in low for k in ("rate limit", "429", "rate-limited")):
-        return ErrorKind.RATE_LIMIT
-    # Model not found / decommissioned
-    if any(k in low for k in ("not found", "decommissioned", "404", "unknown model")):
-        return ErrorKind.MODEL_NOT_FOUND
-    # Timeout
-    if "timed out" in low or "timeout" in low:
-        return ErrorKind.TIMEOUT
-    # Any other "Error:" is transient
-    return ErrorKind.TRANSIENT
-
-
-def is_error_reply(reply: str) -> bool:
-    """True if the reply is an error message from a provider."""
-    return classify_error(reply) != ErrorKind.NONE
 
 
 async def get_available_fallback_providers(
@@ -122,7 +82,7 @@ async def chat_with_fallback(
     messages: list[Message],
     fallback_names: list[str],
     **kwargs,
-) -> str:
+) -> ProviderResponse:
     """Try the primary provider, then each fallback. Returns the first successful reply.
 
     Auth errors on the primary are NOT retried (the key is broken).
@@ -133,26 +93,35 @@ async def chat_with_fallback(
 
     # Try primary
     try:
-        reply = await primary.chat(messages, **kwargs)
+        response = await primary.chat(messages, **kwargs)
     except Exception as e:
-        reply = f"Error: {primary.name} — {str(e)[:200]}"
+        # Unexpected exception during chat call (e.g. network error)
+        # Treat as transient unless we can identify it
+        logger.error(f"Primary provider {primary.name} exception: {e}")
+        response = ProviderResponse(
+            content="",
+            error=ProviderError.TRANSIENT,
+            error_message=str(e)
+        )
 
-    error_kind = classify_error(reply)
+    if not response.error:
+        return response  # Success!
 
-    if error_kind == ErrorKind.NONE:
-        return reply  # Success!
+    # Auth errors on primary: fatal, do not fallback (user needs to fix key)
+    if response.error == ProviderError.AUTH:
+        return response
+    
+    # If no fallbacks, return the error
+    if not fallback_names:
+        return response
 
-    if error_kind == ErrorKind.AUTH and not fallback_names:
-        return reply  # Auth error and no fallbacks — nothing we can do
-
-    # Auth errors: only skip fallback if there are none. Otherwise try fallbacks.
     logger.warning(
         "Primary provider %s failed (%s: %s), trying %d fallback(s)",
-        primary.name, error_kind.value, reply[:80], len(fallback_names),
+        primary.name, response.error.value, response.error_message, len(fallback_names),
     )
 
     # Try each fallback
-    last_error = reply
+    last_response = response
     for i, fb_name in enumerate(fallback_names):
         fb_provider = get_provider(fb_name)
         if not fb_provider:
@@ -168,21 +137,27 @@ async def chat_with_fallback(
             fb_kwargs.pop("model", None)  # Use provider default
 
         try:
-            fb_reply = await fb_provider.chat(messages, **fb_kwargs)
+            fb_response = await fb_provider.chat(messages, **fb_kwargs)
         except Exception as e:
-            fb_reply = f"Error: {fb_name} — {str(e)[:200]}"
+            fb_response = ProviderResponse(
+                content="",
+                error=ProviderError.TRANSIENT,
+                error_message=f"{fb_name} exception: {str(e)}"
+            )
 
-        fb_error = classify_error(fb_reply)
-        if fb_error == ErrorKind.NONE:
+        if not fb_response.error:
             logger.info("Fallback %s succeeded (attempt %d/%d)", fb_name, i + 1, len(fallback_names))
-            return fb_reply
-        if fb_error == ErrorKind.AUTH:
+            return fb_response
+        
+        # If auth error on fallback, skip it and try next
+        if fb_response.error == ProviderError.AUTH:
             logger.warning("Fallback %s: auth error, skipping to next", fb_name)
-            last_error = fb_reply
+            last_response = fb_response
             continue
-        logger.warning("Fallback %s failed (%s), trying next", fb_name, fb_error.value)
-        last_error = fb_reply
+            
+        logger.warning("Fallback %s failed (%s), trying next", fb_name, fb_response.error.value)
+        last_response = fb_response
 
     # All exhausted
-    logger.error("All providers exhausted. Last error: %s", last_error[:200])
-    return last_error
+    logger.error("All providers exhausted. Last error: %s", last_response.error_message)
+    return last_response

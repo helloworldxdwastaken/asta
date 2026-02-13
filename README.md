@@ -1,123 +1,116 @@
 # Asta
 
-One place to talk to AI, automate tasks, and stay in control: **web panel**, **Telegram**, and **WhatsApp**. One user, one context.
+A personal AI workspace that runs on **web**, **Telegram**, and **WhatsApp** with one shared context.
 
-**AI:** Groq, Google Gemini, Claude, Ollama — set your default in Settings.  
-**Skills:** Time & weather, web search, lyrics, Spotify (search + play on your devices), reminders (“wake me up at 7am”, “alarm in 5 min to X”), audio notes (upload/voice → transcript + meeting notes), and **learn about X for Y minutes** (background learning + notify when done).  
-**Data:** Chat history, files (allowed paths), Google Drive (stub), and learned knowledge (RAG with Ollama + Chroma). No Docker — **native install** only.
+## Preview
 
----
+![Asta UI preview](./preview.png)
 
-## Quick start
+## Why Asta
 
-**1. Clone and config**
+- Multi-provider AI: Groq, Google Gemini, Claude, OpenAI, OpenRouter, and Ollama.
+- Built-in skills: time/weather, web search, lyrics, Spotify, reminders, audio notes, and background learning.
+- Unified memory: chat history, allowed local files, learned knowledge (RAG), and channel history.
+- Native setup: no Docker required.
+
+## Quick Start
+
+### 1. Clone and configure
 
 ```bash
 git clone https://github.com/helloworldxdwastaken/asta.git
 cd asta
 cp .env.example backend/.env
-# Edit backend/.env with API keys (optional at first)
 ```
 
-**2. Backend + frontend (Linux / macOS)**
+Add API keys in `backend/.env` if needed.
+
+### 2. Start with the control script (recommended)
 
 ```bash
-./asta.sh install   # Optional: adds 'asta' to system path
-asta start          # Start AI + web panel
+./asta.sh install   # optional: add 'asta' command to your path
+asta start          # or: ./asta.sh start
 ```
 
-Then open **http://localhost:5173** (panel) and **http://localhost:8010/docs** (API docs).
+Open:
 
-**3. Or run by hand**
+- Panel: `http://localhost:5173`
+- API docs: `http://localhost:8010/docs`
+
+### 3. Manual start (alternative)
 
 ```bash
 # Backend
-cd backend && python3 -m venv .venv && source .venv/bin/activate
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8010
 
-# Frontend (other terminal)
-cd frontend && npm install && npm run dev
+# Frontend (new terminal)
+cd frontend
+npm install
+npm run dev
 ```
 
-Panel: **http://localhost:5173**. If it says “API off”, start the backend (or use **Settings → Run the API** in the panel).
+If the panel shows "API off", start the backend first or use **Settings -> Run the API**.
 
----
+## `asta.sh` Commands
 
-## Control script (`asta.sh`)
+| Command | Description |
+| --- | --- |
+| `./asta.sh start` | Start backend + frontend (frees ports `8010` and `5173` first) |
+| `./asta.sh stop` | Stop both services |
+| `./asta.sh restart` | Restart both services |
+| `./asta.sh status` | Show backend/frontend process status |
 
-From the repo root (Linux / macOS):
+## Core Features
 
-| Command | What it does |
-|--------|----------------|
-| `./asta.sh start` | Start backend + frontend (frees ports 8010 and 5173 first) |
-| `./asta.sh stop` | Stop both |
-| `./asta.sh restart` | Stop, then start both (e.g. after changing Telegram token) |
-| `./asta.sh status` | Show if backend and frontend are running |
+- **Chat**: provider routing + automatic skill execution.
+- **Files**: local knowledge files + editable memory (`User.md`) + allowed paths.
+- **Learning**: "learn about X for Y minutes" with retrievable context.
+- **Audio Notes**: upload/voice transcription and summary (faster-whisper).
+- **Channels**: Telegram + WhatsApp integrations in one place.
+- **Settings/Skills**: key management, default model, toggles, and backend controls.
 
----
+## Channel Setup
 
-## What’s in the panel
+- Telegram: set `TELEGRAM_BOT_TOKEN` in `backend/.env` or configure it in **Channels**.
+- WhatsApp: run `services/whatsapp` (see `services/whatsapp/README.md`), scan QR in **Channels**, and set `ASTA_WHATSAPP_BRIDGE_URL`.
 
-- **Dashboard** — Overview and quick links  
-- **Chat** — Talk to Asta; skills (search, time, weather, lyrics, Spotify, reminders, audio notes, learning) run when relevant  
-- **Files** — Asta knowledge (docs), your memories (User.md: location, name, facts — editable), and allowed paths (`ASTA_ALLOWED_PATHS`)  
-- **Drive** — Google Drive (OAuth stub)  
-- **Learning** — RAG: “learn about X for 30 min”, ask later; semantic search so answers use only relevant learned bits  
-- **Audio notes** — Upload or paste a link; transcribe (local faster-whisper) and get meeting notes or summary; saved for “last meeting?”  
-- **Channels** — Manage WhatsApp and Telegram connections (QR code, bot token)
-- **Settings** — API keys (Groq, Gemini, Claude, Spotify), default AI, skill toggles, “Run the API”, “Restart backend”  
-- **Skills** — Enable/disable time, weather, web search, lyrics, Spotify, reminders, audio notes, learning  
+## Learning / RAG Setup
 
-**Telegram:** Set `TELEGRAM_BOT_TOKEN` in `backend/.env` or on the **Channels** page.  
-**WhatsApp:** Run `services/whatsapp` (see `services/whatsapp/README.md`); scan QR on the **Channels** page. Ensure `ASTA_WHATSAPP_BRIDGE_URL` is set in `backend/.env`.
-
----
-
-## Learning / RAG (Ollama or API)
-
-For **Learning** (“learn about X”, paste text, schedule jobs), Asta needs embeddings. It tries **Ollama** first, then **OpenAI**, then **Google** (Gemini). To use Ollama and pull the small RAG model:
+For learning, embeddings are required. Asta tries providers in this order: **Ollama -> OpenAI -> Google**.
 
 ```bash
-./scripts/setup_ollama_rag.sh        # Pull nomic-embed-text (Ollama must be installed)
-./scripts/setup_ollama_rag.sh -i     # Install Ollama first (Linux), then pull model
+./scripts/setup_ollama_rag.sh
+./scripts/setup_ollama_rag.sh -i
 ```
 
-Then start Ollama if not running: `ollama serve` (or open the Ollama app). If you don’t use Ollama, set an **OpenAI** or **Gemini** key in Settings and RAG will use that instead.
-
----
+Then run `ollama serve` (or open Ollama app). If Ollama is not used, set OpenAI or Gemini keys in Settings.
 
 ## Docs
 
-- **`docs/INSTALL.md`** — Full native install (macOS, Linux, Windows), env vars, troubleshooting.  
-- **`docs/ERRORS.md`** — Common errors and solutions (startup, API, skills, web search, reminders, etc.).  
-- **`docs/SPEC.md`** — Product spec and where to add features.  
-- **`docs/SECURITY.md`** — Keep secrets in `backend/.env` only; never commit them.
+- `docs/INSTALL.md`: full install and environment setup (Linux/macOS/Windows).
+- `docs/ERRORS.md`: common issues and fixes.
+- `docs/SPEC.md`: product behavior and implementation notes.
+- `docs/SECURITY.md`: secret handling and security guidance.
 
----
+## Project Structure
 
-## Easy install (planned)
-
-A single command that clones (or pulls) from GitHub and installs dependencies (venv, pip, npm) so you can run `./asta.sh start` — coming later.
-
----
-
-## Project layout
-
-```
+```text
 asta/
-├── backend/           # FastAPI — backend/.env, API keys also in Settings (DB)
-├── frontend/          # React + Vite (panel)
+├── backend/           # FastAPI backend
+├── frontend/          # React + Vite web panel
 ├── services/whatsapp/ # WhatsApp bridge (Node)
-├── scripts/           # setup_ollama_rag.sh — install Ollama + pull RAG embedding model
-├── docs/              # INSTALL.md, SPEC.md, SECURITY.md
-├── asta.sh            # Start/stop/restart backend + frontend
-├── .env.example       # Copy to backend/.env
+├── scripts/           # helper scripts (RAG/Ollama setup)
+├── docs/              # install, spec, errors, security
+├── asta.sh            # start/stop/restart/status
+├── .env.example       # copy to backend/.env
+├── preview.png        # README preview image
 └── README.md
 ```
 
----
-
 ## License
 
-Use and modify as you like.
+Use and modify freely.

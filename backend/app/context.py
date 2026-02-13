@@ -1,13 +1,17 @@
 """Build unified context for the AI: connections, recent chat, files, Drive, RAG."""
 from __future__ import annotations
 from typing import TYPE_CHECKING
+import logging
 
 if TYPE_CHECKING:
     from app.db import Db
 
+logger = logging.getLogger(__name__)
+
 # Default user id when not in a multi-user setup
 DEFAULT_USER_ID = "default"
 
+from app.context_helpers import _is_error_reply, _is_time_reply
 
 async def build_context(
     db: "Db",
@@ -18,18 +22,57 @@ async def build_context(
 ) -> str:
     """Build a context string the AI can use. If skills_in_use is set, only include those skill sections (saves tokens)."""
     extra = extra or {}
-    only_skills = skills_in_use  # when set, we only add sections for these skills
-    def _use(skill_id: str) -> bool:
-        return only_skills is None or skill_id in only_skills
-    mood = extra.get("mood") or "normal"
+    
+    parts = []
+    
+    # 1. System instruction & Tone
+    parts.extend(_get_system_header(extra.get("mood")))
+
+    # 2. Recent Conversation
+    if conversation_id:
+        parts.extend(await _get_recent_conversation(db, conversation_id, skills_in_use))
+
+    # 3. Connected Channels & State
+    parts.extend(await _get_state_section(db, user_id, extra))
+
+    # 4. Skill Sections
+    from app.skills.registry import get_all_skills
+    
+    # Iterate over all registered skills
+    # We use a fixed order from registry to ensure context stability
+    for skill in get_all_skills():
+        # Check if enabled for user
+        is_enabled = await db.get_skill_enabled(user_id, skill.name)
+        if not is_enabled and not skill.is_always_enabled:
+             continue
+             
+        # Check if selected by router (skills_in_use)
+        # If skills_in_use is None, we default to "include everything" (e.g. debugging)
+        if skills_in_use is not None and skill.name not in skills_in_use:
+             continue
+
+        try:
+            # We must pass 'db' here!
+            section = await skill.get_context_section(db, user_id, extra)
+            if section:
+                parts.append(section)
+        except Exception as e:
+            logger.error(f"Error building context for skill {skill.name}: {e}")
+            parts.append(f"<!-- Error loading {skill.name} context -->")
+
+    parts.append("Answer using the above context when relevant. Be concise and helpful.")
+    return "\n".join(parts)
+
+
+def _get_system_header(mood: str | None) -> list[str]:
+    mood = mood or "normal"
     _mood_map = {
         "serious": "Reply in a serious, professional tone. Be direct and factual.",
         "friendly": "Reply in a warm, friendly tone. Use a bit of warmth and personality.",
         "normal": "Reply in a balanced, helpful tone—neither stiff nor overly casual.",
     }
     mood_instruction = _mood_map.get(mood, _mood_map["normal"])
-
-    parts = [
+    return [
         "You are Asta, the user's agent. You use whichever AI model is configured (Groq, Gemini, Claude, Ollama) and have access to the user's connected services.",
         "TONE: " + mood_instruction,
         "CORE DIRECTIVE: If you have learned knowledge (RAG) about a topic, it takes precedence over general knowledge or web search results.",
@@ -37,49 +80,33 @@ async def build_context(
         "",
     ]
 
-    # Recent conversation (last 10 messages). Skip assistant error replies so the model doesn't repeat "check your API key".
-    def _is_error_reply(content: str) -> bool:
-        s = (content or "").strip()
-        if s.startswith("Error:") or s.startswith("No AI provider"):
-            return True
-        if "invalid or expired" in s and "API key" in s:
-            return True
-        if "API key" in s and ("check" in s.lower() or "update" in s.lower() or "renew" in s.lower()):
-            return True
-        return False
 
-    def _is_time_reply(content: str) -> bool:
-        """Skip assistant time answers (e.g. '6:09 PM in Holon') — they may be stale/wrong, use live value instead."""
-        import re
-        s = (content or "").strip()
-        if len(s) > 150:  # Long replies aren't simple time answers
-            return False
-        # Pattern: "X:XX AM/PM" or "X:XX" followed by "in [place]" — likely a time reply
-        if re.search(r"\d{1,2}:\d{2}\s*(AM|PM)?", s) and (" in " in s.lower() or " holon" in s.lower() or " it's " in s.lower() or " it is " in s.lower()):
-            return True
-        return False
+async def _get_recent_conversation(db: "Db", conversation_id: str, skills_in_use: set[str] | None) -> list[str]:
+    """Get recent messages, skipping error replies and stale time checks."""
+    parts = []
+    try:
+        recent = await db.get_recent_messages(conversation_id, limit=10)
+        if recent:
+            parts.append("--- Recent conversation ---")
+            skip_time_replies = skills_in_use and "time" in skills_in_use
+            for m in recent:
+                if m["role"] == "assistant" and _is_error_reply(m["content"]):
+                    continue
+                if skip_time_replies and m["role"] == "assistant" and _is_time_reply(m["content"]):
+                    continue  # Don't show old time answers — use live value from Time section
+                role = "User" if m["role"] == "user" else "Assistant"
+                parts.append(f"{role}: {m['content'][:500]}")
+            parts.append("")
+    except Exception:
+        pass
+    return parts
 
-    if conversation_id:
-        try:
-            recent = await db.get_recent_messages(conversation_id, limit=10)
-            if recent:
-                parts.append("--- Recent conversation ---")
-                skip_time_replies = only_skills and "time" in only_skills
-                for m in recent:
-                    if m["role"] == "assistant" and _is_error_reply(m["content"]):
-                        continue
-                    if skip_time_replies and m["role"] == "assistant" and _is_time_reply(m["content"]):
-                        continue  # Don't show old time answers — use live value from Time section
-                    role = "User" if m["role"] == "user" else "Assistant"
-                    parts.append(f"{role}: {m['content'][:500]}")
-                parts.append("")
-        except Exception:
-            pass
 
-    # Connected channels
+async def _get_state_section(db: "Db", user_id: str, extra: dict) -> list[str]:
+    """Connected channels and factual state (pending reminders count, location name)."""
+    parts = []
+    # Channels
     channels = []
-    from app.config import get_settings
-    s = get_settings()
     from app.keys import get_api_key
     token = await get_api_key("telegram_bot_token")
     if token:
@@ -89,7 +116,7 @@ async def build_context(
     parts.append("Channels: " + ", ".join(channels))
     parts.append("")
 
-    # Ground truth: real state so AI doesn't hallucinate
+    # Ground truth
     pending = await db.get_pending_reminders_for_user(user_id, limit=10)
     loc = await db.get_user_location(user_id)
     loc_str = loc["location_name"] if loc else None
@@ -99,304 +126,6 @@ async def build_context(
     parts.append("--- State (factual) ---")
     parts.append(f"Pending reminders: {len(pending)}. Location: {loc_str}. Use this — do not invent reminders or location.")
     parts.append("")
+    return parts
 
-    # Only include context for skills that are enabled (user can turn off in Skills tab)
-    files_enabled = await db.get_skill_enabled(user_id, "files")
-    drive_enabled = await db.get_skill_enabled(user_id, "drive")
-    rag_enabled = await db.get_skill_enabled(user_id, "rag")
-    time_enabled = await db.get_skill_enabled(user_id, "time")
-    weather_enabled = await db.get_skill_enabled(user_id, "weather")
-    google_search_enabled = await db.get_skill_enabled(user_id, "google_search")
-    spotify_enabled = await db.get_skill_enabled(user_id, "spotify")
-    lyrics_enabled = await db.get_skill_enabled(user_id, "lyrics")
-    reminders_enabled = await db.get_skill_enabled(user_id, "reminders")
-    self_awareness_enabled = await db.get_skill_enabled(user_id, "self_awareness")
-    server_status_enabled = await db.get_skill_enabled(user_id, "server_status")
 
-    # Server Status summary
-    if server_status_enabled and _use("server_status") and extra and extra.get("server_status"):
-        ss = extra["server_status"]
-        if ss.get("ok"):
-            parts.append("--- Server Status (REAL-TIME METRICS) ---")
-            parts.append(f"CPU Usage: {ss['cpu_percent']}%")
-            parts.append(f"RAM Usage: {ss['ram']['percent']}% ({ss['ram']['used_gb']}GB / {ss['ram']['total_gb']}GB)")
-            parts.append(f"Disk Usage: {ss['disk']['percent']}% ({ss['disk']['used_gb']}GB / {ss['disk']['total_gb']}GB)")
-            parts.append(f"System Uptime: {ss['uptime_str']}")
-            parts.append(f"Asta Version: {ss.get('version', 'Unknown')}")
-            parts.append("Use these exact values to answer 'server status' or 'system stats' questions. Do NOT say you cannot check.")
-            parts.append("")
-        else:
-            parts.append("--- Server Status ---")
-            parts.append(f"Status check failed: {ss.get('error')}")
-            parts.append("")
-
-    # Files summary (allowed paths)
-    if files_enabled and _use("files") and s.asta_allowed_paths:
-        allowed = [p.strip() for p in s.asta_allowed_paths.split(",") if p.strip()]
-        parts.append("--- Local files ---")
-        parts.append("Allowed paths: " + ", ".join(allowed[:5]))
-        if extra and extra.get("files_summary"):
-            parts.append(extra["files_summary"])
-        parts.append("")
-
-    # Drive summary
-    if drive_enabled and _use("drive") and extra and extra.get("drive_summary"):
-        parts.append("--- Google Drive ---")
-        parts.append(extra["drive_summary"])
-        parts.append("")
-
-    # User memories (User.md: place, preferred name, max 10 important facts)
-    from app.memories import load_user_memories
-    mem_content = load_user_memories(user_id)
-    if mem_content:
-        parts.append("--- About you (memories) ---")
-        parts.append(mem_content)
-        parts.append("Use this when relevant. Do not contradict it. To add a memory, end your message with [SAVE: key: value]. Only save location or preferred name when the user explicitly shares them. Do not save interests, hobbies, concerns, or other personal details. Max 10 important facts total.")
-        parts.append("")
-
-    # Self Awareness: Asta docs
-    if self_awareness_enabled and _use("self_awareness") and extra and extra.get("asta_docs"):
-        parts.append("--- Asta Documentation (Source Code & Manual) ---")
-        parts.append(extra["asta_docs"])
-        parts.append("")
-        parts.append("Use the documentation above to answer questions about Asta's features, installation, or configuration. Be helpful and specific.")
-        parts.append("CRITICAL: The documentation is ALREADY provided above. Do NOT say 'I will check the docs'. Answer valid questions immediately based on the text above.")
-        parts.append("")
-
-    # Past meetings (saved when user chose "meeting notes"; user can ask "last meeting?" etc.)
-    if extra and extra.get("past_meetings"):
-        parts.append("--- Past meetings (saved) ---")
-        for m in extra["past_meetings"][:5]:
-            created = m.get("created_at") or ""
-            title = m.get("title") or "Meeting"
-            formatted = (m.get("formatted") or "")[:2000]
-            parts.append(f"[{title} | {created}]")
-            parts.append(formatted)
-            parts.append("")
-        parts.append("Use the above when the user asks about the last meeting, a previous meeting, or what was discussed. Answer from this context.")
-        parts.append("")
-
-    # Actual topics in RAG store — prevent the model from claiming it learned about topics that are not stored
-    if rag_enabled and _use("rag") and extra and "learned_topics" in extra:
-        topics_list = extra.get("learned_topics") or []
-        parts.append("--- Topics actually learned (RAG store) ---")
-        if topics_list:
-            names = [t.get("topic", "") for t in topics_list if t.get("topic")]
-            parts.append("The only topics you have learned (stored in RAG) are: " + (", ".join(names) if names else "none") + ".")
-        else:
-            parts.append("You have not learned any topics yet (RAG store is empty).")
-        parts.append("When the user asks what you have learned, what you know about, or what topics you learned: ONLY mention the topics listed above. Do NOT claim to have learned about BPA, eSIM, or any other topic not in this list. If the list is empty or 'none', say you have not learned any topics yet.")
-        parts.append("")
-
-    # RAG / learned knowledge summary (retrieved chunks for this question)
-    if rag_enabled and _use("rag") and extra and extra.get("rag_summary"):
-        parts.append("""
---- RELEVANT LEARNED KNOWLEDGE (RAG) ---
-IMPORTANT: The following information comes from your internal knowledge base. 
-You MUST prioritize this information over any web search results or general training data. 
-If the user asks about a specific term like 'eSimo' and it appears below, use THIS definition, even if it contradicts external sources.
-----------------------------------------
-""")
-        parts.append(extra["rag_summary"])
-        parts.append("CRITICAL: The information above is the result of your check. DONT say 'I will check'. Answer immediately based on this.")
-        parts.append("----------------------------------------")
-
-    async def _get_effective_location():
-        """Get location from DB, or from User.md if DB is empty (geocode and persist)."""
-        loc = await db.get_user_location(user_id)
-        if loc:
-            return loc
-        from app.memories import get_location_from_memories
-        from app.time_weather import geocode
-        loc_str = get_location_from_memories(user_id)
-        if not loc_str:
-            return None
-        result = await geocode(loc_str)
-        if not result:
-            return None
-        lat, lon, name = result
-        await db.set_user_location(user_id, name, lat, lon)
-        return {"location_name": name, "latitude": lat, "longitude": lon}
-
-    # Time (separate skill)
-    if time_enabled and _use("time"):
-        from datetime import datetime, timezone
-        from zoneinfo import ZoneInfo
-        from app.time_weather import get_current_time_utc_12h, get_timezone_for_coords
-        parts.append("--- Time ---")
-        # Always include UTC for reference
-        parts.append("Current time (UTC, 12-hour): " + get_current_time_utc_12h())
-        # And, when we know the user's location, compute their local time explicitly
-        loc = await _get_effective_location()
-        if loc:
-            parts.append(f"User's location: {loc['location_name']}.")
-            try:
-                tz_name = await get_timezone_for_coords(
-                    loc["latitude"], loc["longitude"], loc.get("location_name")
-                )
-                now_local = datetime.now(ZoneInfo(tz_name))
-                hour = now_local.hour
-                if hour == 0:
-                    hour12, am_pm = 12, "AM"
-                elif hour < 12:
-                    hour12, am_pm = hour, "AM"
-                elif hour == 12:
-                    hour12, am_pm = 12, "PM"
-                else:
-                    hour12, am_pm = hour - 12, "PM"
-                local_str = f"{hour12}:{now_local.minute:02d} {am_pm}"
-                import logging
-                logging.getLogger(__name__).info("Context Time Computed: %s for %s (TZ: %s)", local_str, loc['location_name'], tz_name)
-                parts.append(f"User's LOCAL time is {local_str} in {loc['location_name']}. THIS IS THE LIVE VALUE — use it exactly.")
-            except Exception:
-                parts.append("If you cannot compute local time, you may fall back to UTC, but prefer the user's local time when answering.")
-        else:
-            parts.append("User has not set their location. If they ask for local time, ask where they are; when they reply with a place, the system will save it.")
-        if extra.get("location_just_set"):
-            parts.append(f"(User just set location to: {extra['location_just_set']}. Confirm briefly.)")
-        parts.append("When the user asks what time it is: use ONLY the 'User's LOCAL time' value above. Do NOT use any time from recent conversation or memory — that may be wrong. Reply with the exact value from the Time section.")
-        parts.append("")
-
-    # Weather (separate skill; includes today and tomorrow forecast)
-    if weather_enabled and _use("weather"):
-        from app.time_weather import fetch_weather_with_forecast
-        parts.append("--- Weather ---")
-        loc = await _get_effective_location()
-        if loc:
-            forecast = await fetch_weather_with_forecast(loc["latitude"], loc["longitude"])
-            parts.append(f"User's location: {loc['location_name']}.")
-            parts.append(f"Current: {forecast.get('current', 'unavailable')}.")
-            parts.append(f"Today: {forecast.get('today', 'unavailable')}.")
-            parts.append(f"Tomorrow: {forecast.get('tomorrow', 'unavailable')}.")
-            parts.append("You can answer questions about current weather, today, or tomorrow (e.g. 'weather tomorrow'). Do not send the user to weather.com.")
-        else:
-            parts.append(
-                "User has not set their location. If they ask for weather, ask where they are. "
-                "When they reply with a place (e.g. 'London', 'Tokyo', 'I'm in Paris'), the system will save it; then you can give weather and forecast."
-            )
-        if extra.get("location_just_set"):
-            parts.append(f"(User just set location to: {extra['location_just_set']}. Confirm briefly.)")
-        parts.append("")
-
-    # Web search (when skill enabled and we ran a search)
-    if google_search_enabled and _use("google_search") and extra and "search_results" in extra:
-        results = extra.get("search_results") or []
-        err = extra.get("search_error")
-        if results:
-            parts.append("--- Web search results (you HAVE direct web access; use these) ---")
-            for i, r in enumerate(results[:5], 1):
-                title = (r.get("title") or "").strip()
-                snippet = (r.get("snippet") or "").strip()
-                url = (r.get("url") or "").strip()
-                if title or snippet:
-                    parts.append(f"{i}. {title}: {snippet[:300]}" + (f" ({url})" if url else ""))
-            parts.append("Answer from the above results. Do NOT say you cannot access the web or don't have internet—you do.")
-        elif err:
-            parts.append("--- Web search ---")
-            parts.append(f"Search failed: {err}. Tell the user the search errored. Do NOT say you cannot access the web—Asta can search; the API failed.")
-        else:
-            parts.append("--- Web search ---")
-            parts.append("Search ran but returned no results. Tell the user nothing was found or suggest rephrasing. Do NOT say you cannot access the web—Asta can search.")
-        parts.append("")
-
-    # Lyrics (when skill enabled and we ran a search)
-    if lyrics_enabled and _use("lyrics") and extra and extra.get("lyrics_searched_query"):
-        if extra.get("lyrics_result"):
-            lr = extra["lyrics_result"]
-            parts.append("--- Lyrics ---")
-            parts.append(f"Track: {lr.get('trackName', '')} by {lr.get('artistName', '')}")
-            parts.append("Lyrics:")
-            parts.append((lr.get("plainLyrics") or "")[:6000])
-            parts.append("")
-        else:
-            parts.append("--- Lyrics ---")
-            parts.append(f"We searched the lyrics database (LRCLIB) for \"{extra['lyrics_searched_query']}\" but found no match. Tell the user briefly that this track isn't in the database (song or artist may be missing or spelled differently). Suggest they double-check the title/artist or try another source.")
-            parts.append("")
-
-    # Spotify: search results or play (devices / connected status)
-    if spotify_enabled and _use("spotify") and extra:
-        if extra.get("spotify_reconnect_needed"):
-            parts.append("--- Spotify play ---")
-            parts.append("The user asked to play something. They had connected Spotify before but the connection is no longer valid (e.g. session expired or app credentials changed). Reply with ONE short sentence: tell them to go to Settings → Spotify and click 'Connect Spotify' again to re-authorize. Do NOT say they have never connected.")
-            parts.append("")
-        elif extra.get("spotify_play_connected") is False:
-            parts.append("--- Spotify play ---")
-            parts.append("The user asked to play something but has not connected their Spotify account. Reply with ONE short sentence: tell them to go to Settings → Spotify and click 'Connect Spotify' (one-time). After they connect, Asta WILL start playback on their devices — do NOT say you cannot control Spotify or that you can only give commands.")
-            parts.append("")
-        elif extra.get("spotify_play_connected") is True:
-            parts.append("--- Spotify play ---")
-            parts.append("The user HAS connected their Spotify account for playback. Do NOT tell them to connect or reconnect. Instead, either list devices to choose from or confirm playback started, based on the context above.")
-            parts.append("")
-        elif extra.get("spotify_devices") is not None and len(extra.get("spotify_devices", [])) == 0 and extra.get("spotify_play_track_uri"):
-            parts.append("--- Spotify play ---")
-            parts.append("No Spotify devices are available. Tell the user to open Spotify on a phone, computer, or speaker first, then ask again.")
-            parts.append("")
-        elif extra.get("spotify_play_failed"):
-            dev = extra.get("spotify_play_failed_device") or "that device"
-            parts.append("--- Spotify play ---")
-            parts.append(f"Playback failed on {dev}. Reply briefly that it didn't start and suggest: open the Spotify app on that device (phone/computer/speaker), make sure they have Spotify Premium if required for 'play on device', then try again or pick another device.")
-            parts.append("")
-        elif extra.get("spotify_played_on"):
-            parts.append("--- Spotify play ---")
-            parts.append(f"Playing on {extra['spotify_played_on']}. Confirm briefly (e.g. 'Playing on {extra['spotify_played_on']}!').")
-            parts.append("")
-        if extra.get("spotify_skipped"):
-            parts.append("--- Spotify control ---")
-            parts.append("You skipped to the next track successfully. Briefly confirm (e.g. 'Skipped to the next track.').")
-            parts.append("")
-        if extra.get("spotify_volume_set"):
-            parts.append("--- Spotify control ---")
-            vol = extra.get("spotify_volume_value")
-            if isinstance(vol, int):
-                parts.append(f"You set the Spotify volume to {vol}%. Briefly confirm (e.g. 'Volume set to {vol}%.').")
-            else:
-                parts.append("You adjusted the Spotify volume successfully. Confirm briefly.")
-            parts.append("")
-        elif extra.get("spotify_devices") and len(extra["spotify_devices"]) >= 1:
-            parts.append("--- Spotify play ---")
-            dev_list = ", ".join(f"{i+1}. {d.get('name', 'Device')}" for i, d in enumerate(extra["spotify_devices"]))
-            parts.append(f"Asta will start playback when the user picks a device. List: {dev_list}. Ask: 'On which device? 1. X, 2. Y — reply with the number or name.' When they reply, the system plays on that device. Do NOT say you cannot control Spotify.")
-            parts.append("")
-        elif extra.get("spotify_results"):
-            parts.append("--- Spotify search results ---")
-            for i, tr in enumerate(extra["spotify_results"][:5], 1):
-                name = tr.get("name") or ""
-                artist = tr.get("artist") or ""
-                url = tr.get("url") or ""
-                parts.append(f"{i}. {name}" + (f" — {artist}" if artist else "") + (f" {url}" if url else ""))
-            parts.append("")
-
-    # Reminders: user can ask to wake up or be reminded at a time
-    if reminders_enabled and _use("reminders"):
-        parts.append("--- Reminders ---")
-        if pending:
-            parts.append("Current pending reminders (real):")
-            for r in pending[:5]:
-                msg = (r.get("message") or "").strip() or "—"
-                run_at = r.get("run_at") or ""
-                parts.append(f"  - {msg} at {run_at}")
-            parts.append("Do NOT claim they have reminders not listed above.")
-        parts.append("Phrases: 'Wake me up at 7am', 'Remind me at 6pm to X', 'Remind me in 30 min to X', 'alarm in 5 min to X'. If location set, times are in their timezone.")
-        parts.append("")
-
-    if extra.get("reminder_scheduled"):
-        parts.append("--- Just scheduled ---")
-        parts.append("You have scheduled a reminder for the user. Briefly confirm it (e.g. 'I'll wake you up at 7:00 AM' or 'I'll remind you at 6pm to call mom'). At the set time the user will get a friendly message on Telegram/WhatsApp or in the web panel.")
-        parts.append("")
-
-    # Learn about X: user asked for duration (we will ask) or we started the job
-    if extra.get("learn_about_ask_duration"):
-        topic = extra["learn_about_ask_duration"]
-        parts.append("--- Learn about (no duration) ---")
-        parts.append(f"The user asked to learn about '{topic}' but did not say for how long. Ask briefly: 'For how long should I learn? (e.g. 30 minutes, 2 hours)'.")
-        parts.append("")
-    if extra.get("learn_about_started"):
-        info = extra["learn_about_started"]
-        topic = info.get("topic", "")
-        duration = info.get("duration_minutes", 0)
-        parts.append("--- Learn about (started) ---")
-        parts.append(f"You started a background learning job: topic '{topic}' for {duration} minutes. Reply in one short sentence that you're learning about it and will notify them when done (e.g. 'I'll learn about {topic} for {duration} minutes and ping you when I'm done.'). Do NOT explain how RAG or search works.")
-        parts.append("")
-
-    parts.append("Answer using the above context when relevant. Be concise and helpful.")
-    return "\n".join(parts)

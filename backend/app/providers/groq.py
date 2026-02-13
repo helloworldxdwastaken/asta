@@ -1,6 +1,6 @@
 """Groq provider (key from panel Settings or .env)."""
 from openai import AsyncOpenAI
-from app.providers.base import BaseProvider, Message
+from app.providers.base import BaseProvider, Message, ProviderResponse, ProviderError
 from app.keys import get_api_key
 
 
@@ -9,10 +9,14 @@ class GroqProvider(BaseProvider):
     def name(self) -> str:
         return "groq"
 
-    async def chat(self, messages: list[Message], **kwargs) -> str:
+    async def chat(self, messages: list[Message], **kwargs) -> ProviderResponse:
         key = await get_api_key("groq_api_key")
         if not key:
-            return "Error: Groq API key not set. Add it in Settings (API keys) or in backend/.env as GROQ_API_KEY."
+            return ProviderResponse(
+                content="",
+                error=ProviderError.AUTH,
+                error_message="Groq API key not set. Add it in Settings (API keys) or in backend/.env as GROQ_API_KEY."
+            )
         client = AsyncOpenAI(api_key=key, base_url="https://api.groq.com/openai/v1")
         system = kwargs.get("context", "")
         msgs = [{"role": m["role"], "content": m["content"]} for m in messages]
@@ -21,15 +25,35 @@ class GroqProvider(BaseProvider):
         model = kwargs.get("model") or "llama-3.3-70b-versatile"
         try:
             r = await client.chat.completions.create(model=model, messages=msgs)
-            return (r.choices[0].message.content or "").strip()
+            return ProviderResponse(content=(r.choices[0].message.content or "").strip())
         except Exception as e:
             msg = str(e).strip() or repr(e)
             if "401" in msg or "invalid" in msg.lower() or "authentication" in msg.lower():
-                return "Error: Groq API key invalid or expired. Check Settings → API keys."
+                return ProviderResponse(
+                    content="",
+                    error=ProviderError.AUTH,
+                    error_message=f"Groq API key invalid or expired: {msg}"
+                )
             if "decommissioned" in msg.lower() or "model_decommissioned" in msg.lower():
-                return f"Error: Groq model '{model}' has been decommissioned. In Settings → Model per provider, set Groq to llama-3.3-70b-versatile (or leave blank to use the new default)."
+                return ProviderResponse(
+                    content="",
+                    error=ProviderError.MODEL_NOT_FOUND,
+                    error_message=f"Groq model '{model}' has been decommissioned."
+                )
             if "404" in msg or "not found" in msg.lower():
-                return f"Error: Groq model '{model}' not found. Try another in Settings → Model (e.g. llama-3.3-70b-versatile or llama-3.1-8b-instant)."
+                return ProviderResponse(
+                    content="",
+                    error=ProviderError.MODEL_NOT_FOUND,
+                    error_message=f"Groq model '{model}' not found."
+                )
             if "429" in msg or "rate" in msg.lower():
-                return "Error: Groq rate limit. Wait a moment and try again."
-            return f"Error: Groq API — {msg[:200]}"
+                return ProviderResponse(
+                    content="",
+                    error=ProviderError.RATE_LIMIT,
+                    error_message=f"Groq rate limit: {msg}"
+                )
+            return ProviderResponse(
+                content="",
+                error=ProviderError.TRANSIENT,
+                error_message=f"Groq API error: {msg[:200]}"
+            )

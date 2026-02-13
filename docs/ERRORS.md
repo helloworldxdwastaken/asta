@@ -28,7 +28,7 @@ Quick reference for errors you might see and how to fix them.
 
 | Error | Cause | Solution |
 |-------|-------|----------|
-| **No AI provider found** | No API key set | Add at least one key in Settings → API keys: Groq, Gemini, Claude, or run Ollama. |
+| **No AI provider found** | No API key set | Add at least one key in Settings → API keys: Groq, Gemini, Claude, OpenAI, OpenRouter, or run Ollama. |
 | **invalid or expired API key** | Key wrong or expired | Update the key in Settings → API keys or `backend/.env`, then restart. |
 | **Client error 404 for Ollama** | Ollama not running or wrong URL | Start Ollama (`ollama serve`) or set correct `OLLAMA_BASE_URL` in `backend/.env`. |
 
@@ -42,6 +42,7 @@ Quick reference for errors you might see and how to fix them.
 |---------|-------|----------|
 | **AI says "I can't access the web"** | Search returned empty or failed | Asta uses ddgs (multi-backend). If DuckDuckGo blocks, it tries others. Ensure `ddgs` is installed: `pip install -r requirements.txt`. |
 | **Search failed: [error message]** | API/network issue | Error is passed to the AI. Check backend logs. If persistent, DuckDuckGo/Bing may be rate-limiting. |
+| **A normal question did not run web search** | Web search trigger is now stricter | Expected. Ask explicitly: “search the web for…”, “look up…”, “check the web…”, or include freshness intent like “latest”. |
 
 ### Reminders
 
@@ -49,6 +50,7 @@ Quick reference for errors you might see and how to fix them.
 |---------|-------|----------|
 | **Reminders not firing** | Pending reminders not loaded | Restart backend once: `./asta.sh restart`. Reminders are re-loaded on startup. |
 | **Wrong timezone (e.g. 6pm instead of 8pm)** | Timezone lookup failed (now uses offline timezonefinder) | Ensure location is set in Files → About you (User.md) or tell Asta "I'm in City, Country". Restart backend after setting. |
+| **Asta asks “Where are you?” for “wake me up at 7am”** | No location/timezone set | Expected. Absolute-time reminders require a timezone. Set location once, then retry. |
 | **"I couldn't parse that reminder"** | Phrase not recognised | Use: "remind me in 5 min to X", "alarm in 5 min to X", "wake me up at 7am", "remind me at 6pm to X". |
 
 ### Lyrics

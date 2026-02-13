@@ -29,17 +29,19 @@ def _is_music_search(text: str) -> bool:
     return any(trig in t for trig in triggers)
 
 
-def _search_query_from_message(text: str) -> str:
-    """Extract search query from message (e.g. 'search spotify for X' -> X)."""
+def _search_query_from_message(text: str) -> str | None:
+    """Extract search query from message (e.g. 'search spotify for X' -> X). Returns None if no explicit Spotify/search intent."""
     t = (text or "").strip()
     lower = t.lower()
     for prefix in ("search spotify for ", "search spotify ", "find song ", "find track ", "find music ", "search song ", "search music "):
         if lower.startswith(prefix):
-            return t[len(prefix) :].strip()
+            q = t[len(prefix) :].strip()
+            return q if q else None
     for mid in (" on spotify", " in spotify"):
         if mid in lower:
-            return t[: lower.index(mid)].strip()
-    return t
+            q = t[: lower.index(mid)].strip()
+            return q if q else None
+    return None
 
 
 async def get_spotify_token(client_id: str, client_secret: str) -> str | None:
@@ -238,20 +240,20 @@ def is_play_intent(text: str) -> bool:
 
 
 def play_query_from_message(text: str) -> str | None:
-    """Extract track query for 'play X' or 'play X on Spotify'. Returns None if not a play request."""
+    """Extract track query for 'play X' or 'play X on Spotify'. Returns None if not a play request.
+    Requires message to START with play intent (avoids 'remind me to play guitar' etc)."""
     t = (text or "").strip()
     lower = t.lower()
-    if "play " not in lower:
-        return None
-    rest = t
-    for prefix in ("play ", "play the ", "play my "):
+    rest = None
+    for prefix in ("play ", "play the ", "play my ", "hey play ", "ok play ", "please play "):
         if lower.startswith(prefix):
             rest = t[len(prefix) :].strip()
             break
+    if rest is None:
+        return None
     for suffix in (" on spotify", " in spotify", " on spotify."):
         if rest.lower().endswith(suffix):
             rest = rest[: -len(suffix)].strip()
-    # Drop trailing "on spotify" if still there (e.g. "play X on spotify" with different casing)
     if rest.lower().endswith(" on spotify"):
         rest = rest[: -10].strip()
     return rest if rest else None

@@ -16,9 +16,10 @@ All sensitive data lives in **one place**: `backend/.env`. That file is **gitign
    cp .env.example backend/.env
    ```
 
-2. **Edit `backend/.env`** and add your real values. Examples (use your own):
+   2. **Edit `backend/.env`** and add your real values. Examples (use your own):
    - `GROQ_API_KEY=gsk_...`
    - `GEMINI_API_KEY=...`
+   - `OPENROUTER_API_KEY=...`
    - `TELEGRAM_BOT_TOKEN=123456:ABC...`
    - `ASTA_WHATSAPP_BRIDGE_URL=http://localhost:3001`
    - `ASTA_ALLOWED_PATHS=/home/me/docs,/home/me/notes`
@@ -27,7 +28,7 @@ All sensitive data lives in **one place**: `backend/.env`. That file is **gitign
    **Alternatively,** you can store API keys in the panel under **Settings**. They are saved in `backend/asta.db`. The backend reads stored keys first, then falls back to `.env`. Do not commit `asta.db` if it contains keys.
 
 3. **Never add these to the repo:**
-   - API keys (Groq, Gemini, Anthropic, OpenAI, Spotify)
+   - API keys (Groq, Gemini, Anthropic, OpenAI, OpenRouter, Spotify)
    - Telegram bot token
    - WhatsApp numbers (they only appear in your local DB if you use reminders)
    - Paths that include your username or sensitive dirs (use generic docs in `.env.example`)

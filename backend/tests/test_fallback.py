@@ -1,43 +1,68 @@
-"""Tests for cross-provider model fallback."""
-import asyncio
+"""Tests for cross-provider model fallback using ProviderResponse."""
 import pytest
-from app.providers.fallback import classify_error, ErrorKind, is_error_reply
+import unittest
+from unittest.mock import AsyncMock, MagicMock
+from app.providers.base import BaseProvider, Message, ProviderResponse, ProviderError
+from app.providers.fallback import chat_with_fallback
 
+class MockProvider(BaseProvider):
+    def __init__(self, name, response=None, error=None, error_type=None):
+        self._name = name
+        self.response_content = response
+        self.error_type = error_type
+        self.error_msg = error
+        
+    @property
+    def name(self):
+        return self._name
+        
+    async def chat(self, messages, **kwargs):
+        if self.error_type:
+            return ProviderResponse(content="", error=self.error_type, error_message=self.error_msg)
+        return ProviderResponse(content=self.response_content or "Success")
 
-class TestClassifyError:
-    def test_not_an_error(self):
-        assert classify_error("Hello! How can I help you?") == ErrorKind.NONE
-        assert classify_error("") == ErrorKind.NONE
-        assert classify_error("Sure, here's the weather.") == ErrorKind.NONE
+@pytest.mark.asyncio
+async def test_primary_success():
+    """Test standard success case."""
+    primary = MockProvider("primary", response="Hello")
+    resp = await chat_with_fallback(primary, [], [])
+    assert resp.content == "Hello"
+    assert resp.error is None
 
-    def test_auth_errors(self):
-        assert classify_error("Error: Groq API key invalid or expired. Check Settings → API keys.") == ErrorKind.AUTH
-        assert classify_error("Error: OpenAI API key not set. Add it in Settings.") == ErrorKind.AUTH
-        assert classify_error("Error: 401 Unauthorized") == ErrorKind.AUTH
+@pytest.mark.asyncio
+async def test_primary_auth_failure():
+    """Auth failure on primary should NOT fallback."""
+    primary = MockProvider("primary", error="Auth failed", error_type=ProviderError.AUTH)
+    fallback = MockProvider("fallback", response="Fallback")
+    
+    # We need to mock get_provider to return our fallback
+    with unittest.mock.patch("app.providers.registry.get_provider", return_value=fallback):
+        resp = await chat_with_fallback(primary, [], ["fallback"])
+        
+    # Should fail with AUTH error from primary
+    assert resp.error == ProviderError.AUTH
+    assert resp.content == ""
 
-    def test_rate_limit(self):
-        assert classify_error("Error: Groq rate limit. Wait a moment and try again.") == ErrorKind.RATE_LIMIT
-        assert classify_error("Error: 429 Too Many Requests") == ErrorKind.RATE_LIMIT
-        assert classify_error("Error: All models rate-limited.") == ErrorKind.RATE_LIMIT
+@pytest.mark.asyncio
+async def test_primary_transient_failure_with_fallback():
+    """Transient failure on primary SHOULD trigger fallback."""
+    primary = MockProvider("primary", error="Timeout", error_type=ProviderError.TIMEOUT)
+    fallback = MockProvider("fallback", response="Fallback Success")
+    
+    with unittest.mock.patch("app.providers.registry.get_provider", return_value=fallback):
+        resp = await chat_with_fallback(primary, [], ["fallback"])
+        
+    assert resp.content == "Fallback Success"
+    assert resp.error is None
 
-    def test_model_not_found(self):
-        assert classify_error("Error: Groq model 'xyz' not found.") == ErrorKind.MODEL_NOT_FOUND
-        assert classify_error("Error: Groq model 'old' has been decommissioned.") == ErrorKind.MODEL_NOT_FOUND
-        assert classify_error("Error: 404 model not available") == ErrorKind.MODEL_NOT_FOUND
-
-    def test_timeout(self):
-        assert classify_error("Error: Model x timed out after 30s") == ErrorKind.TIMEOUT
-        assert classify_error("Error: Request timeout") == ErrorKind.TIMEOUT
-
-    def test_transient(self):
-        assert classify_error("Error: OpenAI API — some random failure") == ErrorKind.TRANSIENT
-        assert classify_error("Error: something went wrong") == ErrorKind.TRANSIENT
-
-
-class TestIsErrorReply:
-    def test_error(self):
-        assert is_error_reply("Error: something failed") is True
-
-    def test_not_error(self):
-        assert is_error_reply("Hello there!") is False
-        assert is_error_reply("") is False
+@pytest.mark.asyncio
+async def test_all_fail():
+    """If all fail, return the last error."""
+    primary = MockProvider("primary", error="Timeout", error_type=ProviderError.TIMEOUT)
+    fallback = MockProvider("fallback", error="Rate Limit", error_type=ProviderError.RATE_LIMIT)
+    
+    with unittest.mock.patch("app.providers.registry.get_provider", return_value=fallback):
+        resp = await chat_with_fallback(primary, [], ["fallback"])
+        
+    assert resp.error == ProviderError.RATE_LIMIT
+    assert "Rate Limit" in resp.error_message

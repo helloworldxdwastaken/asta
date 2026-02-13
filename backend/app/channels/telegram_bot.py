@@ -46,6 +46,24 @@ def to_telegram_format(text: str) -> str:
     return text
 
 
+async def _reply_text_safe_html(message, text: str) -> None:
+    """Reply using HTML formatting; fallback to plain text if Telegram rejects entities."""
+    plain = (text or "").strip()[:TELEGRAM_MAX_MESSAGE_LENGTH] or "No response."
+    formatted = to_telegram_format(plain)
+    try:
+        await message.reply_text(
+            formatted,
+            parse_mode=constants.ParseMode.HTML,
+        )
+    except Exception as e:
+        msg = str(e).lower()
+        if "parse entities" in msg or "unmatched end tag" in msg:
+            logger.warning("Telegram HTML parse failed, falling back to plain text: %s", e)
+            await message.reply_text(plain)
+            return
+        raise
+
+
 # Max length for a single Telegram message
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 # Max size when fetching audio from a URL (same as web panel)
@@ -179,10 +197,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 text_reply = reply.replace(gif_match.group(0), "").strip()
                 
                 if text_reply:
-                    await update.message.reply_text(
-                        to_telegram_format(text_reply[:TELEGRAM_MAX_MESSAGE_LENGTH]),
-                        parse_mode=constants.ParseMode.HTML
-                    )
+                    await _reply_text_safe_html(update.message, text_reply)
                 
                 try:
                     await update.message.reply_animation(gif_url)
@@ -194,10 +209,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                         await update.message.reply_text(gif_url)
             else:
                 out = (reply or "").strip()[:TELEGRAM_MAX_MESSAGE_LENGTH] or "No response."
-                await update.message.reply_text(
-                    to_telegram_format(out),
-                    parse_mode=constants.ParseMode.HTML
-                )
+                await _reply_text_safe_html(update.message, out)
                 logger.info("Telegram reply sent to %s", user_id)
         except Exception as e:
             logger.exception("Telegram handler error")
@@ -267,7 +279,7 @@ async def on_voice_or_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         out = formatted[:TELEGRAM_MAX_MESSAGE_LENGTH]
         if len(formatted) > TELEGRAM_MAX_MESSAGE_LENGTH:
             out = out + "…"
-        await update.message.reply_text(to_telegram_format(out), parse_mode=constants.ParseMode.HTML)
+        await _reply_text_safe_html(update.message, out)
         if transcript and transcript != "(no speech detected)" and len(transcript) <= 500:
             await update.message.reply_text("📝 Transcript:\n" + transcript[:TELEGRAM_MAX_MESSAGE_LENGTH - 20])
         elif transcript and len(transcript) > 500:
