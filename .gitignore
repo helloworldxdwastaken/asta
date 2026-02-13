@@ -57,3 +57,8 @@ build/
 
 # Docker
 .docker/
+
+# Local / generated
+diffs.txt
+query_rag.py
+esimo_dump.txt
