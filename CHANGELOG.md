@@ -2,6 +2,21 @@
 
 All notable changes to Asta are documented here.
 
+## [1.3.0] - 2026-02-14
+
+### Added
+
+- **OpenClaw-style `process` tool companion** — Added background session management actions: `list`, `poll`, `log`, `write`, `kill`, `clear`, `remove`.
+- **Exec background handoff** — `exec` now supports `background` and `yield_ms` so long-running commands can continue in background and be managed via `process`.
+- **Process session registry** — In-memory running/finished session tracking with output tail/log buffering and TTL cleanup for finished sessions.
+
+### Changed
+
+- **Exec context/tool guidance** — System prompt now tells the model to use `process` after backgrounded exec responses (`status=running`, `session_id`).
+- **Security parity status** — Asta now has foreground + background exec/process control, but still does not yet implement full OpenClaw exec-approval host/security policy orchestration.
+
+---
+
 ## [1.2.1] - 2026-02-14
 
 ### Fixed

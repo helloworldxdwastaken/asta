@@ -110,6 +110,7 @@ From the repo root, **`./asta.sh`** starts/stops both backend and frontend:
 | `TELEGRAM_BOT_TOKEN` | Telegram bot ([@BotFather](https://t.me/BotFather)) |
 | `ASTA_ALLOWED_PATHS` | Comma-separated dirs for file access |
 | `ASTA_EXEC_ALLOWED_BINS` | Exec tool: binaries Asta can run (e.g. `memo`, `things`). Optional: skills like Apple Notes show install steps on the Skills page and can auto-add the bin when enabled. |
+| `ASTA_PROCESS_TTL_SECONDS` | Keep finished background process sessions in memory for process tool (`list/poll/log`) before cleanup (default: 1800). |
 | `ASTA_CORS_ORIGINS` | Extra origins (e.g. LAN or Tailscale) |
 | `ASTA_WHATSAPP_BRIDGE_URL` | e.g. `http://localhost:3001` (WhatsApp) |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | Or set in Settings → Spotify |

@@ -66,7 +66,7 @@ async def get_effective_exec_bins(db: Db | None) -> set[str]:
     return allowed
 
 
-def _resolve_safe_workdir(raw: str | None) -> Path | None:
+def resolve_safe_workdir(raw: str | None) -> Path | None:
     val = (raw or "").strip()
     if not val:
         return None
@@ -89,6 +89,38 @@ def _resolve_safe_workdir(raw: str | None) -> Path | None:
     return None
 
 
+def prepare_allowlisted_command(
+    cmd: str,
+    *,
+    allowed_bins: set[str] | None = None,
+) -> tuple[list[str] | None, str | None]:
+    """Parse and validate command against allowlist. Returns (argv, error)."""
+    cmd = (cmd or "").strip()
+    if not cmd:
+        return None, "Empty command."
+    allowed = allowed_bins if allowed_bins is not None else get_settings().exec_allowed_bins
+    if not allowed:
+        return None, "Exec is disabled (ASTA_EXEC_ALLOWED_BINS not set)."
+    try:
+        parts = shlex.split(cmd)
+    except ValueError as e:
+        return None, f"Invalid command: {e}"
+    if not parts:
+        return None, "Empty command."
+    binary = Path(parts[0]).name.lower()
+    if binary not in allowed:
+        logger.warning("Exec rejected: binary %r not in allowlist %s", binary, sorted(allowed))
+        return None, f"Command not allowed (binary '{binary}' not in allowlist)."
+    exe = parts[0]
+    if os.path.sep not in exe and not Path(exe).is_absolute():
+        resolved = resolve_executable(exe)
+        if resolved:
+            parts = [resolved] + list(parts[1:])
+        else:
+            logger.warning("Exec: binary %r not found in PATH or fallback paths", exe)
+    return parts, None
+
+
 async def run_allowlisted_command(
     cmd: str,
     allowed_bins: set[str] | None = None,
@@ -98,34 +130,11 @@ async def run_allowlisted_command(
     """Run a command if its binary is in the exec allowlist. Returns (stdout, stderr, success).
     Command is parsed with shlex; the first token (binary name or path) must be in allowed bins.
     If allowed_bins is None, uses env only (no DB merge). Pass get_effective_exec_bins(db) for env+DB."""
-    cmd = (cmd or "").strip()
-    if not cmd:
-        return "", "Empty command.", False
-    if allowed_bins is not None:
-        allowed = allowed_bins
-    else:
-        allowed = get_settings().exec_allowed_bins
-    if not allowed:
-        return "", "Exec is disabled (ASTA_EXEC_ALLOWED_BINS not set).", False
-    try:
-        parts = shlex.split(cmd)
-    except ValueError as e:
-        return "", f"Invalid command: {e}", False
-    if not parts:
-        return "", "Empty command.", False
-    binary = Path(parts[0]).name.lower()
-    if binary not in allowed:
-        logger.warning("Exec rejected: binary %r not in allowlist %s", binary, sorted(allowed))
-        return "", f"Command not allowed (binary '{binary}' not in allowlist).", False
-    # Resolve binary to full path so we find it even when backend's PATH is minimal (e.g. IDE/launcher)
-    exe = parts[0]
-    if os.path.sep not in exe and not Path(exe).is_absolute():
-        resolved = resolve_executable(exe)
-        if resolved:
-            parts = [resolved] + list(parts[1:])
-        else:
-            logger.warning("Exec: binary %r not found in PATH or fallback paths", exe)
-    cwd_path = _resolve_safe_workdir(workdir)
+    parts, err = prepare_allowlisted_command(cmd, allowed_bins=allowed_bins)
+    if err:
+        return "", err, False
+    assert parts is not None
+    cwd_path = resolve_safe_workdir(workdir)
     if workdir and cwd_path is None:
         return "", "Invalid workdir. Use a directory under your home or workspace.", False
 
@@ -187,6 +196,14 @@ def get_exec_tool_openai_def(allowed_bins: set[str]) -> list[dict]:
                         "timeout_sec": {
                             "type": "integer",
                             "description": f"Optional timeout in seconds (1-{MAX_TIMEOUT_SECONDS}).",
+                        },
+                        "yield_ms": {
+                            "type": "integer",
+                            "description": "Optional yield window in milliseconds for auto-background behavior (e.g. 10000).",
+                        },
+                        "background": {
+                            "type": "boolean",
+                            "description": "If true, start command in background and return a process session id.",
                         },
                         "workdir": {
                             "type": "string",

@@ -116,13 +116,13 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 - **RAG:** `backend/app/rag/` — ingest pipeline, embedding (Ollama or API), vector store; expose “learn” and “ask about topic” endpoints.
 - **Scheduler:** `backend/app/tasks/` — APScheduler jobs; “learn for X hours” = enqueue ingestion job with end_time.
 
-### 4.2 Exec tool and Apple Notes (OpenClaw-style)
+### 4.2 Exec + process tools (OpenClaw-style)
 
-**Same as OpenClaw:** the model uses the **exec tool**. When the user asks to check Apple Notes (or list Things, etc.), the model calls the `exec` tool with a `command`; the backend runs the allowlisted command, returns stdout/stderr as the tool result, and re-calls the same provider. No proactive run or pre-injected note content.
+**Same as OpenClaw core flow:** the model uses the **exec tool** for commands and the **process tool** for long-running background sessions. When the user asks to check Apple Notes (or list Things, etc.), the model calls `exec` with a `command`; backend runs it and returns tool output. For long tasks, `exec` can return `status=running` + `session_id`, then `process` manages that session (`list/poll/log/write/kill/clear/remove`).
 
-- **Tool flow:** `handler.py` passes tools (exec/files/read/reminders/cron) to tool-capable providers (OpenAI, Groq, OpenRouter, Claude, Google). If the response has `tool_calls`, Asta runs each tool, appends tool output, and re-calls the same provider. Final reply is the last `response.content`.
+- **Tool flow:** `handler.py` passes tools (exec/process/files/read/reminders/cron) to tool-capable providers (OpenAI, Groq, OpenRouter, Claude, Google). If the response has `tool_calls`, Asta runs each tool, appends tool output, and re-calls the same provider. Final reply is the last `response.content`.
 - **Allowlist:** Env `ASTA_EXEC_ALLOWED_BINS` plus DB `exec_allowed_bins_extra`. Enabling a skill that declares `required_bins` (e.g. Apple Notes) adds those bins. Binary is resolved with `resolve_executable()` (PATH plus `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`).
-- **Fallback:** We still parse `[ASTA_EXEC: command][/ASTA_EXEC]` in the reply, run the command, and re-call with the output. See `exec_tool.py`, `handler.py`, `docs/OPENCLAW-EXEC-NOTES.md`.
+- **Fallback:** We still parse `[ASTA_EXEC: command][/ASTA_EXEC]` in the reply, run the command, and re-call with the output (now guarded to exec-intent requests only). See `exec_tool.py`, `process_tool.py`, `handler.py`, `docs/OPENCLAW-EXEC-NOTES.md`.
 
 ### 4.3 Security
 
@@ -186,4 +186,4 @@ asta/
 
 ## 6. Changelog (spec)
 
-- **Current (1.2.0):** OpenClaw-style workspace skill selection (`<available_skills>` + on-demand `read`), strict frontmatter metadata parsing for required bins, and structured tool loop across OpenAI/Groq/OpenRouter/Claude/Google. Added structured `files`, `reminders`, and `cron` tools (including desktop listing and screenshot cleanup flows), improved exec options (`timeout_sec`, `workdir`), and default provider set to OpenRouter. Drive OAuth is still planned.
+- **Current (1.3.0):** OpenClaw-style workspace skill selection (`<available_skills>` + on-demand `read`), strict frontmatter metadata parsing for required bins, and structured tool loop across OpenAI/Groq/OpenRouter/Claude/Google. Added structured `files`, `reminders`, and `cron` tools plus OpenClaw-style `process` tool for background exec session management (`list/poll/log/write/kill/clear/remove`). Exec supports `background` and `yield_ms`; default provider is OpenRouter. Drive OAuth is still planned.

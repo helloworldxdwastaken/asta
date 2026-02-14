@@ -371,7 +371,12 @@ async def handle_message(
     user_model = await db.get_user_provider_model(user_id, provider.name)
 
     # Exec tool (Claw-style): when allowlist is non-empty, pass tool so model can call exec(command)
-    from app.exec_tool import get_effective_exec_bins, get_exec_tool_openai_def, run_allowlisted_command, parse_exec_arguments
+    from app.exec_tool import (
+        get_effective_exec_bins,
+        get_exec_tool_openai_def,
+        run_allowlisted_command,
+        parse_exec_arguments,
+    )
     effective_bins = await get_effective_exec_bins(db)
     # Guardrail: only expose exec when the user message is likely asking for an exec-backed workflow.
     # This prevents models (especially free ones) from misusing exec for unrelated requests.
@@ -381,6 +386,10 @@ async def handle_message(
         logger.info("Exec allowlist: %s; passing tools to provider=%s", sorted(effective_bins), provider.name)
     elif "notes" in text.lower() or "memo" in text.lower():
         logger.warning("User asked for notes/memo but exec allowlist is empty (enable Apple Notes skill or set ASTA_EXEC_ALLOWED_BINS)")
+    # Process tool companion for long-running exec sessions (OpenClaw-style).
+    if effective_bins:
+        from app.process_tool import get_process_tool_openai_def
+        tools = tools + get_process_tool_openai_def()
 
     # Workspace read tool (OpenClaw-style skills): lets model read selected SKILL.md on demand.
     from app.workspace import discover_workspace_skills
@@ -453,14 +462,41 @@ async def handle_message(
                 params = parse_exec_arguments(args_str)
                 cmd = (params.get("command") or "").strip()
                 timeout_sec = params.get("timeout_sec")
+                yield_ms = params.get("yield_ms")
+                background = bool(params.get("background"))
                 workdir = params.get("workdir") if isinstance(params.get("workdir"), str) else None
                 logger.info("Exec tool called: command=%r", cmd)
-                stdout, stderr, ok = await run_allowlisted_command(
-                    cmd,
-                    allowed_bins=effective_bins,
-                    timeout_seconds=timeout_sec if isinstance(timeout_sec, int) else None,
-                    workdir=workdir,
-                )
+                if background or isinstance(yield_ms, int):
+                    from app.process_tool import run_exec_with_process_support
+
+                    exec_result = await run_exec_with_process_support(
+                        cmd,
+                        allowed_bins=effective_bins,
+                        timeout_seconds=timeout_sec if isinstance(timeout_sec, int) else None,
+                        workdir=workdir,
+                        background=background,
+                        yield_ms=yield_ms if isinstance(yield_ms, int) else None,
+                    )
+                    status = (exec_result.get("status") or "").strip().lower()
+                    if status == "running":
+                        ok = True
+                        stdout = json.dumps(exec_result, indent=0)
+                        stderr = ""
+                    elif status in ("completed", "failed"):
+                        stdout = (exec_result.get("stdout") or "").strip()
+                        stderr = (exec_result.get("stderr") or "").strip()
+                        ok = bool(exec_result.get("ok")) if "ok" in exec_result else (status == "completed")
+                    else:
+                        stdout = ""
+                        stderr = (exec_result.get("error") or "Exec failed").strip()
+                        ok = False
+                else:
+                    stdout, stderr, ok = await run_allowlisted_command(
+                        cmd,
+                        allowed_bins=effective_bins,
+                        timeout_seconds=timeout_sec if isinstance(timeout_sec, int) else None,
+                        workdir=workdir,
+                    )
                 ran_exec_tool = True
                 last_exec_stdout = stdout
                 logger.info("Exec result: ok=%s stdout_len=%s stderr_len=%s", ok, len(stdout), len(stderr))
@@ -468,6 +504,12 @@ async def handle_message(
                     out = f"stdout:\n{stdout}\n" + (f"stderr:\n{stderr}\n" if stderr else "")
                 else:
                     out = f"error: {stderr or 'Command not allowed or failed.'}"
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+            elif name == "process":
+                from app.process_tool import parse_process_tool_args, run_process_tool
+
+                params = parse_process_tool_args(args_str)
+                out = await run_process_tool(params)
                 current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
             elif name == "list_directory":
                 from app.files_tool import list_directory as list_dir, parse_files_tool_args as parse_files_args

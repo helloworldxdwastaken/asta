@@ -78,7 +78,22 @@ So: **no “Let me check” loop** — the model is expected to call the exec to
 
 ---
 
-## 6. Summary: what we took from OpenClaw and what we did differently
+## 6. Background process parity
+
+OpenClaw pairs `exec` with `process` for long-running commands:
+
+- `exec` can return `status: "running"` + `sessionId` when backgrounded or when yield window expires.
+- `process` manages those sessions: `list`, `poll`, `log`, `write`, `kill`, `clear`, `remove`.
+
+**Asta:** now has the same companion model:
+
+- `exec` supports `background` and `yield_ms`.
+- `process` supports `list/poll/log/write/kill/clear/remove`.
+- Session logs are in-memory (not persisted across backend restarts), same general behavior class as OpenClaw runtime sessions.
+
+---
+
+## 7. Summary: what we took from OpenClaw and what we did differently
 
 | Aspect | OpenClaw | Asta |
 |--------|----------|------|
@@ -87,6 +102,7 @@ So: **no “Let me check” loop** — the model is expected to call the exec to
 | **Finding binary** | PATH only | PATH + **fallback** (/opt/homebrew/bin, /usr/local/bin, ~/.local/bin) |
 | **Apple Notes skill** | SKILL.md with `requires.bins: ["memo"]`, install docs | Same idea: skill declares required bins, we parse install from SKILL.md and auto-add to allowlist when enabled |
 | **"Let me check" loop** | Avoided by design: model must call exec tool to get data | Same: tool-only, no proactive run |
+| **Background sessions** | `exec` + `process` tools for long-running jobs | Same companion flow (`background`/`yield_ms` + `process` actions) |
 | **Where exec runs (web UI only)** | Node host process (spawn) when Mac app unavailable | Python backend (subprocess) — same idea, one backend process |
 
-So: we **match** their exec-tool flow and skill-based allowlist idea, and we **improve** binary resolution for environments where PATH doesn’t include Homebrew/user bins.
+So: we **match** their exec/process companion flow and skill-based allowlist idea, and we **improve** binary resolution for environments where PATH doesn’t include Homebrew/user bins. The remaining gap is full OpenClaw-grade approval host/security orchestration.
