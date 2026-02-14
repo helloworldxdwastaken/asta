@@ -92,6 +92,7 @@ From the repo root, **`./asta.sh`** starts/stops both backend and frontend:
 ./asta.sh stop      # stop both
 ./asta.sh restart   # stop then start (e.g. after changing Telegram token)
 ./asta.sh status    # show if backend and frontend are running
+./asta.sh doc       # run safe diagnostics (setup + service checks)
 ```
 
 **Settings → Restart backend** in the panel runs `./asta.sh restart`.

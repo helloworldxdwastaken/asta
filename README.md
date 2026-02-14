@@ -75,6 +75,7 @@ If the panel shows "API off", start the backend first or use **Settings -> Run t
 | `./asta.sh stop` | Stop both services |
 | `./asta.sh restart` | Restart both services |
 | `./asta.sh status` | Show backend/frontend process status |
+| `./asta.sh doc` | Run safe diagnostics (setup + service checks) |
 
 ## Core Features
 
@@ -120,7 +121,7 @@ asta/
 ├── services/whatsapp/ # WhatsApp bridge (Node)
 ├── scripts/           # helper scripts (RAG/Ollama setup)
 ├── docs/              # install, spec, errors, security
-├── asta.sh            # start/stop/restart/status
+├── asta.sh            # start/stop/restart/status/doc
 ├── .env.example       # copy to backend/.env
 ├── preview.png        # README preview image
 └── README.md

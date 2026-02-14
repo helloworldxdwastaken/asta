@@ -586,6 +586,96 @@ show_status() {
     echo ""
 }
 
+run_doc() {
+    local issues=0
+    echo ""
+    echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
+    echo -e "  ${WHITE}${BOLD}doc${NC}  ${GRAY}(safe diagnostics)${NC}"
+    echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
+
+    local py
+    py=$(find_backend_python)
+    if [ -n "$py" ]; then
+        print_success "python    ${GREEN}ok${NC}  ${GRAY}$py${NC}"
+    else
+        print_error "python    ${RED}missing${NC}  ${GRAY}need Python 3.12 or 3.13${NC}"
+        issues=1
+    fi
+
+    if command -v npm >/dev/null 2>&1; then
+        print_success "npm       ${GREEN}ok${NC}"
+    else
+        print_error "npm       ${RED}missing${NC}"
+        issues=1
+    fi
+
+    if [ -f "$BACKEND_DIR/.venv/bin/activate" ]; then
+        print_success "backend venv   ${GREEN}present${NC}"
+    else
+        print_warning "backend venv   ${YELLOW}missing${NC}  ${GRAY}run ./asta.sh setup${NC}"
+        issues=1
+    fi
+
+    if [ -d "$FRONTEND_DIR/node_modules" ]; then
+        print_success "frontend deps  ${GREEN}present${NC}"
+    else
+        print_warning "frontend deps  ${YELLOW}missing${NC}  ${GRAY}run ./asta.sh setup${NC}"
+        issues=1
+    fi
+
+    if [ -f "$BACKEND_DIR/.env" ]; then
+        print_success "backend .env   ${GREEN}present${NC}"
+    else
+        print_warning "backend .env   ${YELLOW}missing${NC}  ${GRAY}copy from .env.example${NC}"
+        issues=1
+    fi
+
+    if [ -f "$SCRIPT_DIR/workspace/USER.md" ]; then
+        print_success "workspace user ${GREEN}present${NC}"
+    else
+        print_warning "workspace user ${YELLOW}missing${NC}  ${GRAY}create workspace/USER.md${NC}"
+    fi
+
+    if lsof -Pi ":$BACKEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
+        local api_py=""
+        if [ -f "$BACKEND_DIR/.venv/bin/python" ]; then
+            api_py="$BACKEND_DIR/.venv/bin/python"
+        elif command -v python3 >/dev/null 2>&1; then
+            api_py="python3"
+        fi
+
+        if [ -n "$api_py" ]; then
+            if "$api_py" - "$BACKEND_PORT" <<'PY'
+import json, sys, urllib.request
+port = int(sys.argv[1])
+url = f"http://localhost:{port}/api/health"
+try:
+    with urllib.request.urlopen(url, timeout=2) as r:
+        data = json.loads(r.read().decode("utf-8"))
+        ok = (r.status == 200 and str(data.get("status", "")).lower() == "ok")
+except Exception:
+    ok = False
+if not ok:
+    raise SystemExit(1)
+PY
+            then
+                print_success "api health   ${GREEN}ok${NC}  ${GRAY}/api/health${NC}"
+            else
+                print_warning "api health   ${YELLOW}unreachable${NC}  ${GRAY}backend process is up but API is not responding${NC}"
+                issues=1
+            fi
+        fi
+    fi
+
+    show_status full
+
+    if [ "$issues" -eq 0 ]; then
+        print_success "Doc checks passed."
+    else
+        print_warning "Doc found setup issues (see warnings above)."
+    fi
+}
+
 # Main CLI logic
 case "$1" in
     start)
@@ -629,6 +719,10 @@ case "$1" in
         print_asta_banner
         show_status full
         ;;
+    doc|doctor)
+        print_asta_banner
+        run_doc
+        ;;
     update)
         print_asta_banner
         update_asta
@@ -661,6 +755,7 @@ case "$1" in
         echo -e "  ${CYAN}stop${NC}     Stop all services"
         echo -e "  ${CYAN}restart${NC}  Restart all services"
         echo -e "  ${CYAN}status${NC}   Show service status"
+        echo -e "  ${CYAN}doc${NC}      Safe diagnostics (alias: doctor)"
         echo -e "  ${CYAN}update${NC}   Pull latest code and restart"
         echo -e "  ${CYAN}install${NC}  Symlink asta to /usr/local/bin"
         echo -e "  ${CYAN}setup${NC}    Create backend venv (Python 3.12/3.13) + frontend deps"
@@ -676,6 +771,7 @@ case "$1" in
         echo -e "  ${CYAN}stop${NC}     Stop all services"
         echo -e "  ${CYAN}restart${NC}  Restart all services"
         echo -e "  ${CYAN}status${NC}   Show service status"
+        echo -e "  ${CYAN}doc${NC}      Safe diagnostics (alias: doctor)"
         echo -e "  ${CYAN}update${NC}   Pull latest code and restart"
         echo -e "  ${CYAN}install${NC}  Symlink asta to /usr/local/bin"
         echo -e "  ${CYAN}setup${NC}    Create backend venv (Python 3.12/3.13) + frontend deps"

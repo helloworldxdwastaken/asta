@@ -2,6 +2,19 @@
 
 All notable changes to Asta are documented here.
 
+## [1.3.1] - 2026-02-14
+
+### Added
+
+- **`asta doc` diagnostics command** — Added a safe diagnostic command (`./asta.sh doc`, alias `doctor`) to check environment/setup basics (Python, npm, backend venv, frontend deps, `.env`, workspace file) and include service/API health status.
+
+### Changed
+
+- **Control script docs/help updated** — Added `doc` command documentation in `README.md`, `docs/INSTALL.md`, and script help output.
+- **Backend dependency manifest completeness** — Added missing direct dependencies used by runtime/tests: `ddgs`, `apscheduler`, `pillow`, and `pytest` in `backend/requirements.txt`.
+
+---
+
 ## [1.3.0] - 2026-02-14
 
 ### Added

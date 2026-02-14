@@ -8,10 +8,13 @@ aiosqlite
 httpx
 pydub
 simpleaudio
+apscheduler
 selenium
 webdriver-manager
 beautifulsoup4
 duckduckgo-search
+ddgs
+pillow
 # AI Providers
 groq
 google-generativeai
@@ -29,3 +32,5 @@ moviepy
 psutil
 # Timezone from coordinates (local time, reminders)
 timezonefinder
+# Testing
+pytest
