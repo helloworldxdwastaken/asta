@@ -21,8 +21,6 @@ export default function Files() {
   const [currentRoot, setCurrentRoot] = useState<string>("");
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [content, setContent] = useState<string>("");
-  const [editContent, setEditContent] = useState<string>("");
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [pathAccessRequest, setPathAccessRequest] = useState<string | null>(null);
@@ -111,7 +109,6 @@ export default function Files() {
   const openFile = async (path: string) => {
     setSelectedFile(path);
     setContent("Loading…");
-    setEditContent("");
     setPathAccessRequest(null);
     setError(null);
     try {
@@ -124,7 +121,6 @@ export default function Files() {
       }
       if ("content" in result) {
         setContent(result.content);
-        setEditContent(result.content);
       }
     } catch (e) {
       const msg = (e as Error).message;

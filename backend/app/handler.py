@@ -1,6 +1,7 @@
 """Core message handler: build context, call AI, persist. Handles mood and reminders."""
 import logging
 import io
+import json
 import re
 from PIL import Image
 from app.context import build_context
@@ -24,6 +25,27 @@ _SHORT_ACK_PHRASES = frozenset({
     "cool", "nice", "np", "alright", "k", "kk", "done", "good", "great", "perfect",
 })
 
+_DESKTOP_REQUEST_HINTS = (
+    "desktop",
+    "check my desktop",
+    "list my desktop",
+    "what files",
+    "files on my desktop",
+    "on my desktop",
+    "screenshot files",
+    "delete screenshots",
+)
+
+_EXEC_INTENT_HINTS = (
+    "apple notes",
+    "memo",
+    "things",
+    "things app",
+    "things inbox",
+)
+
+_TOOL_CAPABLE_PROVIDERS = frozenset({"openai", "groq", "openrouter", "claude", "google"})
+
 
 def _is_short_acknowledgment(text: str) -> bool:
     """True if the message is only a short acknowledgment (ok, thanks, etc.)."""
@@ -38,6 +60,56 @@ def _is_short_acknowledgment(text: str) -> bool:
     if base in _SHORT_ACK_PHRASES:
         return True
     return False
+
+
+def _is_desktop_request(text: str) -> bool:
+    t = (text or "").strip().lower()
+    return any(k in t for k in _DESKTOP_REQUEST_HINTS)
+
+
+def _is_exec_intent(text: str) -> bool:
+    t = (text or "").strip().lower()
+    return any(k in t for k in _EXEC_INTENT_HINTS)
+
+
+def _provider_supports_tools(provider_name: str) -> bool:
+    return (provider_name or "").strip().lower() in _TOOL_CAPABLE_PROVIDERS
+
+
+def _summarize_directory_json(raw: str, max_items: int = 40) -> str | None:
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            return None
+        path = data.get("path") or "~/Desktop"
+        entries = data.get("entries") or []
+        if not isinstance(entries, list):
+            return None
+        dirs = [e for e in entries if isinstance(e, dict) and e.get("kind") == "dir"]
+        files = [e for e in entries if isinstance(e, dict) and e.get("kind") == "file"]
+        lines = [
+            f"I checked `{path}`.",
+            f"Found {len(dirs)} folder(s) and {len(files)} file(s).",
+        ]
+        shown = entries[:max_items]
+        if shown:
+            lines.append("")
+            lines.append("Top entries:")
+            for e in shown:
+                if not isinstance(e, dict):
+                    continue
+                name = str(e.get("name") or "")
+                kind = "dir" if e.get("kind") == "dir" else "file"
+                size = e.get("size")
+                if kind == "file" and isinstance(size, int):
+                    lines.append(f"- {name} ({size} bytes)")
+                else:
+                    lines.append(f"- {name} ({kind})")
+        if len(entries) > max_items:
+            lines.append(f"...and {len(entries) - max_items} more.")
+        return "\n".join(lines).strip()
+    except Exception:
+        return None
 
 
 async def handle_message(
@@ -131,7 +203,8 @@ async def handle_message(
     # --- SERVICE CALLS (only when skill is enabled) ---
 
     # 1. Reminders
-    if "reminders" in enabled:
+    # OpenClaw-style flow uses tool calls for capable providers; keep this as a fallback for providers without tools.
+    if "reminders" in enabled and not _provider_supports_tools(provider_name):
         reminder_result = await ReminderService.process_reminder(user_id, text, channel, channel_target)
         if reminder_result:
             extra.update(reminder_result)
@@ -204,6 +277,9 @@ async def handle_message(
     sorted_skills = sorted(skills_to_use, key=_skill_sort_key)
     logger.info("Executing skills: %s (Original: %s)", sorted_skills, skills_to_use)
 
+    # OpenClaw-style: Apple Notes (and other exec) work only via the exec tool. Model calls exec(command);
+    # we run it and return the result — no proactive run or context injection.
+
     for skill_name in sorted_skills:
         skill = get_skill_by_name(skill_name)
         if skill:
@@ -219,7 +295,7 @@ async def handle_message(
                 logger.error("Skill %s execution failed: %s", skill_name, e, exc_info=True)
 
     # 4. Build Context (Prompt Engineering)
-    # The new `build_context` signature takes `skills_in_use`.
+    # Built-in skills are intent-routed; workspace skills are selected by the model via <available_skills> + read tool.
     context = await build_context(db, user_id, cid, extra=extra, skills_in_use=skills_to_use)
     
     # Silly GIF skill: Proactive instruction (not intent-based)
@@ -261,29 +337,208 @@ async def handle_message(
         return f"No AI provider found for '{provider_name}'. Check your provider settings."
     user_model = await db.get_user_provider_model(user_id, provider.name)
 
-    # Cross-provider fallback: if primary fails, try other configured providers
+    # Exec tool (Claw-style): when allowlist is non-empty, pass tool so model can call exec(command)
+    from app.exec_tool import get_effective_exec_bins, get_exec_tool_openai_def, run_allowlisted_command, parse_exec_arguments
+    effective_bins = await get_effective_exec_bins(db)
+    # Guardrail: only expose exec when the user message is likely asking for an exec-backed workflow.
+    # This prevents models (especially free ones) from misusing exec for unrelated requests.
+    offer_exec = _is_exec_intent(text)
+    tools = list(get_exec_tool_openai_def(effective_bins)) if (effective_bins and offer_exec) else []
+    if effective_bins and offer_exec:
+        logger.info("Exec allowlist: %s; passing tools to provider=%s", sorted(effective_bins), provider.name)
+    elif "notes" in text.lower() or "memo" in text.lower():
+        logger.warning("User asked for notes/memo but exec allowlist is empty (enable Apple Notes skill or set ASTA_EXEC_ALLOWED_BINS)")
+
+    # Workspace read tool (OpenClaw-style skills): lets model read selected SKILL.md on demand.
+    from app.workspace import discover_workspace_skills
+    workspace_skill_names = {s.name for s in discover_workspace_skills()}
+    has_enabled_workspace_skills = any(name in enabled for name in workspace_skill_names)
+    if has_enabled_workspace_skills:
+        from app.workspace_read_tool import get_workspace_read_tool_openai_def
+        tools = tools + get_workspace_read_tool_openai_def()
+
+    # Files tool: list_directory, read_file, allow_path — when user has Files skill so they can "check desktop" / request access
+    if "files" in enabled:
+        from app.files_tool import get_files_tools_openai_def
+        tools = tools + get_files_tools_openai_def()
+    # Reminders tool: status/list/add/remove (one-shot reminders)
+    if "reminders" in enabled:
+        from app.reminders_tool import get_reminders_tool_openai_def
+        tools = tools + get_reminders_tool_openai_def()
+    # Cron tool: status/list/add/update/remove for recurring jobs
+    from app.cron_tool import get_cron_tool_openai_def
+    tools = tools + get_cron_tool_openai_def()
+    tools = tools if tools else None
+
     from app.providers.fallback import chat_with_fallback, get_available_fallback_providers
     fallback_names = await get_available_fallback_providers(db, user_id, exclude_provider=provider.name)
-    # Collect each fallback's custom model (so we use the right model per provider)
     fallback_models = {}
     for fb_name in fallback_names:
         fb_model = await db.get_user_provider_model(user_id, fb_name)
         if fb_model:
             fallback_models[fb_name] = fb_model
 
-    response = await chat_with_fallback(
-        provider, messages, fallback_names,
+    chat_kwargs = dict(
         context=context, model=user_model or None,
         _fallback_models=fallback_models,
         image_bytes=image_bytes,
         image_mime=image_mime,
     )
-    
-    reply = response.content
-    
+    if tools:
+        chat_kwargs["tools"] = tools
+
+    response, provider_used = await chat_with_fallback(
+        provider, messages, fallback_names, **chat_kwargs
+    )
+    if tools and provider_used:
+        has_tc = bool(response.tool_calls)
+        logger.info("Provider %s returned tool_calls=%s (count=%s)", provider_used.name, has_tc, len(response.tool_calls or []))
+
+    # Tool-call loop: if model requested exec (or other tools), run and re-call same provider until done
+    MAX_TOOL_ROUNDS = 3
+    current_messages = list(messages)
+    ran_exec_tool = False
+    ran_files_tool = False
+    last_exec_stdout: str = ""
+    for _ in range(MAX_TOOL_ROUNDS):
+        if not response.tool_calls or not provider_used:
+            break
+        # Append assistant message (with content + tool_calls) and run each exec call
+        asst_content = response.content or ""
+        asst_tool_calls = response.tool_calls
+        current_messages.append({
+            "role": "assistant",
+            "content": asst_content,
+            "tool_calls": asst_tool_calls,
+        })
+        for tc in asst_tool_calls:
+            fn = (tc.get("function") or {}) if isinstance(tc.get("function"), dict) else {}
+            name = fn.get("name") or tc.get("function", {}).get("name")
+            args_str = fn.get("arguments") or "{}"
+            if name == "exec":
+                params = parse_exec_arguments(args_str)
+                cmd = (params.get("command") or "").strip()
+                timeout_sec = params.get("timeout_sec")
+                workdir = params.get("workdir") if isinstance(params.get("workdir"), str) else None
+                logger.info("Exec tool called: command=%r", cmd)
+                stdout, stderr, ok = await run_allowlisted_command(
+                    cmd,
+                    allowed_bins=effective_bins,
+                    timeout_seconds=timeout_sec if isinstance(timeout_sec, int) else None,
+                    workdir=workdir,
+                )
+                ran_exec_tool = True
+                last_exec_stdout = stdout
+                logger.info("Exec result: ok=%s stdout_len=%s stderr_len=%s", ok, len(stdout), len(stderr))
+                if ok or stdout or stderr:
+                    out = f"stdout:\n{stdout}\n" + (f"stderr:\n{stderr}\n" if stderr else "")
+                else:
+                    out = f"error: {stderr or 'Command not allowed or failed.'}"
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+            elif name == "list_directory":
+                from app.files_tool import list_directory as list_dir, parse_files_tool_args as parse_files_args
+                params = parse_files_args(args_str)
+                path = (params.get("path") or "").strip()
+                out = await list_dir(path, user_id, db)
+                ran_files_tool = True
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+            elif name == "read_file":
+                from app.files_tool import read_file_content as read_file_fn, parse_files_tool_args as parse_files_args
+                params = parse_files_args(args_str)
+                path = (params.get("path") or "").strip()
+                out = await read_file_fn(path, user_id, db)
+                ran_files_tool = True
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+            elif name == "allow_path":
+                from app.files_tool import allow_path as allow_path_fn, parse_files_tool_args as parse_files_args
+                params = parse_files_args(args_str)
+                path = (params.get("path") or "").strip()
+                out = await allow_path_fn(path, user_id, db)
+                ran_files_tool = True
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+            elif name == "delete_file":
+                from app.files_tool import delete_file as delete_file_fn, parse_files_tool_args as parse_files_args
+                params = parse_files_args(args_str)
+                path = (params.get("path") or "").strip()
+                permanently = bool(params.get("permanently")) if isinstance(params, dict) else False
+                out = await delete_file_fn(path, user_id, db, permanently=permanently)
+                ran_files_tool = True
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+            elif name == "delete_matching_files":
+                from app.files_tool import (
+                    delete_matching_files as delete_matching_files_fn,
+                    parse_files_tool_args as parse_files_args,
+                )
+                params = parse_files_args(args_str)
+                directory = (params.get("directory") or "").strip()
+                glob_pattern = (params.get("glob_pattern") or "").strip()
+                permanently = bool(params.get("permanently")) if isinstance(params, dict) else False
+                out = await delete_matching_files_fn(
+                    directory,
+                    glob_pattern,
+                    user_id,
+                    db,
+                    permanently=permanently,
+                )
+                ran_files_tool = True
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+            elif name == "read":
+                from app.workspace_read_tool import read_workspace_file, parse_workspace_read_args
+                params = parse_workspace_read_args(args_str)
+                path = (params.get("path") or "").strip()
+                out = await read_workspace_file(path)
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+            elif name == "reminders":
+                from app.reminders_tool import run_reminders_tool, parse_reminders_tool_args
+                params = parse_reminders_tool_args(args_str)
+                out = await run_reminders_tool(
+                    params,
+                    user_id=user_id,
+                    channel=channel,
+                    channel_target=channel_target,
+                    db=db,
+                )
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+            elif name == "cron":
+                from app.cron_tool import run_cron_tool, parse_cron_tool_args
+                params = parse_cron_tool_args(args_str)
+                out = await run_cron_tool(
+                    params,
+                    user_id=user_id,
+                    channel=channel,
+                    channel_target=channel_target,
+                    db=db,
+                )
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+            else:
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": "Unknown tool."})
+        # Re-call same provider with updated messages (no fallback switch); use that provider's model
+        tool_kwargs = {**chat_kwargs}
+        if provider_used.name == provider.name:
+            tool_kwargs["model"] = user_model or None
+        else:
+            tool_kwargs["model"] = fallback_models.get(provider_used.name)
+        # Give the model more time when it has to summarize large tool output (e.g. memo notes)
+        if provider_used.name == "openrouter":
+            tool_kwargs["timeout"] = 90
+        response = await provider_used.chat(current_messages, **tool_kwargs)
+        if response.error:
+            break
+
+    reply = (response.content or "").strip()
+
     # If there was a fatal error (Auth/RateLimit) and no content, show the error message to the user
     if not reply and response.error:
-         reply = f"Error: {response.error_message or 'Unknown provider error'}"
+        reply = f"Error: {response.error_message or 'Unknown provider error'}"
+    # OpenClaw-style: generic fallback when we ran exec but got no reply (no skill-specific hints)
+    if not reply and ran_exec_tool:
+        if last_exec_stdout:
+            reply = "I ran the command and got output, but the model didn't return a reply. **Command output:**\n\n```\n"
+            max_show = 2000
+            excerpt = last_exec_stdout.strip()[:max_show] + ("…" if len(last_exec_stdout) > max_show else "")
+            reply += excerpt + "\n```"
+        else:
+            reply = "I ran the command but didn't get a reply back. Try again or rephrase."
 
     
     # Expand GIF tags
@@ -308,10 +563,11 @@ async def handle_message(
     exec_matches = list(exec_pattern.finditer(reply))
     exec_outputs: list[str] = []
     if exec_matches:
-        from app.exec_tool import run_allowlisted_command
+        from app.exec_tool import get_effective_exec_bins, run_allowlisted_command
+        effective_bins = await get_effective_exec_bins(db)
         for m in exec_matches:
             cmd = m.group(1).strip()
-            stdout, stderr, ok = await run_allowlisted_command(cmd)
+            stdout, stderr, ok = await run_allowlisted_command(cmd, allowed_bins=effective_bins)
             if ok or stdout or stderr:
                 exec_outputs.append(f"Command: {cmd}\nOutput:\n{stdout}\n" + (f"Stderr:\n{stderr}\n" if stderr else ""))
             else:
@@ -320,7 +576,7 @@ async def handle_message(
             exec_message = "[Command output from Asta]\n\n" + "\n---\n\n".join(exec_outputs)
             exec_message += "\n\nReply to the user based on this output. Do not use [ASTA_EXEC] in your reply."
             messages_plus = list(messages) + [{"role": "assistant", "content": reply}] + [{"role": "user", "content": exec_message}]
-            response2 = await chat_with_fallback(
+            response2, _ = await chat_with_fallback(
                 provider, messages_plus, fallback_names,
                 context=context, model=user_model or None,
                 _fallback_models=fallback_models,
@@ -392,6 +648,26 @@ async def handle_message(
         lower = reply.lower()
         if any(p in lower for p in ("i've set a reminder", "i set a reminder", "reminder set", "i'll remind you", "i'll send you a message at")):
             reply += "\n\n_I couldn't parse that reminder. Try: \"remind me in 5 min to X\" or \"alarm in 5 min to take a shower\"_"
+
+    # OpenClaw-style: single generic fallback when reply is empty (no skill-specific hints)
+    if not reply or not reply.strip():
+        reply = "I didn't get a reply back. Try again or rephrase."
+
+    # Reliability fallback for desktop requests on models that skip tool calls:
+    # do a real Desktop listing directly so reply is grounded in actual file system state.
+    if _is_desktop_request(text) and "files" in enabled and not ran_files_tool:
+        from app.files_tool import allow_path as allow_path_fn, list_directory as list_dir
+        # Try listing directly; if not allowed, request/allow Desktop then list.
+        desktop = "~/Desktop"
+        listing = await list_dir(desktop, user_id, db)
+        if "not in the allowed list" in listing.lower():
+            await allow_path_fn(desktop, user_id, db)
+            listing = await list_dir(desktop, user_id, db)
+        summarized = _summarize_directory_json(listing)
+        if summarized:
+            reply = summarized
+        elif listing.startswith("Error:"):
+            reply = f"I couldn't check your Desktop yet: {listing}"
 
     # Always persist assistant reply (including errors) so web UI matches what user saw on Telegram
     await db.add_message(cid, "assistant", reply, provider.name if not reply.strip().startswith("Error:") and not reply.strip().startswith("No AI provider") else None)

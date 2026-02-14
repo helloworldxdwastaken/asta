@@ -5,54 +5,6 @@ import { api } from "../api/client";
 
 type NotificationItem = { id: number; message: string; run_at: string; status: string; channel: string; created_at: string };
 
-const PROVIDER_LOGOS: Record<string, { url: string; initial: string }> = {
-  groq: { url: "https://groq.com/favicon.ico", initial: "G" },
-  gemini: { url: "https://www.google.com/favicon.ico", initial: "G" },
-  google: { url: "https://www.google.com/favicon.ico", initial: "G" },
-  claude: { url: "https://anthropic.com/favicon.ico", initial: "C" },
-  openai: { url: "https://openai.com/favicon.ico", initial: "O" },
-  openrouter: { url: "https://openrouter.ai/favicon.ico", initial: "R" },
-  ollama: { url: "https://ollama.com/favicon.ico", initial: "O" },
-};
-
-function ProviderLogo({ providerKey, size = 32 }: { providerKey: string; size?: number }) {
-  const [fallback, setFallback] = useState(false);
-  const info = PROVIDER_LOGOS[providerKey] ?? { url: "", initial: providerKey.slice(0, 1).toUpperCase() };
-  if (fallback || !info.url) {
-    return (
-      <div
-        className="provider-logo-fallback"
-        style={{
-          width: size,
-          height: size,
-          borderRadius: 10,
-          background: "var(--accent-soft, rgba(99, 102, 241, 0.15))",
-          color: "var(--accent, #6366f1)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontWeight: 700,
-          fontSize: size * 0.5,
-          flexShrink: 0,
-        }}
-      >
-        {info.initial}
-      </div>
-    );
-  }
-  return (
-    <img
-      src={info.url}
-      alt=""
-      width={size}
-      height={size}
-      className="provider-logo-img"
-      style={{ borderRadius: 10, objectFit: "contain", background: "var(--bg-main)", flexShrink: 0 }}
-      onError={() => setFallback(true)}
-    />
-  );
-}
-
 export default function Dashboard() {
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState<string | null>(null);

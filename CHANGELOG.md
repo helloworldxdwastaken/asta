@@ -2,6 +2,29 @@
 
 All notable changes to Asta are documented here.
 
+## [1.2.0] - 2026-02-14
+
+### Added
+
+- **OpenClaw-style workspace skill selection** — Context now exposes only `<available_skills>` for workspace skills and a `read` tool, so the model selects one relevant skill and reads its `SKILL.md` on demand instead of injecting all skill bodies.
+- **Structured tools for file workflows** — Added `list_directory`, `read_file`, `allow_path`, `delete_file`, and `delete_matching_files` tools. Supports desktop listing and screenshot cleanup flows with safer default trash behavior.
+- **Structured reminders and cron tools** — Added `reminders` (`status/list/add/remove`) and `cron` (`status/list/add/update/remove`) action-based tools for one-time and recurring scheduling flows.
+- **Skill install metadata in API/UI** — Workspace skill frontmatter now exposes install command/label + required bins. Skills page shows setup commands and auto-allowlist behavior for exec bins.
+
+### Fixed
+
+- **Desktop delete flow regression** — Requests like "check my desktop" then "delete screenshot files" no longer fall through to unrelated fallback text; the handler now routes through file tools and a grounded directory-summary fallback.
+- **Unsafe exec bin extraction** — Required binaries are now parsed strictly from frontmatter metadata instead of regex scanning the entire `SKILL.md` body.
+- **Context pollution from all enabled workspace skills** — Workspace skill bodies are no longer pre-injected into prompt context, reducing unrelated instruction bleed.
+
+### Changed
+
+- **Tool calls across providers** — Tool-call flow is now wired for OpenAI, Groq, OpenRouter, Claude, and Google paths, with provider-specific conversion/normalization and OpenRouter text-tag fallback.
+- **Exec tool options** — `exec` now supports `timeout_sec` and safe `workdir` resolution for CLI-based skills (Apple Notes/Things) while preserving allowlist enforcement.
+- **Default provider** — New users default to `openrouter` (Trinity Large remains usable as default if configured).
+
+---
+
 ## [1.1.0] - 2026-02-14
 
 ### Added
@@ -22,6 +45,7 @@ All notable changes to Asta are documented here.
 
 ### Changed
 
+- **Exec: OpenClaw-style (tool only)** — Apple Notes and other exec-based skills now work like OpenClaw: the model calls an **exec tool** with a command (e.g. `memo notes`); the backend runs it and returns the result; the model replies from that output. No proactive run or pre-injected note content. Fallback: `[ASTA_EXEC: command][/ASTA_EXEC]` in the reply still works when the provider doesn't support tools. See `docs/SPEC.md` §4.2 and `docs/OPENCLAW-EXEC-NOTES.md`.
 - **Dashboard layout** — Wider (1600px max), more padding and gap (2rem). Brain no longer shows provider logos; all providers use the same style (label + model line; Ollama adds comma-separated list of installed models).
 - **Cron API** — `PUT /api/cron/{job_id}` with body `{ cron_expr?, tz?, message? }` updates a job and reschedules it.
 - **Requirements** — No change; Python 3.12 or 3.13, `pydantic<2.12`. See `backend/requirements.txt` and `docs/INSTALL.md`.

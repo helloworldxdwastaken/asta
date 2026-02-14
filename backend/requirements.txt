@@ -27,3 +27,5 @@ faster-whisper
 # Image/Video
 moviepy
 psutil
+# Timezone from coordinates (local time, reminders)
+timezonefinder

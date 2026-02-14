@@ -20,8 +20,10 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 
 - **Control panel** — `frontend/`: Dashboard, Chat, Files, Drive, Learning (RAG), Audio notes, Skills, Channels, **Cron**, Settings. Dashboard: Brain (AI providers), Body (CPU/RAM/disk, CPU model), Eyes (vision), Channels, Tasks, Schedule (cron count), Capabilities (active skills count). Cron tab: list/delete/update recurring jobs; auto-updater creates "Daily Auto-Update" on startup when skill present. Settings → Auto-updater for schedule/timezone.
 - **AI providers** — `backend/app/providers/`: Groq, Google (Gemini), Claude, OpenAI, OpenRouter, Ollama. Set keys in Settings or `backend/.env`.
-- **Unified context** — AI receives: recent conversation, connected channels, **ground-truth state** (pending reminder count, location), allowed file paths, Drive summary (when connected), RAG snippets, time, weather, lyrics, Spotify, reminders. When reminders skill is used, the **actual pending reminders list** is injected so the AI doesn't hallucinate. `backend/app/context.py`, `handler.py`.
-- **Intent-based skills** — `backend/app/skill_router.py`: only relevant skills run per message (time, weather, lyrics, Spotify, etc.). Saves tokens; status in Telegram/WhatsApp shows only used skills (e.g. "🎵 Finding lyrics…"). Service-style handlers (reminders, learning, Spotify) are gated by skill toggles.
+- **Unified context** — AI receives recent conversation, connected channels, ground-truth state (pending reminders count, location), allowed file paths, Drive summary (when connected), RAG snippets, time/weather/lyrics/Spotify context, and tool instructions. Workspace `SKILL.md` bodies are not pre-injected; they are read on demand via tool call. `backend/app/context.py`, `handler.py`.
+- **Intent-based built-in skills** — `backend/app/skill_router.py`: only relevant built-in skills run per message (time, weather, lyrics, Spotify, etc.). Saves tokens; status in Telegram/WhatsApp shows only used skills (e.g. "🎵 Finding lyrics…"). Service handlers are gated by skill toggles.
+- **OpenClaw-style workspace skill flow** — Context exposes `<available_skills>` (enabled workspace skills only). Model selects one relevant skill, calls `read(path)` for that skill’s `SKILL.md`, then follows it. This avoids context pollution from loading all enabled workspace skills.
+- **Structured tool loop** — Handler executes provider tool calls for exec/files/reminders/cron/read, appends tool results, and re-calls the same provider for final user text.
 - **Time & Weather** — `backend/app/time_weather.py`: separate skills. Time in 12h AM/PM; weather with today/tomorrow forecast (Open-Meteo). User location from DB or workspace/USER.md; **location normalization** (e.g. `Holon,IL` → "Holon, Israel", `Chicago, USA` → "Chicago, United States") before geocoding so local time works.
 - **Web search** — `backend/app/search_web.py`: ddgs multi-backend search (no API key). Triggered mainly on explicit search intent ("search for", "look up", "check the web", "latest"), with RAG prioritized first when relevant.
 - **Lyrics** — `backend/app/lyrics.py`: LRCLIB (free). "Lyrics of X", "lyrics for X", follow-ups like "a song by Artist". Multiple query formats if first search fails.
@@ -40,8 +42,6 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 | Feature | Description | Notes |
 |--------|-------------|--------|
 | **Google Drive OAuth** | Full OAuth flow and list files in panel. | Stub in `routers/drive.py`; add token storage. |
-| **Recurring reminders / cron** | "Every day at 9", "every Monday at 5pm". | One-off reminders done; add recurring. |
-| **Google Drive** | Connect to Google Drive (OAuth2), list files, search, download, optionally upload. Show “what’s on the drive” in panel. | Google Drive API + OAuth; store tokens securely. |
 | **Learning / RAG** | “Learn X for Y hours” → ingest content (URLs, files, paste), chunk, embed (Ollama or API), store in vector DB. Answer questions using that knowledge. | Use LangChain/LlamaIndex or custom pipeline; scheduler runs ingestion for the requested duration. |
 | **Install script** | One-command install.sh / install.ps1. | See docs/INSTALL.md for manual steps. |
 
@@ -116,18 +116,26 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 - **RAG:** `backend/app/rag/` — ingest pipeline, embedding (Ollama or API), vector store; expose “learn” and “ask about topic” endpoints.
 - **Scheduler:** `backend/app/tasks/` — APScheduler jobs; “learn for X hours” = enqueue ingestion job with end_time.
 
-### 4.2 Security
+### 4.2 Exec tool and Apple Notes (OpenClaw-style)
+
+**Same as OpenClaw:** the model uses the **exec tool**. When the user asks to check Apple Notes (or list Things, etc.), the model calls the `exec` tool with a `command`; the backend runs the allowlisted command, returns stdout/stderr as the tool result, and re-calls the same provider. No proactive run or pre-injected note content.
+
+- **Tool flow:** `handler.py` passes tools (exec/files/read/reminders/cron) to tool-capable providers (OpenAI, Groq, OpenRouter, Claude, Google). If the response has `tool_calls`, Asta runs each tool, appends tool output, and re-calls the same provider. Final reply is the last `response.content`.
+- **Allowlist:** Env `ASTA_EXEC_ALLOWED_BINS` plus DB `exec_allowed_bins_extra`. Enabling a skill that declares `required_bins` (e.g. Apple Notes) adds those bins. Binary is resolved with `resolve_executable()` (PATH plus `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`).
+- **Fallback:** We still parse `[ASTA_EXEC: command][/ASTA_EXEC]` in the reply, run the command, and re-call with the output. See `exec_tool.py`, `handler.py`, `docs/OPENCLAW-EXEC-NOTES.md`.
+
+### 4.3 Security
 
 - Never commit API keys. Use env vars or a secrets store; document in README.
 - Restrict file access to configured directories (e.g. `ASTA_ALLOWED_PATHS`).
 - Validate and sanitize all user input; rate-limit public endpoints (Telegram/WhatsApp).
 - Prefer read-only Drive scope if only “see what’s on the drive” is needed.
 
-### 4.3 Easy install (planned)
+### 4.4 Easy install (planned)
 
 - **Native:** `./asta.sh start` runs backend + frontend after manual venv/npm install. **Planned:** one command (e.g. `install.sh` or `curl ... | sh`) that pulls from GitHub and installs dependencies (venv, pip, npm) so you can run `./asta.sh start` with minimal steps. Document in README and docs/INSTALL.md.
 
-### 4.4 What “learn for X time” should do
+### 4.5 What “learn for X time” should do
 
 1. User says: “Learn everything about Next.js for the next 2 hours.”
 2. Backend creates a **learning job:** sources (e.g. list of URLs or “crawl from this seed”), duration (2 hours), topic label (“Next.js”).
@@ -178,4 +186,4 @@ asta/
 
 ## 6. Changelog (spec)
 
-- **Current (1.1.0):** Control panel (Dashboard, Chat, Files, Drive, Learning, Audio notes, Skills, Channels, **Cron**, Settings). **Cron** tab: list/delete/update jobs; auto-updater skill creates Daily Auto-Update on startup; Settings → Auto-updater. **Dashboard**: 4-col layout, Brain|Body|Eyes top row, Schedule (cron count), Capabilities (active skills count); CPU model + cores in Body; Ollama shows only installed models. **Time**: USER.md location normalized (country codes, strip italics) for geocoding → local time. **Spotify**: play artist when no track found (artist search + context_uri). Recurring jobs via cron; one-off reminders unchanged. Drive OAuth planned.
+- **Current (1.2.0):** OpenClaw-style workspace skill selection (`<available_skills>` + on-demand `read`), strict frontmatter metadata parsing for required bins, and structured tool loop across OpenAI/Groq/OpenRouter/Claude/Google. Added structured `files`, `reminders`, and `cron` tools (including desktop listing and screenshot cleanup flows), improved exec options (`timeout_sec`, `workdir`), and default provider set to OpenRouter. Drive OAuth is still planned.

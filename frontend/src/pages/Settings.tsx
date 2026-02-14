@@ -3,16 +3,6 @@ import { Link } from "react-router-dom";
 import type { CronJob } from "../api/client";
 import { api } from "../api/client";
 
-const KEY_LABELS: Record<string, string> = {
-  groq_api_key: "Groq",
-  gemini_api_key: "Google Gemini",
-  google_ai_key: "Google AI (alternative)",
-  anthropic_api_key: "Anthropic (Claude)",
-  openai_api_key: "OpenAI",
-  openrouter_api_key: "OpenRouter",
-  giphy_api_key: "Giphy (for silly GIF skill)",
-};
-
 const PROVIDER_LABELS: Record<string, string> = {
   groq: "Groq",
   google: "Google (Gemini)",

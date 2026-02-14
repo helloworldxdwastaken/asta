@@ -42,40 +42,63 @@ async def build_context(
     # 3. Connected Channels & State
     parts.extend(await _get_state_section(db, user_id, extra))
 
-    # 3a. Exec tool (Claw-like): when enabled, model can run allowlisted commands
-    from app.config import get_settings
-    _settings = get_settings()
-    if _settings.exec_allowed_bins:
-        bins = ", ".join(sorted(_settings.exec_allowed_bins))
+    # 3a. Exec (OpenClaw-style): when enabled, use the exec tool to run allowlisted commands. Model calls the tool; we run and return output.
+    from app.exec_tool import get_effective_exec_bins
+    effective_bins = await get_effective_exec_bins(db)
+    if effective_bins:
+        bins = ", ".join(sorted(effective_bins))
         parts.append(
-            f"[EXEC] You can run shell commands by outputting [ASTA_EXEC: command][/ASTA_EXEC]. "
-            f"Allowed binaries: {bins}. Asta will run the command and use the output to answer. "
-            "E.g. for Apple Notes: [ASTA_EXEC: memo notes][/ASTA_EXEC] or [ASTA_EXEC: memo notes -s \"Eli\"][/ASTA_EXEC]. "
-            "For Things: [ASTA_EXEC: things inbox][/ASTA_EXEC]. Use one block per command."
+            f"[EXEC] Allowed binaries: {bins}. Use the exec tool when the user asks to check Apple Notes (memo notes, memo notes -s \"query\"), "
+            "list Things (things inbox), or run another allowlisted CLI. Do not say you will check — call the exec tool with the command; you will get the real output and then answer. "
+            "Fallback: if the exec tool is not available, you can output [ASTA_EXEC: command][/ASTA_EXEC] (e.g. [ASTA_EXEC: memo notes][/ASTA_EXEC]) in your reply."
         )
         parts.append("")
 
-    # 3a2. Cron (Claw-style recurring jobs): model can add/remove cron jobs
+    # 3a1. Files tools: list/read/allow/delete for allowed paths
+    if skills_in_use and "files" in skills_in_use:
+        parts.append(
+            "[FILES] You have list_directory, read_file, allow_path, delete_file, and delete_matching_files tools. "
+            "When the user asks 'what files on my desktop', 'list my desktop', 'what do I have on desktop', or similar: call allow_path(\"~/Desktop\") to request access, then list_directory(\"~/Desktop\") to list the files. Do not say you cannot run ls — use these tools instead. "
+            "If the path is already allowed, list_directory works directly. "
+            "For deleting one file use delete_file(path). For multiple similar files (like screenshots) use delete_matching_files(directory, glob_pattern). "
+            "Only paths under the user's home can be added via allow_path."
+        )
+        parts.append("")
+
+    # 3a2. Reminders tool (one-shot)
+    if skills_in_use and "reminders" in skills_in_use:
+        parts.append(
+            "[REMINDERS] Use the reminders tool for one-time reminders. "
+            "Use action='add' with natural text (e.g. 'remind me in 30 min to call mom', 'wake me up tomorrow at 7am'). "
+            "Use action='list' or action='status' when the user asks what reminders exist. "
+            "Use action='remove' with id when user asks to delete one."
+        )
+        parts.append("")
+
+    # 3a3. Cron (Claw-style recurring jobs): use cron tool actions for recurring schedules
     parts.append(
-        "[CRON] You can schedule recurring jobs (like OpenClaw cron). "
-        "To add: [ASTA_CRON_ADD: name|cron_expr|tz|message][/ASTA_CRON_ADD]. "
-        "Use 5-field cron: minute hour day month day_of_week (e.g. 0 8 * * * = daily 8am). "
-        "tz is optional (e.g. America/Los_Angeles). "
-        "Example: [ASTA_CRON_ADD: Daily Update|0 7 * * *||Run daily update check and report][/ASTA_CRON_ADD]. "
-        "To remove: [ASTA_CRON_REMOVE: name][/ASTA_CRON_REMOVE]. "
-        "When the cron runs, the message is sent to the AI and the reply is delivered to the user."
+        "[CRON] For recurring jobs, use the cron tool (actions: status, list, add, update, remove). "
+        "Use 5-field cron expressions: minute hour day month day_of_week (e.g. 0 8 * * * means every day at 08:00). "
+        "When adding, provide name, cron_expr, and message; tz is optional."
     )
     parts.append("")
 
-    # 3b. OpenClaw-style available skills (name, description, location) — model uses this to decide which skill applies
-    parts.append(await _get_available_skills_prompt(db, user_id, skills_in_use))
+    # 3b. OpenClaw-style available skills (workspace skills only): model selects one and reads SKILL.md via read tool.
+    skills_prompt = await _get_available_skills_prompt(db, user_id, skills_in_use)
+    if skills_prompt:
+        parts.append(skills_prompt)
 
     # 4. Skill Sections
     from app.skills.registry import get_all_skills
+    from app.skills.markdown_skill import MarkdownSkill
     
     # Iterate over all registered skills
     # We use a fixed order from registry to ensure context stability
     for skill in get_all_skills():
+        # OpenClaw-style workspace skills are read on-demand via the `read` tool.
+        # Do not preload SKILL.md bodies into context.
+        if isinstance(skill, MarkdownSkill):
+            continue
         # Check if enabled for user
         is_enabled = await db.get_skill_enabled(user_id, skill.name)
         if not is_enabled and not skill.is_always_enabled:
@@ -116,39 +139,12 @@ def _get_system_header(mood: str | None) -> list[str]:
     ]
 
 
-# Built-in skill descriptions for OpenClaw-style available_skills block (id -> description)
-_BUILTIN_SKILL_DESCRIPTIONS: dict[str, str] = {
-    "files": "Local file access and summaries.",
-    "drive": "Drive files and summaries.",
-    "rag": "Learned knowledge and documents.",
-    "learn": "Say 'learn about X for 30 min' to have Asta learn and store a topic in RAG.",
-    "time": "Current time (12h AM/PM). Location is used for your timezone when set.",
-    "weather": "Current weather and forecast (today, tomorrow). Set your location once so Asta can answer.",
-    "google_search": "Search the web for current information.",
-    "lyrics": "Find song lyrics (free, no key). Ask e.g. 'lyrics for Bohemian Rhapsody'.",
-    "spotify": "Search songs on Spotify. Playback on devices (with device picker) when configured.",
-    "reminders": "Wake me up or remind me at a time. Set your location so times are in your timezone.",
-    "audio_notes": "Upload audio; Asta transcribes and formats as meeting notes. No API key (runs locally).",
-    "silly_gif": "Occasionally replies with a relevant GIF in friendly chats. Requires Giphy API key.",
-    "self_awareness": "Answers about Asta (features, docs, how to use) using README + docs and workspace/USER.md. No separate data folder.",
-    "server_status": "Monitor system metrics (CPU, RAM, Disk, Uptime). Ask 'server status' or '/status'.",
-}
-
-
 async def _get_available_skills_prompt(db: "Db", user_id: str, skills_in_use: set[str] | None) -> str:
-    """OpenClaw-style: list of skills with name, description, location so the model knows what exists and when to use each."""
+    """OpenClaw-style list of workspace skills with name/description/location."""
     from app.skills.registry import get_all_skills
     from app.skills.markdown_skill import MarkdownSkill
-    from app.workspace import discover_workspace_skills
 
-    lines = [
-        "",
-        "The following skills provide specialized instructions for specific tasks.",
-        "When the task matches a skill's description, use the instructions in the [SKILL: name] sections below.",
-        "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md) and use that absolute path in tool commands.",
-        "",
-        "<available_skills>",
-    ]
+    skill_lines: list[str] = []
     for skill in get_all_skills():
         try:
             enabled = await db.get_skill_enabled(user_id, skill.name)
@@ -156,18 +152,29 @@ async def _get_available_skills_prompt(db: "Db", user_id: str, skills_in_use: se
             enabled = True
         if not enabled and not getattr(skill, "is_always_enabled", False):
             continue
-        if isinstance(skill, MarkdownSkill):
-            r = skill._resolved
-            desc = r.description
-            loc = str(r.file_path)
-        else:
-            desc = _BUILTIN_SKILL_DESCRIPTIONS.get(skill.name, f"Skill: {skill.name}.")
-            loc = "(injected in [SKILL: name] section below when selected)"
-        lines.append("  <skill>")
-        lines.append(f"    <name>{skill.name}</name>")
-        lines.append(f"    <description>{desc}</description>")
-        lines.append(f"    <location>{loc}</location>")
-        lines.append("  </skill>")
+        if not isinstance(skill, MarkdownSkill):
+            continue
+        r = skill._resolved
+        skill_lines.append("  <skill>")
+        skill_lines.append(f"    <name>{skill.name}</name>")
+        skill_lines.append(f"    <description>{r.description}</description>")
+        skill_lines.append(f"    <location>{str(r.file_path)}</location>")
+        skill_lines.append("  </skill>")
+    if not skill_lines:
+        return ""
+    lines = [
+        "",
+        "## Skills (mandatory)",
+        "Before replying: scan <available_skills> <description> entries.",
+        "- If exactly one skill clearly applies: call `read` on its <location>, then follow it.",
+        "- If multiple could apply: choose the most specific one, then read/follow it.",
+        "- If none clearly apply: do not read any SKILL.md.",
+        "Constraints: never read more than one skill up front; only read after selecting.",
+        "When a selected skill references relative paths, resolve them from the skill directory (parent of SKILL.md).",
+        "",
+        "<available_skills>",
+    ]
+    lines.extend(skill_lines)
     lines.append("</available_skills>")
     lines.append("")
     return "\n".join(lines)
@@ -219,5 +226,3 @@ async def _get_state_section(db: "Db", user_id: str, extra: dict) -> list[str]:
     parts.append(f"Pending reminders: {len(pending)}. Location: {loc_str}. Use this — do not invent reminders or location.")
     parts.append("")
     return parts
-
-

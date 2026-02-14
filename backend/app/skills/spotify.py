@@ -8,7 +8,10 @@ class SpotifySkill(Skill):
     
     def check_eligibility(self, text: str, user_id: str) -> bool:
         t = (text or "").strip().lower()
-        if any(k in t for k in ("spotify", "search spotify", "find song", "find track", "search song", "search music", "on spotify", "in spotify")):
+        if any(k in t for k in (
+            "spotify", "search spotify", "find song", "find track", "search song", "search music",
+            "on spotify", "in spotify", "what song is playing", "what's playing", "playing on spotify",
+        )):
             return True
         if "play " in t:
             return True

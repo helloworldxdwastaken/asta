@@ -52,7 +52,9 @@ npm run dev
 
 ### 5. Optional
 
-In the panel: **Settings** → add API keys (Groq, Gemini, Claude, OpenAI, OpenRouter, Telegram, Spotify), set default AI, toggle skills. Set your **location** in Chat (e.g. “Holon, Israel”) for time and weather.
+In the panel: **Settings** → add API keys (Groq, Gemini, Claude, OpenAI, OpenRouter, Telegram, Spotify), set default AI (new installs default to OpenRouter), and toggle skills. Set your **location** in Chat (e.g. “Holon, Israel”) for time and weather.
+
+**Apple Notes (macOS):** See the **Apple Notes** skill on the **Skills** page: it shows the install command (`brew tap … && brew install …`) and automatically adds `memo` to the exec allowlist when you enable the skill (no need to edit `.env`). When you ask Asta to check your notes, the AI runs the command via the exec tool and replies from the output. **Permission is per process:** Run the **Asta backend from Terminal** (e.g. `./asta.sh start`). The first time you ask to check notes, a macOS dialog may appear — approve it so the **backend process** (not just Terminal) can run memo. If you only ran `memo notes` in Terminal before, that approved Terminal; the backend is a different process and needs its own approval.
 
 ---
 
@@ -107,6 +109,7 @@ From the repo root, **`./asta.sh`** starts/stops both backend and frontend:
 | `OLLAMA_BASE_URL` | e.g. `http://localhost:11434` (Ollama) |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot ([@BotFather](https://t.me/BotFather)) |
 | `ASTA_ALLOWED_PATHS` | Comma-separated dirs for file access |
+| `ASTA_EXEC_ALLOWED_BINS` | Exec tool: binaries Asta can run (e.g. `memo`, `things`). Optional: skills like Apple Notes show install steps on the Skills page and can auto-add the bin when enabled. |
 | `ASTA_CORS_ORIGINS` | Extra origins (e.g. LAN or Tailscale) |
 | `ASTA_WHATSAPP_BRIDGE_URL` | e.g. `http://localhost:3001` (WhatsApp) |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | Or set in Settings → Spotify |

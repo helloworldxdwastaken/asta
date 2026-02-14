@@ -82,21 +82,15 @@ async def chat_with_fallback(
     messages: list[Message],
     fallback_names: list[str],
     **kwargs,
-) -> ProviderResponse:
-    """Try the primary provider, then each fallback. Returns the first successful reply.
-
-    Auth errors on the primary are NOT retried (the key is broken).
-    Rate limits, timeouts, and transient errors trigger fallback.
-    Auth errors on a fallback provider are skipped (try the next one).
-    """
+) -> tuple[ProviderResponse, BaseProvider | None]:
+    """Try the primary provider, then each fallback. Returns (response, provider_used).
+    provider_used is the provider that produced the response (for tool-call follow-up); None on failure."""
     from app.providers.registry import get_provider
 
     # Try primary
     try:
         response = await primary.chat(messages, **kwargs)
     except Exception as e:
-        # Unexpected exception during chat call (e.g. network error)
-        # Treat as transient unless we can identify it
         logger.error(f"Primary provider {primary.name} exception: {e}")
         response = ProviderResponse(
             content="",
@@ -105,37 +99,30 @@ async def chat_with_fallback(
         )
 
     if not response.error:
-        return response  # Success!
+        return (response, primary)
 
-    # Auth errors on primary: fatal, do not fallback (user needs to fix key)
     if response.error == ProviderError.AUTH:
-        return response
-    
-    # If no fallbacks, return the error
+        return (response, None)
     if not fallback_names:
-        return response
+        return (response, None)
 
     logger.warning(
         "Primary provider %s failed (%s: %s), trying %d fallback(s)",
         primary.name, response.error.value, response.error_message, len(fallback_names),
     )
 
-    # Try each fallback
     last_response = response
     for i, fb_name in enumerate(fallback_names):
         fb_provider = get_provider(fb_name)
         if not fb_provider:
             logger.warning("Fallback provider '%s' not found, skipping", fb_name)
             continue
-
-        # Get the user's custom model for this fallback provider (if any)
         fb_model = kwargs.get("_fallback_models", {}).get(fb_name)
         fb_kwargs = {**kwargs}
         if fb_model:
             fb_kwargs["model"] = fb_model
         else:
-            fb_kwargs.pop("model", None)  # Use provider default
-
+            fb_kwargs.pop("model", None)
         try:
             fb_response = await fb_provider.chat(messages, **fb_kwargs)
         except Exception as e:
@@ -144,20 +131,15 @@ async def chat_with_fallback(
                 error=ProviderError.TRANSIENT,
                 error_message=f"{fb_name} exception: {str(e)}"
             )
-
         if not fb_response.error:
             logger.info("Fallback %s succeeded (attempt %d/%d)", fb_name, i + 1, len(fallback_names))
-            return fb_response
-        
-        # If auth error on fallback, skip it and try next
+            return (fb_response, fb_provider)
         if fb_response.error == ProviderError.AUTH:
             logger.warning("Fallback %s: auth error, skipping to next", fb_name)
             last_response = fb_response
             continue
-            
         logger.warning("Fallback %s failed (%s), trying next", fb_name, fb_response.error.value)
         last_response = fb_response
 
-    # All exhausted
     logger.error("All providers exhausted. Last error: %s", last_response.error_message)
-    return last_response
+    return (last_response, None)

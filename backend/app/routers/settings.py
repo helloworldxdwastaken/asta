@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from app.config import get_settings
 from app.db import get_db
+from app.exec_tool import get_effective_exec_bins, resolve_executable
 
 router = APIRouter()
 
@@ -447,14 +448,19 @@ class SkillToggleIn(BaseModel):
 
 
 def _get_all_skill_defs():
-    """Built-in + OpenClaw-style workspace skills for API (id, name, description)."""
+    """Built-in + OpenClaw-style workspace skills for API (id, name, description, install_cmd, install_label, required_bins)."""
     from app.workspace import discover_workspace_skills
-    out = list(SKILLS)
+    out = []
+    for s in SKILLS:
+        out.append({**s, "install_cmd": None, "install_label": None, "required_bins": []})
     for r in discover_workspace_skills():
         out.append({
             "id": r.name,
             "name": r.name.replace("-", " ").replace("_", " ").title(),
             "description": r.description or "Workspace skill (SKILL.md).",
+            "install_cmd": getattr(r, "install_cmd", None),
+            "install_label": getattr(r, "install_label", None),
+            "required_bins": list(getattr(r, "required_bins", ())),
         })
     return out
 
@@ -462,7 +468,7 @@ def _get_all_skill_defs():
 @router.get("/settings/skills")
 @router.get("/api/settings/skills")
 async def get_skills(user_id: str = "default"):
-    """List skills with enabled state (and available from status)."""
+    """List skills with enabled state (and available from status). Includes install_cmd, install_label, required_bins for skills that need them."""
     db = get_db()
     await db.connect()
     s = get_settings()
@@ -474,6 +480,7 @@ async def get_skills(user_id: str = "default"):
         files_available = files_available or bool(await db.get_allowed_paths(user_id))
     except Exception:
         pass
+    effective_exec_bins = await get_effective_exec_bins(db)
     skills_available = {
         "files": files_available,
         "drive": False,  # OAuth not wired yet
@@ -490,7 +497,6 @@ async def get_skills(user_id: str = "default"):
         "silly_gif": api_status.get("giphy_api_key", False),
         "server_status": True,
     }
-    # Hint for UI when skill is not available: "Connect", "Configure paths", "Set API key", etc.
     action_hints = {
         "files": "Configure paths",
         "drive": "Connect",
@@ -503,11 +509,20 @@ async def get_skills(user_id: str = "default"):
     for sk in all_skill_defs:
         sid = sk["id"]
         available = skills_available.get(sid, True)
+        required_bins = sk.get("required_bins") or []
+        if required_bins:
+            # Exec-based skill: available if all bins are in allowlist and findable (PATH or common paths)
+            on_path = all(resolve_executable(b) for b in required_bins)
+            in_allowlist = all(b.lower() in effective_exec_bins for b in required_bins)
+            available = on_path and in_allowlist
+        action_hint = action_hints.get(sid) if not available else None
+        if required_bins and not available and not action_hint:
+            action_hint = "Install & enable exec"
         out.append({
             **sk,
             "enabled": toggles.get(sid, True),
             "available": available,
-            "action_hint": action_hints.get(sid) if not available else None,
+            "action_hint": action_hint,
         })
     return {"skills": out}
 
@@ -515,13 +530,25 @@ async def get_skills(user_id: str = "default"):
 @router.put("/settings/skills")
 @router.put("/api/settings/skills")
 async def set_skill_toggle(body: SkillToggleIn, user_id: str = "default"):
-    """Enable or disable a skill for the AI (built-in or workspace)."""
-    valid_ids = {s["id"] for s in _get_all_skill_defs()}
+    """Enable or disable a skill for the AI (built-in or workspace). When enabling a skill with required_bins (e.g. apple-notes), auto-adds those bins to exec allowlist."""
+    all_defs = _get_all_skill_defs()
+    valid_ids = {s["id"] for s in all_defs}
     if body.skill_id not in valid_ids:
         return {"error": f"Unknown skill_id: {body.skill_id}"}
     db = get_db()
     await db.connect()
     await db.set_skill_enabled(user_id, body.skill_id, body.enabled)
+    # When enabling a skill that requires exec bins (e.g. memo for apple-notes), add them to DB allowlist
+    if body.enabled:
+        skill_def = next((s for s in all_defs if s["id"] == body.skill_id), None)
+        required_bins = (skill_def or {}).get("required_bins") or []
+        if required_bins:
+            from app.exec_tool import SYSTEM_CONFIG_EXEC_BINS_KEY
+            extra = (await db.get_system_config(SYSTEM_CONFIG_EXEC_BINS_KEY)) or ""
+            existing = {b.strip().lower() for b in extra.split(",") if b.strip()}
+            for b in required_bins:
+                existing.add(b.strip().lower())
+            await db.set_system_config(SYSTEM_CONFIG_EXEC_BINS_KEY, ",".join(sorted(existing)))
     return {"skill_id": body.skill_id, "enabled": body.enabled}
 
 

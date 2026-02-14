@@ -314,6 +314,11 @@ def _get_spotify_section(extra: dict) -> list[str]:
             url = tr.get("url") or ""
             parts.append(f"{i}. {name}" + (f" — {artist}" if artist else "") + (f" {url}" if url else ""))
         parts.append("")
+    else:
+        # No Spotify flow data (e.g. user asked "what's playing?"). Do not use exec for Spotify.
+        parts.append("--- Spotify ---")
+        parts.append("Spotify (search, play) is via Settings → Spotify. For 'what song is playing' or 'now playing': Asta does not fetch currently playing track; tell the user to check the Spotify app. Do NOT run a shell command for Spotify.")
+        parts.append("")
     return parts
 
 

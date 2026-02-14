@@ -9,6 +9,7 @@ A personal AI workspace that runs on **web**, **Telegram**, and **WhatsApp** wit
 ## Why Asta
 
 - Multi-provider AI: Groq, Google Gemini, Claude, OpenAI, OpenRouter, and Ollama.
+- OpenClaw-style skill flow: model selects the best workspace skill and reads its `SKILL.md` on demand.
 - Built-in skills: time/weather, web search, lyrics, Spotify, reminders, audio notes, and background learning.
 - Unified memory: chat history, allowed local files, learned knowledge (RAG), and channel history.
 - Native setup: no Docker required.
@@ -79,6 +80,7 @@ If the panel shows "API off", start the backend first or use **Settings -> Run t
 
 - **Dashboard**: system overview — Brain (AI providers), Body (CPU/RAM/disk + model), Eyes (vision), Channels, Tasks, Schedule (cron), Capabilities (skills count).
 - **Chat**: provider routing + automatic skill execution.
+- **Tool-first execution**: structured tools for exec/files/reminders/cron with provider tool-call loop.
 - **Files**: local knowledge files + allowed paths. User context (who you are) lives in **workspace/USER.md**.
 - **Learning**: "learn about X for Y minutes" with retrievable context.
 - **Cron**: list, add, update, and remove recurring jobs (e.g. daily auto-updater). Settings → Auto-updater for schedule.

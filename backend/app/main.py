@@ -2,6 +2,7 @@
 import logging
 import os
 import subprocess
+import sys
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -15,6 +16,14 @@ from app.db import get_db
 from app.routers import chat, files, drive, rag, providers, tasks, settings as settings_router, spotify as spotify_router, audio as audio_router, cron as cron_router
 
 logger = logging.getLogger(__name__)
+
+# Ensure app.* loggers emit INFO to stderr (captured in backend.log when run via asta.sh)
+_app_log = logging.getLogger("app")
+_app_log.setLevel(logging.INFO)
+if not _app_log.handlers:
+    _h = logging.StreamHandler(sys.stderr)
+    _h.setFormatter(logging.Formatter("%(levelname)s:     %(name)s: %(message)s"))
+    _app_log.addHandler(_h)
 
 
 @asynccontextmanager

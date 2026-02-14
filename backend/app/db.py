@@ -60,7 +60,7 @@ class Db:
             CREATE TABLE IF NOT EXISTS user_settings (
                 user_id TEXT PRIMARY KEY,
                 mood TEXT NOT NULL DEFAULT 'normal',
-                default_ai_provider TEXT NOT NULL DEFAULT 'groq',
+                default_ai_provider TEXT NOT NULL DEFAULT 'openrouter',
                 updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS api_keys (
@@ -156,7 +156,7 @@ class Db:
         if "default_ai_provider" not in columns:
             try:
                 await self._conn.execute(
-                    "ALTER TABLE user_settings ADD COLUMN default_ai_provider TEXT NOT NULL DEFAULT 'groq'"
+                    "ALTER TABLE user_settings ADD COLUMN default_ai_provider TEXT NOT NULL DEFAULT 'openrouter'"
                 )
                 await self._conn.commit()
             except Exception as e:
@@ -237,7 +237,7 @@ class Db:
         if not self._conn:
             await self.connect()
         await self._conn.execute(
-            """INSERT INTO user_settings (user_id, mood, default_ai_provider, updated_at) VALUES (?, ?, 'groq', datetime('now'))
+            """INSERT INTO user_settings (user_id, mood, default_ai_provider, updated_at) VALUES (?, ?, 'openrouter', datetime('now'))
                ON CONFLICT(user_id) DO UPDATE SET mood = ?, updated_at = datetime('now')""",
             (user_id, mood, mood),
         )
@@ -251,10 +251,10 @@ class Db:
                 "SELECT default_ai_provider FROM user_settings WHERE user_id = ?", (user_id,)
             )
             row = await cursor.fetchone()
-            return (row["default_ai_provider"] or "groq") if row else "groq"
+            return (row["default_ai_provider"] or "openrouter") if row else "openrouter"
         except Exception as e:
             self.logger.exception("Failed to get user default AI: %s", e)
-            return "groq"
+            return "openrouter"
 
     async def set_user_default_ai(self, user_id: str, provider: str) -> None:
         if not self._conn:
@@ -739,7 +739,7 @@ class Db:
             await self.connect()
         await self._conn.execute(
             """INSERT INTO user_settings (user_id, mood, default_ai_provider, pending_location_request, updated_at)
-               VALUES (?, 'normal', 'groq', datetime('now'), datetime('now'))
+               VALUES (?, 'normal', 'openrouter', datetime('now'), datetime('now'))
                ON CONFLICT(user_id) DO UPDATE SET pending_location_request = datetime('now'), updated_at = datetime('now')""",
             (user_id,),
         )
@@ -784,7 +784,7 @@ class Db:
             await self.connect()
         await self._conn.execute(
             """INSERT INTO user_settings (user_id, mood, default_ai_provider, fallback_providers, updated_at)
-               VALUES (?, 'normal', 'groq', ?, datetime('now'))
+               VALUES (?, 'normal', 'openrouter', ?, datetime('now'))
                ON CONFLICT(user_id) DO UPDATE SET fallback_providers = ?, updated_at = datetime('now')""",
             (user_id, providers_csv, providers_csv),
         )

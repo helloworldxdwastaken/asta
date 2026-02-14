@@ -128,6 +128,19 @@ Quick reference for errors you might see and how to fix them.
 | **Daily Auto-Update not created** | Auto-updater skill missing or backend not restarted | Ensure `workspace/skills/auto-updater-100` exists and restart backend. Or add a cron manually in the **Cron** tab or via `POST /api/cron`. |
 | **Cron job not firing** | Scheduler not loaded or job disabled | Restart backend (cron jobs reload on startup). In Cron tab, ensure the job is listed and enabled. |
 
+### Apple Notes / Exec (memo)
+
+| Symptom | Cause | Solution |
+|---------|-------|----------|
+| **Asta said "I'll check your notes" but nothing happened** | The model must call the **exec tool** with the command (e.g. `memo notes`). If it only said it would check and didn't call the tool, you get no output. | Ask again: e.g. "List my Apple Notes" or "Run memo notes". Enable the **Apple Notes** skill in Settings → Skills (this adds `memo` to the exec allowlist). Install memo: `brew tap antoniorodr/memo && brew install antoniorodr/memo/memo`. |
+| **memo command not found** | Backend runs with a minimal PATH (e.g. launched from IDE). | Restart the backend from a terminal where `memo` works, or ensure memo is in a standard path: `/opt/homebrew/bin`, `/usr/local/bin`, or `~/.local/bin` (Asta resolves these automatically). |
+| **Command timed out / no response when checking notes** | On macOS, **permission is per process**. If you ran `memo notes` in Terminal and approved the dialog, that approval applies to **Terminal**. The Asta **backend** (Python) is a different process, so it may still need approval. | **Run the Asta backend from Terminal** (e.g. `./asta.sh start` or `cd backend && uvicorn app.main:app …`). Then ask Asta to check your notes. When the system dialog appears ("memo would like to access your notes"), click **Allow** — that grants access for the **process running the backend**. After that, Notes will work from Asta. |
+| **Model never runs memo / says "I'll check" but no exec** | **Exec is implemented as a tool.** Only providers that support tools (Groq, OpenAI, OpenRouter) can call it. If your default provider is **Claude** or **Gemini**, the model never receives the exec tool, so it cannot run `memo notes`. | In Chat, switch the provider to **Groq**, **OpenAI**, or **OpenRouter** (Settings → API keys must be set). Then ask again for your notes. |
+| **OpenRouter: no dialog, nothing happens when I ask for notes** | The model must **return** a tool call for Asta to run `memo`. Some OpenRouter models don't support tools; others (e.g. Trinity Large) do but may still sometimes reply with text only. If Asta never runs `memo`, no permission dialog appears. | Check backend log: look for `Exec allowlist: [...]` (confirm allowlist has memo) and `Provider openrouter returned tool_calls=...`. If `tool_calls=False`, see the next line. Try a model known for tools: openrouter.ai/models?supported_parameters=tools (e.g. **openai/gpt-4o-mini**). |
+| **No permission dialog appeared** (backend run from Terminal) | The backend only runs `memo` when the model **calls the exec tool**. If the model doesn't call it (e.g. OpenRouter model without tool support), we never spawn `memo`, so no dialog. | Check backend log for `Exec tool called: command=...` — if that line never appears, the model didn't call the tool. Use a tool-capable provider/model (see row above). Ensure Apple Notes skill is enabled and allowlist has memo. |
+| **Command timed out after 30s** (no dialog) | memo blocked (e.g. Keychain, slow disk). | Run `memo notes` once in Terminal and approve any dialog. For large note lists, use a search: e.g. "memo notes -s \"Eli\"". |
+| **Exec is disabled / Command not allowed** | Exec allowlist empty or binary not in list | Enable the Apple Notes skill in Settings → Skills (auto-adds `memo`). Or set `ASTA_EXEC_ALLOWED_BINS=memo` in `backend/.env` and restart. |
+
 ---
 
 ## Logs & debugging

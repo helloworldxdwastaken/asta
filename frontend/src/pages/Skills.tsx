@@ -13,6 +13,7 @@ function SkillCard({
   onToggle: (id: string, enabled: boolean) => void;
 }) {
   const needsAction = !skill.available && skill.action_hint;
+  const hasSetup = skill.install_cmd || (skill.required_bins && skill.required_bins.length > 0);
   return (
     <div className="skill-card">
       <div className="skill-card-header">
@@ -28,13 +29,38 @@ function SkillCard({
         </label>
       </div>
       <p className="skill-card-desc">{skill.description}</p>
+      {hasSetup && (
+        <div className="skill-card-setup">
+          {skill.install_cmd && (
+            <>
+              <span className="skill-setup-label">{skill.install_label || "Setup"}:</span>
+              <code className="skill-setup-cmd">{skill.install_cmd}</code>
+            </>
+          )}
+          {skill.required_bins && skill.required_bins.length > 0 && (
+            <p className="skill-setup-env">
+              Enabling this skill automatically adds {skill.required_bins.join(", ")} to the exec allowlist (no need to edit .env).
+              When you ask Asta to use this skill (e.g. check notes, list items), it runs the command and replies from the result.
+              {skill.id === "apple-notes" && (
+                <> macOS: run the backend from Terminal (e.g. <code>./asta.sh start</code>). When you first ask for notes, approve the system dialog so the backend process (not just Terminal) can access Notes.</>
+              )}
+            </p>
+          )}
+        </div>
+      )}
       <div className="skill-card-footer">
         {skill.available ? (
           <span className="skill-pill skill-pill-ready">Ready</span>
         ) : needsAction ? (
-          <Link to="/settings" className="skill-pill skill-pill-action">
-            {skill.action_hint}
-          </Link>
+          skill.action_hint === "Install & enable exec" ? (
+            <span className="skill-pill skill-pill-pending">
+              Run the command above, then turn the skill on to add to exec
+            </span>
+          ) : (
+            <Link to="/settings" className="skill-pill skill-pill-action">
+              {skill.action_hint}
+            </Link>
+          )
         ) : (
           <span className="skill-pill skill-pill-pending">Not configured</span>
         )}

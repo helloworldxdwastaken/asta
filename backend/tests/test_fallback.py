@@ -25,9 +25,10 @@ class MockProvider(BaseProvider):
 async def test_primary_success():
     """Test standard success case."""
     primary = MockProvider("primary", response="Hello")
-    resp = await chat_with_fallback(primary, [], [])
+    resp, used = await chat_with_fallback(primary, [], [])
     assert resp.content == "Hello"
     assert resp.error is None
+    assert used is not None and used.name == "primary"
 
 @pytest.mark.asyncio
 async def test_primary_auth_failure():
@@ -37,11 +38,10 @@ async def test_primary_auth_failure():
     
     # We need to mock get_provider to return our fallback
     with unittest.mock.patch("app.providers.registry.get_provider", return_value=fallback):
-        resp = await chat_with_fallback(primary, [], ["fallback"])
-        
-    # Should fail with AUTH error from primary
+        resp, used = await chat_with_fallback(primary, [], ["fallback"])
     assert resp.error == ProviderError.AUTH
     assert resp.content == ""
+    assert used is None
 
 @pytest.mark.asyncio
 async def test_primary_transient_failure_with_fallback():
@@ -50,10 +50,10 @@ async def test_primary_transient_failure_with_fallback():
     fallback = MockProvider("fallback", response="Fallback Success")
     
     with unittest.mock.patch("app.providers.registry.get_provider", return_value=fallback):
-        resp = await chat_with_fallback(primary, [], ["fallback"])
-        
+        resp, used = await chat_with_fallback(primary, [], ["fallback"])
     assert resp.content == "Fallback Success"
     assert resp.error is None
+    assert used is not None and used.name == "fallback"
 
 @pytest.mark.asyncio
 async def test_all_fail():
@@ -62,7 +62,7 @@ async def test_all_fail():
     fallback = MockProvider("fallback", error="Rate Limit", error_type=ProviderError.RATE_LIMIT)
     
     with unittest.mock.patch("app.providers.registry.get_provider", return_value=fallback):
-        resp = await chat_with_fallback(primary, [], ["fallback"])
-        
+        resp, used = await chat_with_fallback(primary, [], ["fallback"])
     assert resp.error == ProviderError.RATE_LIMIT
     assert "Rate Limit" in resp.error_message
+    assert used is None

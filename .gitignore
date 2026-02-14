@@ -62,3 +62,6 @@ build/
 diffs.txt
 query_rag.py
 esimo_dump.txt
+
+# Reference code (cloned for comparison; not part of Asta)
+reference/openclaw/

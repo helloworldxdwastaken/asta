@@ -1,5 +1,6 @@
 """OpenClaw-style workspace: context files (AGENTS.md, USER.md, etc.) and skills from SKILL.md."""
 from __future__ import annotations
+import json
 import re
 from pathlib import Path
 from typing import NamedTuple
@@ -14,6 +15,10 @@ class ResolvedSkill(NamedTuple):
     file_path: Path
     base_dir: Path
     source: str  # "workspace"
+    # Optional from SKILL.md (install instructions, required binaries for exec)
+    install_cmd: str | None = None  # e.g. "brew tap antoniorodr/memo && brew install antoniorodr/memo/memo"
+    install_label: str | None = None  # e.g. "Install memo via Homebrew"
+    required_bins: tuple[str, ...] = ()  # e.g. ("memo",) — must be in exec allowlist
 
 
 def get_workspace_dir() -> Path | None:
@@ -21,21 +26,145 @@ def get_workspace_dir() -> Path | None:
     return get_settings().workspace_path
 
 
-def _read_frontmatter(content: str) -> tuple[dict, str]:
-    """Parse YAML frontmatter from markdown. Returns (attrs, body)."""
+def _split_frontmatter(content: str) -> tuple[str, str]:
+    """Return (frontmatter_text, body). If no valid frontmatter, frontmatter_text is empty."""
+    m = re.match(r"^---\s*\r?\n(.*?)\r?\n---\s*\r?\n?(.*)$", content, re.DOTALL)
+    if not m:
+        return "", content
+    return m.group(1), m.group(2)
+
+
+def _read_frontmatter(content: str) -> tuple[dict, str, str]:
+    """Parse basic top-level frontmatter fields. Returns (attrs, body, frontmatter_text)."""
+    fm, body = _split_frontmatter(content)
     attrs: dict = {}
-    body = content
-    if content.startswith("---"):
-        end = content.index("---", 3) if "---" in content[3:] else -1
-        if end != -1:
-            fm = content[3:end].strip()
-            body = content[end + 3:].lstrip()
-            for line in fm.split("\n"):
-                if ":" in line:
-                    k, _, v = line.partition(":")
-                    k, v = k.strip(), v.strip().strip("'\"").strip()
-                    attrs[k.strip().lower()] = v
-    return attrs, body
+    if not fm:
+        return attrs, body, fm
+    for key in ("name", "description", "homepage", "label"):
+        m = re.search(rf"(?im)^\s*{re.escape(key)}\s*:\s*(.+?)\s*$", fm)
+        if m:
+            attrs[key] = m.group(1).strip().strip("'\"").strip()
+    return attrs, body, fm
+
+
+def _extract_metadata_namespace(frontmatter_text: str) -> dict:
+    """Parse metadata map from frontmatter; supports JSON-inline metadata and YAML-ish blocks."""
+    fm = frontmatter_text or ""
+    if not fm:
+        return {}
+    # Inline JSON form: metadata: {"openclaw": {...}} or {"clawdbot": {...}}
+    m = re.search(r"(?im)^\s*metadata\s*:\s*(\{.*\})\s*$", fm)
+    if m:
+        raw = m.group(1).strip()
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                if isinstance(data.get("openclaw"), dict):
+                    return data.get("openclaw") or {}
+                if isinstance(data.get("clawdbot"), dict):
+                    return data.get("clawdbot") or {}
+                return data
+        except Exception:
+            pass
+
+    # YAML-ish block form under metadata: / openclaw: or clawdbot:
+    m_block = re.search(r"(?ims)^\s*metadata\s*:\s*(.+)$", fm)
+    if not m_block:
+        return {}
+    meta_block = m_block.group(1)
+    ns_m = re.search(r"(?ims)^\s*(openclaw|clawdbot)\s*:\s*(.+)$", meta_block)
+    if ns_m:
+        # keep raw block for regex extraction below
+        return {"__raw_block__": ns_m.group(2)}
+    return {"__raw_block__": meta_block}
+
+
+def _extract_bins_from_frontmatter(frontmatter_text: str) -> tuple[str, ...]:
+    """Strictly extract required bins from frontmatter metadata only."""
+    ns = _extract_metadata_namespace(frontmatter_text)
+    bins: list[str] = []
+    # JSON metadata case
+    if isinstance(ns.get("requires"), dict):
+        for b in (ns.get("requires", {}).get("bins") or []):
+            if isinstance(b, str) and b.strip():
+                bins.append(b.strip().lower())
+    if isinstance(ns.get("install"), list):
+        for item in ns.get("install", []):
+            if isinstance(item, dict):
+                for b in (item.get("bins") or []):
+                    if isinstance(b, str) and b.strip():
+                        bins.append(b.strip().lower())
+    # YAML-ish fallback case
+    raw_block = ns.get("__raw_block__")
+    if isinstance(raw_block, str):
+        for m in re.finditer(r"bins:\s*\[(.*?)\]", raw_block):
+            inner = m.group(1)
+            for part in re.findall(r"[\"']([^\"']+)[\"']", inner):
+                if part.strip():
+                    bins.append(part.strip().lower())
+    return tuple(dict.fromkeys(bins))
+
+
+def _skill_install_from_frontmatter(
+    frontmatter_text: str, skill_id: str = ""
+) -> tuple[str | None, str | None, tuple[str, ...]]:
+    """Extract install_cmd, install_label, required_bins from frontmatter only."""
+    install_cmd: str | None = None
+    install_label: str | None = None
+    required_bins = _extract_bins_from_frontmatter(frontmatter_text)
+
+    ns = _extract_metadata_namespace(frontmatter_text)
+    if isinstance(ns.get("install"), list):
+        install_items = [i for i in ns.get("install", []) if isinstance(i, dict)]
+        if install_items:
+            first = install_items[0]
+            label = first.get("label")
+            if isinstance(label, str) and label.strip():
+                install_label = label.strip()
+            formula = first.get("formula")
+            if isinstance(formula, str) and formula.strip():
+                formula = formula.strip()
+                if formula.count("/") >= 2:
+                    tap = "/".join(formula.split("/")[:-1])
+                    install_cmd = f"brew tap {tap} && brew install {formula}"
+                else:
+                    install_cmd = f"brew install {formula}"
+            module = first.get("module")
+            if not install_cmd and isinstance(module, str) and module.strip():
+                install_cmd = f"go install {module.strip()}"
+
+    # YAML-ish fallback for label in frontmatter only
+    if not install_label:
+        m = re.search(r"(?im)^\s*label:\s*(.+?)\s*$", frontmatter_text)
+        if m:
+            install_label = m.group(1).strip().strip("'\"").strip()
+    if not install_cmd:
+        m = re.search(r'(?im)^\s*formula:\s*"?([^",\n]+)', frontmatter_text)
+        if m:
+            formula = m.group(1).strip()
+            if formula:
+                if formula.count("/") >= 2:
+                    tap = "/".join(formula.split("/")[:-1])
+                    install_cmd = f"brew tap {tap} && brew install {formula}"
+                else:
+                    install_cmd = f"brew install {formula}"
+    if not install_cmd:
+        m = re.search(r'(?im)^\s*module:\s*"?([^",\n]+)', frontmatter_text)
+        if m:
+            module = m.group(1).strip()
+            if module:
+                install_cmd = f"go install {module}"
+
+    # Backward-compatible defaults
+    if not install_cmd and skill_id == "apple-notes":
+        install_cmd = "brew tap antoniorodr/memo && brew install antoniorodr/memo/memo"
+    if not install_cmd and skill_id == "things-mac":
+        install_cmd = "GOBIN=/opt/homebrew/bin go install github.com/ossianhempel/things3-cli/cmd/things@latest"
+    if not install_label and skill_id == "things-mac":
+        install_label = "Install things3-cli (go)"
+    if not install_label and skill_id == "apple-notes":
+        install_label = "Install memo via Homebrew"
+    return install_cmd, install_label or None, required_bins
 
 
 def discover_workspace_skills() -> list[ResolvedSkill]:
@@ -55,17 +184,21 @@ def discover_workspace_skills() -> list[ResolvedSkill]:
             continue
         try:
             raw = skill_md.read_text(encoding="utf-8", errors="replace")
-            attrs, _ = _read_frontmatter(raw)
-            name = attrs.get("name") or path.name
-            desc = attrs.get("description") or "Custom skill."
+            attrs, _, fm_text = _read_frontmatter(raw)
+            name = (attrs.get("name") or path.name).strip()
+            desc = (attrs.get("description") or "Custom skill.").strip()
             # Normalize id: lowercase, no spaces
             skill_id = re.sub(r"[^a-z0-9_-]", "", name.lower()) or path.name
+            install_cmd, install_label, required_bins = _skill_install_from_frontmatter(fm_text, skill_id)
             out.append(ResolvedSkill(
                 name=skill_id,
                 description=desc,
                 file_path=skill_md,
                 base_dir=path,
                 source="workspace",
+                install_cmd=install_cmd,
+                install_label=install_label,
+                required_bins=required_bins,
             ))
         except Exception:
             continue

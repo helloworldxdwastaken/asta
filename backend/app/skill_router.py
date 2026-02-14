@@ -3,13 +3,17 @@ from __future__ import annotations
 
 
 from app.skills.registry import get_all_skills
+from app.skills.markdown_skill import MarkdownSkill
 
 def get_skills_to_use(text: str, enabled_skill_ids: set[str], user_id: str = "default") -> set[str]:
     """Return subset of enabled skills that are relevant to this message. Saves tokens and shows only used tools."""
     out: set[str] = set()
     
-    # 1. Iterate all skills and check eligibility
+    # 1. Iterate built-in skills and check eligibility.
+    # Workspace Markdown skills are selected OpenClaw-style by the model from <available_skills>.
     for skill in get_all_skills():
+        if isinstance(skill, MarkdownSkill):
+            continue
         if skill.name in enabled_skill_ids:
             if skill.check_eligibility(text, user_id):
                 out.add(skill.name)
@@ -51,4 +55,3 @@ SKILL_STATUS_LABELS: dict[str, str] = {
     "self_awareness": "🧠 Checking self-knowledge…",
     "server_status": "🖥️ Checking server status…",
 }
-

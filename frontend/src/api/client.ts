@@ -38,6 +38,12 @@ export type Skill = {
   available: boolean;
   /** When not available: "Connect" | "Configure paths" | "Set API key" etc. */
   action_hint?: string | null;
+  /** From SKILL.md: e.g. "brew tap antoniorodr/memo && brew install antoniorodr/memo/memo" */
+  install_cmd?: string | null;
+  /** From SKILL.md: e.g. "Install memo via Homebrew" */
+  install_label?: string | null;
+  /** Binaries that must be in exec allowlist (e.g. ["memo"]). When enabled, backend auto-adds to allowlist. */
+  required_bins?: string[];
 };
 
 export type CronJob = {
@@ -77,10 +83,12 @@ export const api = {
     req<{ conversation_id: string; messages: { role: string; content: string }[] }>(
       `/chat/messages?conversation_id=${encodeURIComponent(conversationId)}&user_id=${encodeURIComponent(userId)}&limit=${limit}`
     ),
-  chat: (text: string, provider: string = "groq", conversationId?: string) =>
+  /** Chat can take 60–90s when exec is used (e.g. Apple Notes). Pass signal to cancel or set a timeout. */
+  chat: (text: string, provider: string = "groq", conversationId?: string, signal?: AbortSignal) =>
     req<{ reply: string; conversation_id: string; provider: string }>("/chat", {
       method: "POST",
       body: JSON.stringify({ text, provider, user_id: "default", conversation_id: conversationId }),
+      ...(signal && { signal }),
     }),
   filesList: (directory?: string) =>
     req<{ roots?: string[]; root?: string; entries: { name: string; path: string; dir: boolean; size?: number }[] }>(

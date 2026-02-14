@@ -69,12 +69,25 @@ export default function Chat() {
     setInput("");
     setMessages((m) => [...m, { role: "user", content: text }]);
     setLoading(true);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 120_000); // 120s for exec (e.g. Apple Notes)
     try {
-      const r = await api.chat(text, provider, conversationId);
+      const r = await api.chat(text, provider, conversationId, controller.signal);
       setMessages((m) => [...m, { role: "assistant", content: r.reply }]);
     } catch (e) {
-      setMessages((m) => [...m, { role: "assistant", content: "Error: " + (e as Error).message }]);
+      const msg = (e as Error).message || String(e);
+      const isTimeout = msg.includes("abort") || msg.includes("Timeout");
+      setMessages((m) => [
+        ...m,
+        {
+          role: "assistant",
+          content: isTimeout
+            ? "This request is taking longer than usual (e.g. checking notes). The backend may still be running — try again in a moment, or run the backend from Terminal and approve any macOS permission dialog for Notes."
+            : "Error: " + msg,
+        },
+      ]);
     } finally {
+      clearTimeout(timeoutId);
       setLoading(false);
     }
   };

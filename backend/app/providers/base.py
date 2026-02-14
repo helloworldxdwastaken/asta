@@ -19,6 +19,10 @@ class ProviderError(str, Enum):
     NONE = "none"                # (Not used in error field, but for logic)
 
 
+# Tool call (OpenClaw-style): model requested to run a tool. Handler runs it and re-calls with result.
+ToolCall = dict  # {"id": str, "type": "function", "function": {"name": str, "arguments": str}}
+
+
 @dataclass
 class ProviderResponse:
     """Standardized response from an AI provider."""
@@ -26,6 +30,8 @@ class ProviderResponse:
     error: ProviderError | None = None
     error_message: str | None = None
     meta: dict[str, Any] = field(default_factory=dict)
+    # When the model requests a tool (e.g. exec): list of tool calls. Handler runs them and re-calls.
+    tool_calls: list[ToolCall] | None = None
 
 
 class BaseProvider(ABC):

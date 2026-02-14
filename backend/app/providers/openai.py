@@ -21,13 +21,37 @@ class OpenAIProvider(BaseProvider):
             )
         client = AsyncOpenAI(api_key=key)
         system = kwargs.get("context", "")
-        msgs = [{"role": m["role"], "content": m["content"]} for m in messages]
+        msgs = []
+        for m in messages:
+            msg = {"role": m["role"], "content": m.get("content") or ""}
+            if "tool_calls" in m:
+                msg["tool_calls"] = m["tool_calls"]
+            if "tool_call_id" in m:
+                msg["tool_call_id"] = m["tool_call_id"]
+            msgs.append(msg)
         if system:
             msgs = [{"role": "system", "content": system}] + msgs
         model = kwargs.get("model") or DEFAULT_MODEL
+        tools = kwargs.get("tools")
         try:
-            r = await client.chat.completions.create(model=model, messages=msgs)
-            return ProviderResponse(content=(r.choices[0].message.content or "").strip())
+            create_kwargs = {"model": model, "messages": msgs}
+            if tools:
+                create_kwargs["tools"] = tools
+                create_kwargs["tool_choice"] = "auto"
+            r = await client.chat.completions.create(**create_kwargs)
+            msg = r.choices[0].message
+            content = (msg.content or "").strip()
+            tool_calls = None
+            if getattr(msg, "tool_calls", None):
+                tool_calls = [
+                    {
+                        "id": tc.id,
+                        "type": getattr(tc, "type", "function"),
+                        "function": {"name": tc.function.name, "arguments": tc.function.arguments or "{}"},
+                    }
+                    for tc in msg.tool_calls
+                ]
+            return ProviderResponse(content=content, tool_calls=tool_calls)
         except Exception as e:
             msg = str(e).strip() or repr(e)
             if "401" in msg or "invalid" in msg.lower() or "authentication" in msg.lower():
