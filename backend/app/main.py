@@ -32,6 +32,11 @@ async def lifespan(app: FastAPI):
     """Startup: DB + reload reminders + ensure User.md + Telegram bot. Shutdown: stop bot cleanly."""
     await get_db().connect()
     try:
+        from app.subagent_orchestrator import recover_subagent_runs_on_startup
+        await recover_subagent_runs_on_startup()
+    except Exception as e:
+        logger.exception("Failed to recover subagent runs: %s", e)
+    try:
         from app.memories import ensure_user_md
         ensure_user_md("default")
     except Exception as e:

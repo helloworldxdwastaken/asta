@@ -84,7 +84,7 @@ If the panel shows "API off", start the backend first or use **Settings -> Run t
 - **Dashboard**: system overview — Brain (AI providers), Body (CPU/RAM/disk + model), Eyes (vision), Channels, Notes, Schedule (reminders + cron), Capabilities (skills count).
 - **Chat**: provider routing + automatic skill execution.
 - **Reasoning controls**: per-user **Thinking level** (`off/low/medium/high`) and **Reasoning visibility** (`off/on/stream`) in Settings and Telegram commands.
-- **Tool-first execution**: structured tools for exec/files/reminders/cron plus OpenClaw-style `process` background session management for long-running commands.
+- **Tool-first execution**: structured tools for exec/files/reminders/cron, OpenClaw-style `process` background session management, and single-user subagent orchestration (`sessions_spawn/list/history/send/stop`).
 - **Files**: local knowledge files + allowed paths. User context (who you are) lives in **workspace/USER.md**.
 - **Learning**: "learn about X for Y minutes" with retrievable context.
 - **Cron**: list, add, update, and remove recurring jobs (e.g. daily auto-updater). Settings → Auto-updater for schedule.

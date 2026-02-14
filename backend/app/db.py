@@ -204,6 +204,26 @@ class Db:
                 UNIQUE (user_id, name)
             );
             CREATE INDEX IF NOT EXISTS idx_cron_jobs_enabled ON cron_jobs(user_id, enabled);
+            CREATE TABLE IF NOT EXISTS subagent_runs (
+                run_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                parent_conversation_id TEXT NOT NULL,
+                child_conversation_id TEXT NOT NULL,
+                task TEXT NOT NULL,
+                label TEXT,
+                provider_name TEXT,
+                channel TEXT NOT NULL,
+                channel_target TEXT,
+                cleanup TEXT NOT NULL DEFAULT 'keep',
+                status TEXT NOT NULL,
+                result_text TEXT,
+                error_text TEXT,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                ended_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_subagent_parent_created ON subagent_runs(parent_conversation_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_subagent_status ON subagent_runs(status, created_at DESC);
         """)
         await self._conn.commit()
         # Check if column exists before adding
@@ -283,6 +303,13 @@ class Db:
         out = [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
         return out
 
+    async def delete_conversation(self, conversation_id: str) -> None:
+        if not self._conn:
+            await self.connect()
+        await self._conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
+        await self._conn.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+        await self._conn.commit()
+
     async def add_task(self, user_id: str, type: str, payload: dict, status: str = "pending", run_at: str | None = None) -> int:
         if not self._conn:
             await self.connect()
@@ -295,6 +322,128 @@ class Db:
         cursor = await self._conn.execute("SELECT last_insert_rowid()")
         row = await cursor.fetchone()
         return row[0] if row else 0
+
+    async def add_subagent_run(
+        self,
+        *,
+        run_id: str,
+        user_id: str,
+        parent_conversation_id: str,
+        child_conversation_id: str,
+        task: str,
+        label: str | None,
+        provider_name: str | None,
+        channel: str,
+        channel_target: str,
+        cleanup: str,
+        status: str,
+    ) -> None:
+        if not self._conn:
+            await self.connect()
+        await self._conn.execute(
+            """INSERT OR REPLACE INTO subagent_runs
+               (run_id, user_id, parent_conversation_id, child_conversation_id, task, label, provider_name,
+                channel, channel_target, cleanup, status, created_at, started_at, ended_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), NULL)""",
+            (
+                run_id,
+                user_id,
+                parent_conversation_id,
+                child_conversation_id,
+                task,
+                (label or "").strip() or None,
+                (provider_name or "").strip() or None,
+                channel,
+                channel_target or "",
+                cleanup,
+                status,
+            ),
+        )
+        await self._conn.commit()
+
+    async def update_subagent_run(
+        self,
+        run_id: str,
+        *,
+        status: str | None = None,
+        result_text: str | None = None,
+        error_text: str | None = None,
+        ended: bool = False,
+    ) -> None:
+        if not self._conn:
+            await self.connect()
+        fields: list[str] = []
+        params: list[Any] = []
+        if status is not None:
+            fields.append("status = ?")
+            params.append(status)
+        if result_text is not None:
+            fields.append("result_text = ?")
+            params.append(result_text)
+        if error_text is not None:
+            fields.append("error_text = ?")
+            params.append(error_text)
+        if ended:
+            fields.append("ended_at = datetime('now')")
+        if not fields:
+            return
+        params.append(run_id)
+        await self._conn.execute(
+            f"UPDATE subagent_runs SET {', '.join(fields)} WHERE run_id = ?",
+            tuple(params),
+        )
+        await self._conn.commit()
+
+    async def get_subagent_run(self, run_id: str) -> dict[str, Any] | None:
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute(
+            "SELECT * FROM subagent_runs WHERE run_id = ?",
+            (run_id,),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def list_subagent_runs(self, parent_conversation_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute(
+            """SELECT * FROM subagent_runs
+               WHERE parent_conversation_id = ?
+               ORDER BY created_at DESC
+               LIMIT ?""",
+            (parent_conversation_id, max(1, min(int(limit), 200))),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_subagent_runs_by_status(self, statuses: list[str], limit: int = 200) -> list[dict[str, Any]]:
+        if not self._conn:
+            await self.connect()
+        normalized = [s.strip().lower() for s in statuses if (s or "").strip()]
+        if not normalized:
+            return []
+        placeholders = ",".join("?" for _ in normalized)
+        cursor = await self._conn.execute(
+            f"""SELECT * FROM subagent_runs
+                WHERE lower(status) IN ({placeholders})
+                ORDER BY created_at DESC
+                LIMIT ?""",
+            tuple(normalized + [max(1, min(int(limit), 2000))]),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def mark_running_subagent_runs_interrupted(self) -> int:
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute(
+            """UPDATE subagent_runs
+               SET status = 'interrupted',
+                   error_text = COALESCE(error_text, 'Asta restarted before this subagent finished.'),
+                   ended_at = datetime('now')
+               WHERE lower(status) = 'running'"""
+        )
+        await self._conn.commit()
+        return int(cursor.rowcount or 0)
 
     async def get_user_mood(self, user_id: str) -> str:
         if not self._conn:

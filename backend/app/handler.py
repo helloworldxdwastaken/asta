@@ -86,6 +86,12 @@ _TOOL_TRACE_GROUP = {
     "message": "Message",
     "reminders": "Reminders",
     "cron": "Cron",
+    "agents_list": "Subagents",
+    "sessions_spawn": "Subagents",
+    "sessions_list": "Subagents",
+    "sessions_history": "Subagents",
+    "sessions_send": "Subagents",
+    "sessions_stop": "Subagents",
 }
 
 _TOOL_TRACE_DEFAULT_ACTION = {
@@ -103,6 +109,12 @@ _TOOL_TRACE_DEFAULT_ACTION = {
     "web_fetch": "fetch",
     "memory_search": "search",
     "memory_get": "get",
+    "agents_list": "agents",
+    "sessions_spawn": "spawn",
+    "sessions_list": "list",
+    "sessions_history": "history",
+    "sessions_send": "send",
+    "sessions_stop": "stop",
 }
 
 
@@ -1058,6 +1070,12 @@ async def handle_message(
         )
     context += _thinking_instruction(thinking_level)
     context += _reasoning_instruction(reasoning_mode)
+    if channel != "subagent":
+        context += (
+            "\n\n[SUBAGENTS]\n"
+            "For long or parallelizable work, use sessions_spawn to delegate a focused background subagent run. "
+            "Use sessions_list/sessions_history to inspect results."
+        )
 
     # Load recent messages; skip old assistant error messages so the model doesn't repeat "check your API key"
     recent = await db.get_recent_messages(cid, limit=20)
@@ -1146,6 +1164,10 @@ async def handle_message(
     # Cron tool: status/list/add/update/remove for recurring jobs
     from app.cron_tool import get_cron_tool_openai_def
     tools = tools + get_cron_tool_openai_def()
+    # Single-user OpenClaw-style subagent orchestration tools.
+    if channel != "subagent":
+        from app.subagent_orchestrator import get_subagent_tools_openai_def
+        tools = tools + get_subagent_tools_openai_def()
     tools = tools if tools else None
 
     from app.providers.fallback import chat_with_fallback, get_available_fallback_providers
@@ -1456,6 +1478,30 @@ async def handle_message(
                     db=db,
                 )
                 ran_cron_tool = True
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+            elif name in (
+                "agents_list",
+                "sessions_spawn",
+                "sessions_list",
+                "sessions_history",
+                "sessions_send",
+                "sessions_stop",
+            ):
+                from app.subagent_orchestrator import parse_subagent_tool_args, run_subagent_tool
+
+                params = parse_subagent_tool_args(args_str)
+                used_tool_labels.append(
+                    _build_tool_trace_label(name)
+                )
+                out = await run_subagent_tool(
+                    tool_name=name,
+                    params=params,
+                    user_id=user_id,
+                    parent_conversation_id=cid,
+                    provider_name=provider_name,
+                    channel=channel,
+                    channel_target=channel_target,
+                )
                 current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
             else:
                 current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": "Unknown tool."})

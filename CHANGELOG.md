@@ -29,6 +29,29 @@ All notable changes to Asta are documented here.
 
 ---
 
+## [1.3.5] - 2026-02-14
+
+### Added
+
+- **Single-user subagent orchestration (OpenClaw-style)** — Added tool support for:
+  - `agents_list`
+  - `sessions_spawn` (non-blocking background spawn)
+  - `sessions_list`
+  - `sessions_history`
+  - `sessions_send`
+  - `sessions_stop`
+- **Subagent runtime registry** — Added persisted run lifecycle tracking in `subagent_runs` (status/result/error/timestamps, parent/child conversation mapping).
+- **Subagent announce flow** — Completed/failed/timed-out subagent runs now post an assistant update back to the parent conversation and notify Telegram/WhatsApp when applicable.
+- **Startup recovery for unfinished runs** — Backend startup now marks previously running subagent runs as `interrupted` after restart.
+- **Tests for orchestration flow** — Added coverage for spawn completion + announce, list/history tools, stop behavior, and restart recovery.
+
+### Changed
+
+- **Handler tool surface** — Subagent tool definitions are now exposed in normal chat tool-capable flows (not in subagent child turns), and handler context includes explicit guidance to delegate long/parallel tasks via subagents.
+- **Tool trace naming** — Added friendly trace labels/actions for subagent tools (`Subagents (spawn/list/history/send/stop)`).
+
+---
+
 ## [1.3.4] - 2026-02-14
 
 ### Added

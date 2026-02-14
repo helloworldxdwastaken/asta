@@ -26,6 +26,7 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 - **Workspace skill host gating** — Skills declaring `metadata.openclaw.os` and `requires.bins` are runtime-gated by host OS + required binaries (OpenClaw-style). This keeps macOS-only skills (e.g. Apple Notes) out of Linux runtime prompts.
 - **Notes behavior** — Default notes are markdown files in `workspace/notes/` (via `notes` skill). Apple Notes (`memo`) is only used when explicitly requested.
 - **Structured tool loop** — Handler executes provider tool calls for exec/files/reminders/cron/read, appends tool results, and re-calls the same provider for final user text.
+- **Single-user subagent orchestration (OpenClaw-style)** — Added `agents_list`, `sessions_spawn`, `sessions_list`, `sessions_history`, `sessions_send`, and `sessions_stop` tools. `sessions_spawn` creates an isolated child conversation that runs in background and announces completion back to the parent conversation/channel.
 - **Reliability guardrails for skipped tools** — Deterministic fallback paths handle scheduler list/remove and desktop/file-check intents when a tool-capable model skips tool calls, preventing fake "done/checked" responses.
 - **Reasoning controls** — Per-user `thinking_level` (`off/low/medium/high`) and `reasoning_mode` (`off/on/stream`) are stored in `user_settings`, exposed in Settings API/UI, and applied to provider calls/context instructions.
 - **Time & Weather** — `backend/app/time_weather.py`: separate skills. Time in 12h AM/PM; weather with today/tomorrow forecast (Open-Meteo). User location from DB or workspace/USER.md; **location normalization** (e.g. `Holon,IL` → "Holon, Israel", `Chicago, USA` → "Chicago, United States") before geocoding so local time works.
@@ -128,18 +129,26 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 - **Allowlist:** Env `ASTA_EXEC_ALLOWED_BINS` plus DB `exec_allowed_bins_extra`. Enabling a skill that declares `required_bins` (e.g. Apple Notes) adds those bins. Binary is resolved with `resolve_executable()` (PATH plus `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`).
 - **Fallback:** We still parse `[ASTA_EXEC: command][/ASTA_EXEC]` in the reply, run the command, and re-call with the output (now guarded to exec-intent requests only). See `exec_tool.py`, `process_tool.py`, `handler.py`.
 
-### 4.3 Security
+### 4.3 Subagent orchestration tools (OpenClaw-style, single-user)
+
+- **Tools:** `agents_list`, `sessions_spawn`, `sessions_list`, `sessions_history`, `sessions_send`, `sessions_stop`.
+- **Spawn flow:** model calls `sessions_spawn(task, ...)` → handler immediately returns accepted (`runId`, `childSessionKey`) and starts background execution in an isolated child conversation.
+- **Isolation:** child runs use channel `subagent` and a dedicated queue key (`subagent:<child_conversation_id>`) so they do not block inbound web/Telegram/WhatsApp turn handling.
+- **Lifecycle:** run metadata is persisted in `subagent_runs` (status/result/error timestamps). On startup, unfinished runs are marked `interrupted`.
+- **Announce:** when a subagent ends, Asta writes an assistant update to the parent conversation and also sends it to Telegram/WhatsApp when applicable.
+
+### 4.4 Security
 
 - Never commit API keys. Use env vars or a secrets store; document in README.
 - Restrict file access to configured directories (e.g. `ASTA_ALLOWED_PATHS`).
 - Validate and sanitize all user input; rate-limit public endpoints (Telegram/WhatsApp).
 - Prefer read-only Drive scope if only “see what’s on the drive” is needed.
 
-### 4.4 Easy install (planned)
+### 4.5 Easy install (planned)
 
 - **Native:** `./asta.sh start` runs backend + frontend after manual venv/npm install. **Planned:** one command (e.g. `install.sh` or `curl ... | sh`) that pulls from GitHub and installs dependencies (venv, pip, npm) so you can run `./asta.sh start` with minimal steps. Document in README and docs/INSTALL.md.
 
-### 4.5 What “learn for X time” should do
+### 4.6 What “learn for X time” should do
 
 1. User says: “Learn everything about Next.js for the next 2 hours.”
 2. Backend creates a **learning job:** sources (e.g. list of URLs or “crawl from this seed”), duration (2 hours), topic label (“Next.js”).
@@ -162,6 +171,7 @@ asta/
 │   │   ├── main.py
 │   │   ├── config.py
 │   │   ├── handler.py   # Core message handler (context, AI, reminders, skills)
+│   │   ├── subagent_orchestrator.py # Single-user subagent runtime + sessions tools
 │   │   ├── context.py  # Build AI context (skills, time, weather, lyrics, etc.)
 │   │   ├── skill_router.py  # Intent-based skill selection
 │   │   ├── reminders.py # Parse, schedule, fire reminders
@@ -190,4 +200,4 @@ asta/
 
 ## 6. Changelog (spec)
 
-- **Current (1.3.3):** OpenClaw-style workspace skill selection (`<available_skills>` + on-demand `read`), strict frontmatter metadata parsing for required bins, and structured tool loop across OpenAI/Groq/OpenRouter/Claude/Google. Added structured `files`, `reminders`, and `cron` tools plus OpenClaw-style `process` tool for background exec session management (`list/poll/log/write/kill/clear/remove`). Exec supports `background` and `yield_ms`; default provider is OpenRouter. Tool-skip reliability guardrails are implemented for scheduler and file-check intents. Thinking/reasoning controls are implemented in Settings + Telegram (`/thinking`, `/reasoning`). Settings now uses explicit Ollama model dropdowns, and Dashboard channels use clearer connected-state badges (WhatsApp card shown only when connected). Drive OAuth is still planned.
+- **Current (1.3.5):** OpenClaw-style workspace skill selection (`<available_skills>` + on-demand `read`), strict frontmatter metadata parsing for required bins, and structured tool loop across OpenAI/Groq/OpenRouter/Claude/Google. Added structured `files`, `reminders`, and `cron` tools, OpenClaw-style `process` tool for background exec session management (`list/poll/log/write/kill/clear/remove`), and single-user subagent orchestration tools (`sessions_spawn/list/history/send/stop`, plus `agents_list`) with persisted lifecycle + completion announcements. Exec supports `background` and `yield_ms`; default provider is OpenRouter. Tool-skip reliability guardrails are implemented for scheduler and file-check intents. Thinking/reasoning controls are implemented in Settings + Telegram (`/thinking`, `/reasoning`). Drive OAuth is still planned.
