@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
-import type { Status } from "../api/client";
+import type { Status, WorkspaceNote } from "../api/client";
 import { api } from "../api/client";
 
 type NotificationItem = { id: number; message: string; run_at: string; status: string; channel: string; created_at: string };
@@ -14,6 +14,7 @@ export default function Dashboard() {
   const [models, setModels] = useState<Record<string, string>>({});
   const [defaults, setDefaults] = useState<Record<string, string>>({});
   const [availableModels, setAvailableModels] = useState<{ ollama: string[] }>({ ollama: [] });
+  const [workspaceNotes, setWorkspaceNotes] = useState<WorkspaceNote[]>([]);
   const [cronCount, setCronCount] = useState(0);
   const [updateInfo, setUpdateInfo] = useState<{ available: boolean; local: string; remote: string } | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
@@ -29,6 +30,7 @@ export default function Dashboard() {
     api.getServerStatus().then(r => setServerStatus(r)).catch(() => setServerStatus(null));
     api.getModels().then((r) => { setModels(r.models); setDefaults(r.defaults); }).catch(() => { });
     api.getAvailableModels().then(setAvailableModels).catch(() => setAvailableModels({ ollama: [] }));
+    api.getWorkspaceNotes(20).then((r) => setWorkspaceNotes(r.notes || [])).catch(() => setWorkspaceNotes([]));
     api.getCronJobs().then((r) => setCronCount((r.cron_jobs || []).length)).catch(() => setCronCount(0));
     api.checkUpdate().then(r => setUpdateInfo({ available: r.update_available, local: r.local, remote: r.remote })).catch(() => { });
   }, []);
@@ -38,16 +40,6 @@ export default function Dashboard() {
     const t = setInterval(refresh, 5000);
     return () => clearInterval(t);
   }, [refresh]);
-
-  const handleDeleteNotification = async (id: number) => {
-    if (!confirm("Delete this reminder?")) return;
-    try {
-      await api.deleteNotification(id);
-      setNotifications((prev) => prev.filter((n) => n.id !== id));
-    } catch (e) {
-      alert("Failed to delete: " + e);
-    }
-  };
 
   const handleUpdate = async () => {
     if (!confirm("Are you sure you want to update Asta to the latest version? The system will restart.")) return;
@@ -80,10 +72,15 @@ export default function Dashboard() {
 
   const apis = status?.apis ?? {};
   const integrations = status?.integrations ?? {};
+  const whatsappStatus = status?.channels?.whatsapp;
+  const whatsappConnected = whatsappStatus ? !!whatsappStatus.connected : !!integrations.whatsapp;
+  const telegramConnected = !!integrations.telegram;
+  const showWhatsappCard = whatsappConnected;
   const skills = status?.skills ?? [];
   const activeSkillsCount = skills.filter(s => s.enabled && s.available).length;
   const connected = !error && status;
   const pendingReminders = notifications.filter(n => n.status === 'pending');
+  const scheduleCount = pendingReminders.length + cronCount;
 
   return (
     <div className="dashboard-container">
@@ -267,67 +264,78 @@ export default function Dashboard() {
               </div>
             </div>
             <div className="connectors-list">
-              <div className={`connector-card ${integrations.whatsapp ? 'on' : 'off'}`}>
-                <div className="connector-icon whatsapp">
-                  <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z" /></svg>
+              {showWhatsappCard && (
+                <div className="connector-card on">
+                  <div className="connector-icon whatsapp">
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z" /></svg>
+                  </div>
+                  <div className="connector-info">
+                    <strong>WhatsApp (Beta)</strong>
+                    <span className="connector-status connected">Connected</span>
+                  </div>
                 </div>
-                <div className="connector-info">
-                  <strong>WhatsApp</strong>
-                  <span>{integrations.whatsapp ? 'Connected' : 'Disconnected'}</span>
-                </div>
-              </div>
-              <div className={`connector-card ${integrations.telegram ? 'on' : 'off'}`}>
+              )}
+              <div className={`connector-card ${telegramConnected ? 'on' : 'off'}`}>
                 <div className="connector-icon telegram">
                   <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" /></svg>
                 </div>
                 <div className="connector-info">
                   <strong>Telegram</strong>
-                  <span>{integrations.telegram ? 'Connected' : 'Disconnected'}</span>
+                  <span className={`connector-status ${telegramConnected ? 'connected' : 'disconnected'}`}>
+                    {telegramConnected ? "Connected" : "Disconnected"}
+                  </span>
                 </div>
               </div>
             </div>
             <Link to="/channels" className="setup-link">Configure Channels →</Link>
           </div>
 
-          {/* ─── 3b. TASKS (Reminders) ─── */}
+          {/* ─── 3b. NOTES (workspace markdown notes) ─── */}
           <div className="bento-card memory-section">
             <div className="card-header">
               <div className="icon">📝</div>
               <div>
-                <h2>Tasks</h2>
-                <p className="desc">Pending reminders</p>
+                <h2>Notes</h2>
+                <p className="desc">Local markdown notes in workspace/notes</p>
               </div>
             </div>
             <div className="memory-list">
-              {pendingReminders.length === 0 ? (
-                <div className="empty-state">No active reminders.</div>
+              {workspaceNotes.length === 0 ? (
+                <div className="empty-state">
+                  No notes yet. Ask Asta: "take a note..." or create one in Files under <code>notes/</code>.
+                </div>
               ) : (
                 <ul>
-                  {pendingReminders.slice(0, 5).map(n => (
-                    <li key={n.id}>
-                      <span className="time">{new Date(n.run_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                      <span className="msg">{n.message}</span>
-                      <button onClick={() => handleDeleteNotification(n.id)} className="del-btn">×</button>
+                  {workspaceNotes.slice(0, 5).map((note) => (
+                    <li key={note.path}>
+                      <span className="time">
+                        {new Date(note.modified_at).toLocaleDateString([], { month: "short", day: "numeric" })}
+                      </span>
+                      <span className="msg" title={note.path}>{note.name}</span>
                     </li>
                   ))}
                 </ul>
               )}
             </div>
+            <Link to="/files" className="setup-link">Open Files →</Link>
           </div>
 
-          {/* ─── 3c. CRON ─── */}
+          {/* ─── 3c. SCHEDULE (reminders + cron) ─── */}
           <div className="bento-card cron-section">
             <div className="card-header">
               <div className="icon">⏰</div>
               <div>
                 <h2>Schedule</h2>
-                <p className="desc">Recurring jobs</p>
+                <p className="desc">Reminders + recurring cron jobs</p>
               </div>
             </div>
             <div className="stat-and-link">
-              <div className="stat-value">{cronCount}</div>
-              <div className="stat-label">{cronCount === 1 ? "scheduled job" : "scheduled jobs"}</div>
-              <Link to="/cron" className="setup-link">Cron →</Link>
+              <div className="stat-value">{scheduleCount}</div>
+              <div className="stat-label">{scheduleCount === 1 ? "scheduled item" : "scheduled items"}</div>
+              <div className="help" style={{ marginTop: "0.25rem" }}>
+                {pendingReminders.length} reminder{pendingReminders.length === 1 ? "" : "s"} · {cronCount} cron job{cronCount === 1 ? "" : "s"}
+              </div>
+              <Link to="/cron" className="setup-link">Open Schedule →</Link>
             </div>
           </div>
 
@@ -600,18 +608,19 @@ export default function Dashboard() {
         .btn-sm { padding: 4px 12px; font-size: 0.8rem; }
 
         /* Connectors */
-        .connectors-list { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.25rem; }
+        .connectors-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1.25rem; margin-bottom: 1.25rem; }
         .connector-card {
             display: flex;
             align-items: center;
             gap: 1rem;
             padding: 1rem 1.25rem;
             border-radius: 14px;
-            background: var(--bg-main);
-            border: 1px solid var(--border);
+            background: #f8fafc;
+            border: 1px solid rgba(148, 163, 184, 0.25);
             transition: border-color 0.2s, background 0.2s;
         }
-        .connector-card.on { border-color: rgba(var(--rgb-success), 0.35); background: linear-gradient(135deg, rgba(var(--rgb-success), 0.08), rgba(var(--rgb-success), 0.03)); }
+        .connector-card.on { border-color: rgba(var(--rgb-success), 0.35); background: linear-gradient(135deg, rgba(var(--rgb-success), 0.1), rgba(var(--rgb-success), 0.04)); }
+        .connector-card.off { border-color: rgba(148, 163, 184, 0.3); background: #f8fafc; }
         .connector-icon {
             width: 32px;
             height: 32px;
@@ -626,7 +635,26 @@ export default function Dashboard() {
         .connector-icon.whatsapp { background: #25D366; }
         .connector-icon.telegram { background: #229ED9; }
         .connector-info { display: flex; flex-direction: column; font-size: 0.8rem; }
-        .connector-info span { font-size: 0.7rem; opacity: 0.7; }
+        .connector-info strong { color: var(--text-main); }
+        .connector-status {
+            display: inline-flex;
+            align-items: center;
+            width: fit-content;
+            margin-top: 0.2rem;
+            padding: 0.12rem 0.45rem;
+            border-radius: 999px;
+            font-size: 0.68rem;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+        }
+        .connector-status.connected {
+            color: var(--success-dark, #166534);
+            background: rgba(var(--rgb-success), 0.16);
+        }
+        .connector-status.disconnected {
+            color: #475569;
+            background: rgba(148, 163, 184, 0.18);
+        }
 
         /* Memory */
         .memory-list ul { list-style: none; padding: 0; margin: 0; }

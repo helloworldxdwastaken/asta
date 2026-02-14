@@ -2,6 +2,56 @@
 
 All notable changes to Asta are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **Thinking + reasoning controls** — Added persisted per-user AI controls:
+  - `thinking_level`: `off | low | medium | high`
+  - `reasoning_mode`: `off | on | stream`
+  Exposed in Settings API/UI and wired into handler/provider flow.
+- **Telegram controls for reasoning/thinking** — Added bot commands and inline pickers:
+  - `/thinking` (and `/thinking <level>`)
+  - `/reasoning` (and `/reasoning <mode>`)
+  Registered in Telegram bot menu.
+
+### Changed
+
+- **Tool-trace UX by channel** — Telegram replies no longer append the `Tools used: ...` footer even when tracing is enabled (Telegram already shows proactive skill-status pings). Web trace behavior remains available.
+- **Tool-trace defaults** — Default trace channels now target web (`ASTA_TOOL_TRACE_CHANNELS=web`).
+- **Docs alignment pass** — Updated README + INSTALL + SPEC + WORKSPACE to reflect implemented behavior and new commands/settings.
+- **Reminder scheduling internals aligned to cron path** — One-shot reminders now use the cron scheduler path (`@at <ISO-UTC>` entries) for execution, with startup migration of legacy pending reminder rows.
+
+### Fixed
+
+- **Stale changelog reference** — Removed reference to deleted `docs/OPENCLAW-EXEC-NOTES.md` and pointed to current spec documentation.
+- **Reminder remove/list consistency** — Reminder delete/list/status flows now operate on the same one-shot scheduler source, reducing cases where a removed reminder still appeared pending.
+
+---
+
+## [1.3.3] - 2026-02-14
+
+### Changed
+
+- **Settings: Ollama model picker reliability** — Replaced browser-dependent Ollama datalist suggestions with explicit dropdown selectors for both default AI model and fallback-provider model configuration, while keeping manual custom tag input.
+- **Dashboard channels polish** — Channels card now uses clearer connected/disconnected badges, softer consistent card borders, and only shows WhatsApp when the bridge is actually connected.
+- **Docs consistency pass** — Updated README/SPEC wording to match the current dashboard structure and release version.
+
+---
+
+## [1.3.2] - 2026-02-14
+
+### Changed
+
+- **Documentation consistency pass** — Updated README and workspace docs to clearly document Asta's two skill types:
+  built-in Python skills (e.g. Spotify/reminders/weather/files) and OpenClaw-style workspace `SKILL.md` skills.
+- **Workspace docs corrected** — Removed outdated wording that implied all selected skill bodies are pre-injected;
+  docs now reflect the on-demand `read` flow for workspace skills.
+- **`TOOLS.md` clarified** — Documented as user/local context notes (hosts, device names, preferences), not executable tools.
+- **WhatsApp labeling** — User-facing labels now mark WhatsApp as **Beta** in panel/CLI/docs.
+
+---
+
 ## [1.3.1] - 2026-02-14
 
 ### Added
@@ -88,7 +138,7 @@ All notable changes to Asta are documented here.
 
 ### Changed
 
-- **Exec: OpenClaw-style (tool only)** — Apple Notes and other exec-based skills now work like OpenClaw: the model calls an **exec tool** with a command (e.g. `memo notes`); the backend runs it and returns the result; the model replies from that output. No proactive run or pre-injected note content. Fallback: `[ASTA_EXEC: command][/ASTA_EXEC]` in the reply still works when the provider doesn't support tools. See `docs/SPEC.md` §4.2 and `docs/OPENCLAW-EXEC-NOTES.md`.
+- **Exec: OpenClaw-style (tool only)** — Apple Notes and other exec-based skills now work like OpenClaw: the model calls an **exec tool** with a command (e.g. `memo notes`); the backend runs it and returns the result; the model replies from that output. No proactive run or pre-injected note content. Fallback: `[ASTA_EXEC: command][/ASTA_EXEC]` in the reply still works when the provider doesn't support tools. See `docs/SPEC.md` §4.2.
 - **Dashboard layout** — Wider (1600px max), more padding and gap (2rem). Brain no longer shows provider logos; all providers use the same style (label + model line; Ollama adds comma-separated list of installed models).
 - **Cron API** — `PUT /api/cron/{job_id}` with body `{ cron_expr?, tz?, message? }` updates a job and reschedules it.
 - **Requirements** — No change; Python 3.12 or 3.13, `pydantic<2.12`. See `backend/requirements.txt` and `docs/INSTALL.md`.

@@ -1,6 +1,6 @@
 # Asta
 
-A personal AI workspace that runs on **web**, **Telegram**, and **WhatsApp** with one shared context.
+A personal AI workspace that runs on **web**, **Telegram**, and **WhatsApp (Beta)** with one shared context.
 
 ## Preview
 
@@ -11,6 +11,7 @@ A personal AI workspace that runs on **web**, **Telegram**, and **WhatsApp** wit
 - Multi-provider AI: Groq, Google Gemini, Claude, OpenAI, OpenRouter, and Ollama.
 - OpenClaw-style skill flow: model selects the best workspace skill and reads its `SKILL.md` on demand.
 - Built-in skills: time/weather, web search, lyrics, Spotify, reminders, audio notes, and background learning.
+- Clear split between **built-in Python skills** (core/reliable) and **workspace `SKILL.md` skills** (import/custom).
 - Unified memory: chat history, allowed local files, learned knowledge (RAG), and channel history.
 - Native setup: no Docker required.
 
@@ -79,20 +80,23 @@ If the panel shows "API off", start the backend first or use **Settings -> Run t
 
 ## Core Features
 
-- **Dashboard**: system overview — Brain (AI providers), Body (CPU/RAM/disk + model), Eyes (vision), Channels, Tasks, Schedule (cron), Capabilities (skills count).
+- **Dashboard**: system overview — Brain (AI providers), Body (CPU/RAM/disk + model), Eyes (vision), Channels, Notes, Schedule (reminders + cron), Capabilities (skills count).
 - **Chat**: provider routing + automatic skill execution.
+- **Reasoning controls**: per-user **Thinking level** (`off/low/medium/high`) and **Reasoning visibility** (`off/on/stream`) in Settings and Telegram commands.
 - **Tool-first execution**: structured tools for exec/files/reminders/cron plus OpenClaw-style `process` background session management for long-running commands.
 - **Files**: local knowledge files + allowed paths. User context (who you are) lives in **workspace/USER.md**.
 - **Learning**: "learn about X for Y minutes" with retrievable context.
 - **Cron**: list, add, update, and remove recurring jobs (e.g. daily auto-updater). Settings → Auto-updater for schedule.
 - **Audio Notes**: upload/voice transcription and summary (faster-whisper).
-- **Channels**: Telegram + WhatsApp integrations in one place.
+- **Channels**: Telegram + WhatsApp (Beta) integrations in one place.
 - **Settings/Skills**: key management, default model, toggles, and backend controls.
 
 ## Channel Setup
 
 - Telegram: set `TELEGRAM_BOT_TOKEN` in `backend/.env` or configure it in **Channels**.
-- WhatsApp: run `services/whatsapp` (see `services/whatsapp/README.md`), scan QR in **Channels**, and set `ASTA_WHATSAPP_BRIDGE_URL`.
+- Telegram bot commands: `/status`, `/exec_mode`, `/thinking`, `/reasoning`.
+- WhatsApp (Beta): run `services/whatsapp` (see `services/whatsapp/README.md`), scan QR in **Channels**, and set `ASTA_WHATSAPP_BRIDGE_URL`.
+- Optional debugging: set `ASTA_SHOW_TOOL_TRACE=true` and `ASTA_TOOL_TRACE_CHANNELS=web` to append `Tools used: ...` on replies (Telegram footer is suppressed because it already shows proactive skill-status pings).
 
 ## Learning / RAG Setup
 

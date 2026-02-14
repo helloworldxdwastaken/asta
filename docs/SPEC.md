@@ -6,9 +6,9 @@
 
 ## 1. Vision
 
-Asta is a **personal control plane**: one place to talk to AI (Google, Claude, Ollama, etc.), automate tasks, manage files and cloud storage, and communicate via WhatsApp and Telegram. It has a **web control panel** to manage everything, and can **learn** topics over time (RAG) so you can ask it to become an “expert” on a subject and answer from that knowledge.
+Asta is a **personal control plane**: one place to talk to AI (Google, Claude, Ollama, etc.), automate tasks, manage files and cloud storage, and communicate via WhatsApp (Beta) and Telegram. It has a **web control panel** to manage everything, and can **learn** topics over time (RAG) so you can ask it to become an “expert” on a subject and answer from that knowledge.
 
-**Core idea:** You control things by chatting (WhatsApp, Telegram, or the panel). The bot reads your messages, runs tasks (files, Drive, learning, scheduled jobs), and uses the right AI backend to reply.
+**Core idea:** You control things by chatting (WhatsApp (Beta), Telegram, or the panel). The bot reads your messages, runs tasks (files, Drive, learning, scheduled jobs), and uses the right AI backend to reply.
 
 ---
 
@@ -18,24 +18,28 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 
 ### 2.1 Implemented
 
-- **Control panel** — `frontend/`: Dashboard, Chat, Files, Drive, Learning (RAG), Audio notes, Skills, Channels, **Cron**, Settings. Dashboard: Brain (AI providers), Body (CPU/RAM/disk, CPU model), Eyes (vision), Channels, Tasks, Schedule (cron count), Capabilities (active skills count). Cron tab: list/delete/update recurring jobs; auto-updater creates "Daily Auto-Update" on startup when skill present. Settings → Auto-updater for schedule/timezone.
+- **Control panel** — `frontend/`: Dashboard, Chat, Files, Drive, Learning (RAG), Audio notes, Skills, Channels, **Cron**, Settings. Dashboard: Brain (AI providers), Body (CPU/RAM/disk, CPU model), Eyes (vision), Channels, Notes (latest `workspace/notes/*.md`), Schedule (pending reminders + recurring cron jobs), Capabilities (active skills count). Cron tab: list/delete/update recurring jobs; auto-updater creates "Daily Auto-Update" on startup when skill present. Settings → Auto-updater for schedule/timezone.
 - **AI providers** — `backend/app/providers/`: Groq, Google (Gemini), Claude, OpenAI, OpenRouter, Ollama. Set keys in Settings or `backend/.env`.
 - **Unified context** — AI receives recent conversation, connected channels, ground-truth state (pending reminders count, location), allowed file paths, Drive summary (when connected), RAG snippets, time/weather/lyrics/Spotify context, and tool instructions. Workspace `SKILL.md` bodies are not pre-injected; they are read on demand via tool call. `backend/app/context.py`, `handler.py`.
 - **Intent-based built-in skills** — `backend/app/skill_router.py`: only relevant built-in skills run per message (time, weather, lyrics, Spotify, etc.). Saves tokens; status in Telegram/WhatsApp shows only used skills (e.g. "🎵 Finding lyrics…"). Service handlers are gated by skill toggles.
 - **OpenClaw-style workspace skill flow** — Context exposes `<available_skills>` (enabled workspace skills only). Model selects one relevant skill, calls `read(path)` for that skill’s `SKILL.md`, then follows it. This avoids context pollution from loading all enabled workspace skills.
+- **Workspace skill host gating** — Skills declaring `metadata.openclaw.os` and `requires.bins` are runtime-gated by host OS + required binaries (OpenClaw-style). This keeps macOS-only skills (e.g. Apple Notes) out of Linux runtime prompts.
+- **Notes behavior** — Default notes are markdown files in `workspace/notes/` (via `notes` skill). Apple Notes (`memo`) is only used when explicitly requested.
 - **Structured tool loop** — Handler executes provider tool calls for exec/files/reminders/cron/read, appends tool results, and re-calls the same provider for final user text.
+- **Reliability guardrails for skipped tools** — Deterministic fallback paths handle scheduler list/remove and desktop/file-check intents when a tool-capable model skips tool calls, preventing fake "done/checked" responses.
+- **Reasoning controls** — Per-user `thinking_level` (`off/low/medium/high`) and `reasoning_mode` (`off/on/stream`) are stored in `user_settings`, exposed in Settings API/UI, and applied to provider calls/context instructions.
 - **Time & Weather** — `backend/app/time_weather.py`: separate skills. Time in 12h AM/PM; weather with today/tomorrow forecast (Open-Meteo). User location from DB or workspace/USER.md; **location normalization** (e.g. `Holon,IL` → "Holon, Israel", `Chicago, USA` → "Chicago, United States") before geocoding so local time works.
 - **Web search** — `backend/app/search_web.py`: ddgs multi-backend search (no API key). Triggered mainly on explicit search intent ("search for", "look up", "check the web", "latest"), with RAG prioritized first when relevant.
 - **Lyrics** — `backend/app/lyrics.py`: LRCLIB (free). "Lyrics of X", "lyrics for X", follow-ups like "a song by Artist". Multiple query formats if first search fails.
 - **Spotify** — `backend/app/spotify_client.py`, `services/spotify_service.py`: search (Client ID/Secret in Settings → Spotify or `.env`). Playback: OAuth connect, list devices, "play X on Spotify" with device picker. If no track matches, **artist search** and play via `context_uri=spotify:artist:...`. `GET /api/spotify/connect`, `/api/spotify/callback`, `/api/spotify/devices`, `POST /api/spotify/play`.
-- **Reminders** — `backend/app/reminders.py`: "Wake me up at 7am", "remind me tomorrow at 8am to X", "remind me in 30 min", "alarm in 5 min to X", "timer 10 min", "set alarm for 2h". User timezone from location (DB or workspace/USER.md). Absolute-time reminders (like "at 7am") require location; if missing, Asta asks for location first instead of scheduling in UTC. Friendly message at trigger time (Telegram/WhatsApp or web). APScheduler + DB. **On startup**, `reload_pending_reminders()` loads all pending reminders from DB. **Post-reply validation**: if AI claims it set a reminder but the parser didn't match, a correction is appended.
+- **Reminders** — `backend/app/reminders.py`: "Wake me up at 7am", "remind me tomorrow at 8am to X", "remind me in 30 min", "alarm in 5 min to X", "timer 10 min", "set alarm for 2h". User timezone from location (DB or workspace/USER.md). Absolute-time reminders (like "at 7am") require location; if missing, Asta asks for location first instead of scheduling in UTC. Friendly message at trigger time (Telegram/WhatsApp or web). **OpenClaw-style internals**: one-shot reminders are stored as one-shot cron entries (`@at <ISO-UTC>`) and fired by the cron scheduler path. **On startup**, legacy pending reminder rows are migrated into one-shot cron entries before cron reload. **Post-reply validation**: if AI claims it set a reminder but the parser didn't match, a correction is appended.
 - **Audio notes** — `backend/app/audio_transcribe.py`, `app/audio_notes.py`, `routers/audio.py`: Upload audio (meetings, voice memos); transcribe with faster-whisper (local; model choice: base/small/medium); format with default AI. `POST /api/audio/process` (multipart: file, instruction, whisper_model, async_mode). With `async_mode=1`, returns 202 + job_id; poll `GET /api/audio/status/{job_id}` for progress (transcribing → formatting → done). Meeting notes (when instruction is "meeting") are saved in DB so user can ask "last meeting?" in Chat; context injects recent saved meetings. Telegram: voice/audio and audio-from-URL with progress messages ("Transcribing…", "Formatting…"). UI shows progress bar. Dependencies: `faster-whisper`, `python-multipart` (see `backend/requirements.txt`).
-- **WhatsApp bridge** — `services/whatsapp/` (Baileys): receives messages, POSTs to `/api/incoming/whatsapp`, sends reply. Run with `ASTA_API_URL=http://localhost:8010 npm run start`.
-- **Telegram bot** — `backend/app/channels/telegram_bot.py`: long polling when `TELEGRAM_BOT_TOKEN` set; same message handler as panel/WhatsApp.
+- **WhatsApp bridge (Beta)** — `services/whatsapp/` (Baileys): receives messages, POSTs to `/api/incoming/whatsapp`, sends reply. Run with `ASTA_API_URL=http://localhost:8010 npm run start`.
+- **Telegram bot** — `backend/app/channels/telegram_bot.py`: long polling when `TELEGRAM_BOT_TOKEN` set; same message handler as panel/WhatsApp. Built-in commands include `/status`, `/exec_mode`, `/thinking`, `/reasoning`.
 - **File management** — `backend/app/routers/files.py`: list/read under `ASTA_ALLOWED_PATHS` and workspace. **Virtual root**: "Asta knowledge" (README + docs/*.md). **User context** = workspace/USER.md only (name, location, timezone, preferences); location there is used for time, weather, and reminders if DB location is empty.
 - **Google Drive** — Stub in `routers/drive.py`; OAuth and list can be wired next.
 - **RAG / Learning** — `backend/app/rag/service.py`: Chroma + Ollama embeddings (`nomic-embed-text`). Status label: "Checking learned knowledge". `POST /api/rag/learn`, `POST /api/tasks/learn`.
-- **Scheduled tasks** — `backend/app/tasks/scheduler.py`: APScheduler; learning jobs and reminder fire times. Reminders are re-loaded from DB on startup (`app/reminders.py`: `reload_pending_reminders()` called from `main.py` lifespan).
+- **Scheduled tasks** — `backend/app/tasks/scheduler.py`: APScheduler runtime. Learning jobs plus cron scheduler (`app/cron_runner.py`) for recurring and one-shot (`@at`) reminder jobs. Startup runs reminder migration + cron reload from DB.
 
 ### 2.2 Planned (next)
 
@@ -83,22 +87,22 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 | **API** | FastAPI (Python 3.11+) | REST + WebSocket; auth; route to providers and tasks. |
 | **Panel** | React (Vite), TypeScript | Dashboard: chats, settings, file browser, Drive, learning jobs. |
 | **AI adapters** | Python modules | One module per provider (Groq, Google, Claude, OpenAI, OpenRouter, Ollama); same interface: `chat(messages) -> response`. |
-| **WhatsApp** | Baileys bridge service | Receive/send messages; forward to core message handler. |
+| **WhatsApp (Beta)** | Baileys bridge service | Receive/send messages; forward to core message handler. |
 | **Telegram** | python-telegram-bot | Webhook or long polling; forward to core message handler. |
 | **Files** | Python (pathlib, aiofiles) | Local file ops in allowed dirs; list, read, search. |
 | **Google Drive** | Google Drive API + OAuth2 | List, search, download; optional upload. |
 | **RAG / Learning** | LangChain or custom | Ingest (URLs, files, text), chunk, embed (Ollama or API), store in vector DB; retrieve + generate answers. |
-| **Scheduler** | APScheduler or Celery | “Learn for X hours”, cron-like tasks, reminders. |
+| **Scheduler** | APScheduler | “Learn for X hours”, cron-like tasks, reminders. |
 | **Data** | SQLite + vector store | SQLite for users, tasks, config; Chroma/FAISS/sqlite-vec for embeddings. |
 
 ### 3.3 Data model (conceptual)
 
-- **Users / settings:** user_settings (mood, default_ai_provider), provider_models, skill_toggles, api_keys (stored keys: Groq, Gemini, etc., Spotify Client ID/Secret).
+- **Users / settings:** user_settings (mood, default_ai_provider, thinking_level, reasoning_mode), provider_models, skill_toggles, api_keys (stored keys: Groq, Gemini, etc., Spotify Client ID/Secret).
 - **User location:** user_location (user_id, location_name, lat, lon) for timezone and weather.
 - **Conversations:** id, user_id, channel (web | telegram | whatsapp), created_at.
 - **Messages:** id, conversation_id, role (user | assistant), content, provider_used, created_at.
 - **Tasks:** id, user_id, type (learn | schedule), payload (JSON), status, run_at.
-- **Reminders:** id, user_id, channel, channel_target, message, run_at, status (pending | sent). APScheduler fires at run_at and sends via Telegram/WhatsApp or web.
+- **Reminders:** pending one-shots live in `cron_jobs` as `cron_expr='@at <ISO-UTC>'`; sent history is persisted in `reminders` table (`status='sent'`) for notifications/history APIs.
 - **Spotify:** spotify_user_tokens (user_id, refresh_token, access_token, expires_at); pending_spotify_play (user_id, track_uri, devices_json) for device picker.
 - **RAG documents:** Chroma; chunks in vector store with metadata.
 
@@ -122,7 +126,7 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 
 - **Tool flow:** `handler.py` passes tools (exec/process/files/read/reminders/cron) to tool-capable providers (OpenAI, Groq, OpenRouter, Claude, Google). If the response has `tool_calls`, Asta runs each tool, appends tool output, and re-calls the same provider. Final reply is the last `response.content`.
 - **Allowlist:** Env `ASTA_EXEC_ALLOWED_BINS` plus DB `exec_allowed_bins_extra`. Enabling a skill that declares `required_bins` (e.g. Apple Notes) adds those bins. Binary is resolved with `resolve_executable()` (PATH plus `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`).
-- **Fallback:** We still parse `[ASTA_EXEC: command][/ASTA_EXEC]` in the reply, run the command, and re-call with the output (now guarded to exec-intent requests only). See `exec_tool.py`, `process_tool.py`, `handler.py`, `docs/OPENCLAW-EXEC-NOTES.md`.
+- **Fallback:** We still parse `[ASTA_EXEC: command][/ASTA_EXEC]` in the reply, run the command, and re-call with the output (now guarded to exec-intent requests only). See `exec_tool.py`, `process_tool.py`, `handler.py`.
 
 ### 4.3 Security
 
@@ -186,4 +190,4 @@ asta/
 
 ## 6. Changelog (spec)
 
-- **Current (1.3.0):** OpenClaw-style workspace skill selection (`<available_skills>` + on-demand `read`), strict frontmatter metadata parsing for required bins, and structured tool loop across OpenAI/Groq/OpenRouter/Claude/Google. Added structured `files`, `reminders`, and `cron` tools plus OpenClaw-style `process` tool for background exec session management (`list/poll/log/write/kill/clear/remove`). Exec supports `background` and `yield_ms`; default provider is OpenRouter. Drive OAuth is still planned.
+- **Current (1.3.3):** OpenClaw-style workspace skill selection (`<available_skills>` + on-demand `read`), strict frontmatter metadata parsing for required bins, and structured tool loop across OpenAI/Groq/OpenRouter/Claude/Google. Added structured `files`, `reminders`, and `cron` tools plus OpenClaw-style `process` tool for background exec session management (`list/poll/log/write/kill/clear/remove`). Exec supports `background` and `yield_ms`; default provider is OpenRouter. Tool-skip reliability guardrails are implemented for scheduler and file-check intents. Thinking/reasoning controls are implemented in Settings + Telegram (`/thinking`, `/reasoning`). Settings now uses explicit Ollama model dropdowns, and Dashboard channels use clearer connected-state badges (WhatsApp card shown only when connected). Drive OAuth is still planned.

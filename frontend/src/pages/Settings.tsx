@@ -3,15 +3,6 @@ import { Link } from "react-router-dom";
 import type { CronJob } from "../api/client";
 import { api } from "../api/client";
 
-const PROVIDER_LABELS: Record<string, string> = {
-  groq: "Groq",
-  google: "Google (Gemini)",
-  claude: "Claude",
-  ollama: "Ollama",
-  openai: "OpenAI",
-  openrouter: "OpenRouter",
-};
-
 /** Logo URL or fallback initial for provider cards */
 const PROVIDER_LOGOS: Record<string, { url: string; initial: string }> = {
   groq: { url: "https://groq.com/favicon.ico", initial: "G" },
@@ -262,25 +253,52 @@ const DEFAULT_AI_LABELS: Record<string, string> = {
   openrouter: "OpenRouter",
 };
 
+const PROVIDER_IDS = ["groq", "google", "claude", "ollama", "openai", "openrouter"] as const;
+type ProviderId = (typeof PROVIDER_IDS)[number];
+
+const CLAUDE_CUSTOM_MODEL = "__custom__";
+const CLAUDE_MODEL_PRESETS: Array<{ label: string; value: string }> = [
+  { label: "Use provider default", value: "" },
+  { label: "Claude 3.5 Sonnet (stable)", value: "claude-3-5-sonnet-20241022" },
+  { label: "Claude 3.5 Haiku (fast)", value: "claude-3-5-haiku-20241022" },
+];
+const OLLAMA_DEFAULT_MODEL = "__provider_default__";
+const OLLAMA_CUSTOM_MODEL = "__custom_model__";
+
+function resolveOllamaSelectValue(model: string, ollamaList: string[]): string {
+  const trimmed = model.trim();
+  if (!trimmed) return OLLAMA_DEFAULT_MODEL;
+  const matched = ollamaList.find((name) => name === trimmed || name.startsWith(trimmed + ":"));
+  return matched ?? OLLAMA_CUSTOM_MODEL;
+}
+
 function DefaultAiSelect() {
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
+  const [thinkingLevel, setThinkingLevel] = useState<"off" | "low" | "medium" | "high">("off");
+  const [reasoningMode, setReasoningMode] = useState<"off" | "on" | "stream">("off");
+  const [availableModels, setAvailableModels] = useState<{ ollama: string[] }>({ ollama: [] });
   const [defaults, setDefaults] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [savingModel, setSavingModel] = useState(false);
+  const [savingThinking, setSavingThinking] = useState(false);
+  const [savingReasoning, setSavingReasoning] = useState(false);
   const [connected, setConnected] = useState<Record<string, boolean>>({});
   useEffect(() => {
-    Promise.all([api.getDefaultAi(), api.status(), api.getModels()]).then(([r, status, modelsResp]) => {
+    Promise.all([api.getDefaultAi(), api.status(), api.getModels(), api.getThinking(), api.getReasoning()]).then(([r, status, modelsResp, thinkingResp, reasoningResp]) => {
       setConnected(status.apis ?? {});
       setDefaults(modelsResp.defaults ?? {});
       setModel((modelsResp.models ?? {})[r.provider] ?? "");
+      setThinkingLevel(thinkingResp.thinking_level ?? "off");
+      setReasoningMode(reasoningResp.reasoning_mode ?? "off");
       setLoading(false);
       setProvider(r.provider);
     });
+    api.getAvailableModels().then(setAvailableModels).catch(() => setAvailableModels({ ollama: [] }));
   }, []);
   useEffect(() => {
     if (loading || !provider || Object.keys(connected).length === 0) return;
-    const connectedIds = (["groq", "google", "claude", "ollama", "openai", "openrouter"] as const).filter(
+    const connectedIds = PROVIDER_IDS.filter(
       (id) => connected[PROVIDER_STATUS_KEYS[id]]
     );
     if (connectedIds.length > 0 && !connectedIds.includes(provider as typeof connectedIds[number])) {
@@ -305,19 +323,48 @@ function DefaultAiSelect() {
     setSavingModel(true);
     api.setModel(provider, model.trim()).finally(() => setSavingModel(false));
   };
-  const connectedProviders = (["groq", "google", "claude", "ollama", "openai", "openrouter"] as const).filter(
+  const saveThinking = (level: "off" | "low" | "medium" | "high") => {
+    setThinkingLevel(level);
+    setSavingThinking(true);
+    api.setThinking(level).finally(() => setSavingThinking(false));
+  };
+  const saveReasoning = (mode: "off" | "on" | "stream") => {
+    setReasoningMode(mode);
+    setSavingReasoning(true);
+    api.setReasoning(mode).finally(() => setSavingReasoning(false));
+  };
+  const connectedProviders = PROVIDER_IDS.filter(
     (id) => connected[PROVIDER_STATUS_KEYS[id]]
   );
   if (loading) return <p style={{ color: "var(--muted)" }}>Loading…</p>;
   if (connectedProviders.length === 0) {
     return (
       <p className="help">
-        No API connected yet. Add at least one key above (Groq, OpenRouter, etc.) and save, then choose the default AI here. Set the model name in &quot;Model per provider&quot; below.
+        No API connected yet. Add at least one key above (Groq, OpenRouter, etc.), save, then choose your default AI and model here.
       </p>
     );
   }
   const value = connectedProviders.includes(provider as typeof connectedProviders[number]) ? provider : connectedProviders[0];
   const defaultModel = defaults[provider] ?? "";
+  const isClaudeProvider = provider === "claude";
+  const ollamaList = availableModels.ollama || [];
+  const isOllamaProvider = provider === "ollama";
+  const ollamaSelectValue = resolveOllamaSelectValue(model, ollamaList);
+  const isKnownClaudePreset = CLAUDE_MODEL_PRESETS.some((p) => p.value === model);
+  const claudePresetValue = isKnownClaudePreset ? model : (model.trim() ? CLAUDE_CUSTOM_MODEL : "");
+  const pickClaudeModel = (picked: string) => {
+    if (picked === CLAUDE_CUSTOM_MODEL) return;
+    setModel(picked);
+    setSavingModel(true);
+    api.setModel("claude", picked.trim()).finally(() => setSavingModel(false));
+  };
+  const pickOllamaModel = (picked: string) => {
+    if (picked === OLLAMA_CUSTOM_MODEL) return;
+    const nextModel = picked === OLLAMA_DEFAULT_MODEL ? "" : picked;
+    setModel(nextModel);
+    setSavingModel(true);
+    api.setModel("ollama", nextModel.trim()).finally(() => setSavingModel(false));
+  };
   return (
     <div>
       <div className="field">
@@ -332,14 +379,106 @@ function DefaultAiSelect() {
       </div>
       <div className="field">
         <div className="field-row">
+          <label className="label" htmlFor="thinking-level-select">Thinking level</label>
+          <span className="help">Used across chat + channels</span>
+        </div>
+        <div className="actions" style={{ gap: "0.5rem", alignItems: "center" }}>
+          <select
+            id="thinking-level-select"
+            value={thinkingLevel}
+            onChange={(e) => saveThinking(e.target.value as "off" | "low" | "medium" | "high")}
+            className="select"
+            style={{ maxWidth: 220 }}
+          >
+            <option value="off">Off</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+          </select>
+          {savingThinking && <span className="help">Saving…</span>}
+        </div>
+        <p className="help" style={{ marginTop: "0.35rem" }}>
+          Higher levels spend more effort before replying, especially for tool-heavy tasks.
+        </p>
+      </div>
+      <div className="field">
+        <div className="field-row">
+          <label className="label" htmlFor="reasoning-mode-select">Reasoning visibility</label>
+          <span className="help">Off by default</span>
+        </div>
+        <div className="actions" style={{ gap: "0.5rem", alignItems: "center" }}>
+          <select
+            id="reasoning-mode-select"
+            value={reasoningMode}
+            onChange={(e) => saveReasoning(e.target.value as "off" | "on" | "stream")}
+            className="select"
+            style={{ maxWidth: 220 }}
+          >
+            <option value="off">Off</option>
+            <option value="on">On</option>
+            <option value="stream">Stream</option>
+          </select>
+          {savingReasoning && <span className="help">Saving…</span>}
+        </div>
+        <p className="help" style={{ marginTop: "0.35rem" }}>
+          Shows a short “Reasoning:” section when available. Stream mode sends reasoning as live status updates.
+        </p>
+      </div>
+      <div className="field">
+        <div className="field-row">
           <label className="label" htmlFor="default-ai-model">Model (optional)</label>
           {defaultModel && <span className="help">default: {defaultModel}</span>}
         </div>
+        {isClaudeProvider && (
+          <div style={{ marginBottom: "0.5rem", maxWidth: 420 }}>
+            <select
+              id="default-ai-claude-preset"
+              value={claudePresetValue}
+              onChange={(e) => pickClaudeModel(e.target.value)}
+              className="select"
+              style={{ width: "100%" }}
+            >
+              {CLAUDE_MODEL_PRESETS.map((preset) => (
+                <option key={preset.value || "__default__"} value={preset.value}>
+                  {preset.label}
+                </option>
+              ))}
+              <option value={CLAUDE_CUSTOM_MODEL}>Custom model ID (manual input below)</option>
+            </select>
+          </div>
+        )}
+        {isOllamaProvider && ollamaList.length > 0 && (
+          <div style={{ marginBottom: "0.5rem", maxWidth: 420 }}>
+            <select
+              id="default-ai-ollama-select"
+              value={ollamaSelectValue}
+              onChange={(e) => pickOllamaModel(e.target.value)}
+              className="select"
+              style={{ width: "100%" }}
+            >
+              <option value={OLLAMA_DEFAULT_MODEL}>Use provider default</option>
+              {ollamaList.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+              <option value={OLLAMA_CUSTOM_MODEL}>Custom model/tag (manual input below)</option>
+            </select>
+          </div>
+        )}
         <div className="actions" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
           <input
             id="default-ai-model"
             type="text"
-            placeholder={provider === "openrouter" ? "e.g. anthropic/claude-3.5-sonnet or model,fallback (comma-separated)" : (defaultModel || "e.g. llama-3.3-70b-versatile")}
+            placeholder={
+              provider === "openrouter"
+                ? "e.g. anthropic/claude-3.5-sonnet or model,fallback (comma-separated)"
+                : provider === "ollama"
+                  ? "Custom Ollama model/tag (optional)"
+                : provider === "claude"
+                  ? "e.g. claude-haiku-4-5-20251001"
+                  : (defaultModel || "e.g. llama-3.3-70b-versatile")
+            }
             value={model}
             onChange={(e) => setModel(e.target.value)}
             onBlur={saveModel}
@@ -350,9 +489,16 @@ function DefaultAiSelect() {
             {savingModel ? "Saving…" : "Save model"}
           </button>
         </div>
+        {provider === "ollama" && ollamaList.length > 0 && (
+          <p className="help" style={{ marginTop: "0.35rem" }}>
+            Pick from installed models using the dropdown, or type a custom tag manually.
+          </p>
+        )}
         <p className="help" style={{ marginTop: "0.35rem" }}>
           Leave blank to use the provider default. For OpenRouter, use a model ID from{" "}
           <a href="https://openrouter.ai/models" target="_blank" rel="noreferrer" className="link">openrouter.ai/models</a>.
+          {provider === "claude" ? " You can also pick a Claude preset above, then override with a custom model ID." : ""}
+          {provider === "ollama" ? " You can pick from local models using the dropdown above, or type any Ollama model/tag manually." : ""}
         </p>
       </div>
     </div>
@@ -363,8 +509,12 @@ function FallbackProviderSelect() {
   const [fallbackCsv, setFallbackCsv] = useState("");
   const [defaultProvider, setDefaultProvider] = useState("");
   const [connected, setConnected] = useState<Record<string, boolean>>({});
+  const [models, setModels] = useState<Record<string, string>>({});
+  const [defaults, setDefaults] = useState<Record<string, string>>({});
+  const [availableModels, setAvailableModels] = useState<{ ollama: string[] }>({ ollama: [] });
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [savingOrder, setSavingOrder] = useState(false);
+  const [savingModelFor, setSavingModelFor] = useState<ProviderId | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
   useEffect(() => {
@@ -372,40 +522,69 @@ function FallbackProviderSelect() {
       api.getFallbackProviders(),
       api.getDefaultAi(),
       api.status(),
-    ]).then(([fb, ai, status]) => {
+      api.getModels(),
+      api.getAvailableModels(),
+    ]).then(([fb, ai, status, modelsResp, availableResp]) => {
       setFallbackCsv(fb.providers || "");
       setDefaultProvider(ai.provider);
       setConnected(status.apis ?? {});
+      setModels(modelsResp.models ?? {});
+      setDefaults(modelsResp.defaults ?? {});
+      setAvailableModels(availableResp ?? { ollama: [] });
       setLoading(false);
     });
   }, []);
 
-  const connectedProviders = (["groq", "google", "claude", "ollama", "openai", "openrouter"] as const).filter(
+  const connectedProviders: ProviderId[] = PROVIDER_IDS.filter(
     (id) => connected[PROVIDER_STATUS_KEYS[id]] && id !== defaultProvider
   );
 
-  const selected = fallbackCsv
+  const selected: ProviderId[] = fallbackCsv
     .split(",")
     .map((s) => s.trim())
-    .filter((s) => s && connectedProviders.includes(s as any));
+    .filter((s): s is ProviderId => !!s && connectedProviders.includes(s as ProviderId));
 
-  const toggle = (provider: string) => {
+  const saveOrder = async (next: ProviderId[]) => {
+    const csv = next.join(",");
+    setFallbackCsv(csv);
+    setSavingOrder(true);
+    setMsg(null);
+    try {
+      await api.setFallbackProviders(csv);
+      setMsg(next.length ? `Fallback order: ${next.map((p) => DEFAULT_AI_LABELS[p]).join(" -> ")}` : "Auto-detect (all available keys)");
+    } catch {
+      setMsg("Failed to save fallback order.");
+    } finally {
+      setSavingOrder(false);
+    }
+  };
+
+  const toggle = (provider: ProviderId) => {
     let next: string[];
     if (selected.includes(provider)) {
       next = selected.filter((p) => p !== provider);
     } else {
       next = [...selected, provider];
     }
-    const csv = next.join(",");
-    setFallbackCsv(csv);
-    setSaving(true);
+    void saveOrder(next as ProviderId[]);
+  };
+
+  const saveProviderModel = async (provider: ProviderId, overrideModel?: string) => {
+    const rawValue = overrideModel ?? models[provider] ?? "";
+    const value = rawValue.trim();
+    if (overrideModel !== undefined) {
+      setModels((m) => ({ ...m, [provider]: rawValue }));
+    }
+    setSavingModelFor(provider);
     setMsg(null);
-    api.setFallbackProviders(csv)
-      .then(() => {
-        setMsg(next.length ? `Fallback order: ${next.map(p => DEFAULT_AI_LABELS[p]).join(" → ")}` : "Auto-detect (all available keys)");
-      })
-      .catch(() => setMsg("Failed to save"))
-      .finally(() => setSaving(false));
+    try {
+      await api.setModel(provider, value);
+      setMsg(`${DEFAULT_AI_LABELS[provider]} model saved.`);
+    } catch {
+      setMsg(`Failed to save ${DEFAULT_AI_LABELS[provider]} model.`);
+    } finally {
+      setSavingModelFor(null);
+    }
   };
 
   if (loading) return <p style={{ color: "var(--muted)" }}>Loading…</p>;
@@ -442,7 +621,7 @@ function FallbackProviderSelect() {
               type="checkbox"
               checked={selected.includes(id)}
               onChange={() => toggle(id)}
-              disabled={saving}
+              disabled={savingOrder || !!savingModelFor}
               style={{ accentColor: "var(--primary)" }}
             />
             <span>{DEFAULT_AI_LABELS[id]}</span>
@@ -454,7 +633,80 @@ function FallbackProviderSelect() {
           </label>
         ))}
       </div>
-      {msg && <p className="help" style={{ marginTop: "0.5rem", color: "var(--success)" }}>{msg}</p>}
+      {selected.length > 0 && (
+        <div style={{ marginTop: "1rem" }}>
+          <h4 style={{ margin: "0 0 0.4rem 0" }}>Fallback model per provider</h4>
+          <p className="help" style={{ marginBottom: "0.5rem" }}>
+            Each fallback provider can use its own model.
+          </p>
+          {selected.map((id) => (
+            <div key={"fallback-model-" + id} className="field">
+              <div className="field-row">
+                <label className="label" htmlFor={"fallback-model-" + id}>
+                  {DEFAULT_AI_LABELS[id]}
+                </label>
+                <span className="help">default: {defaults[id] ?? "—"}</span>
+              </div>
+              <div className="actions" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
+                {id === "ollama" && availableModels.ollama.length > 0 && (
+                  <select
+                    id={"fallback-model-select-" + id}
+                    value={resolveOllamaSelectValue(models[id] ?? "", availableModels.ollama)}
+                    onChange={(e) => {
+                      const picked = e.target.value;
+                      if (picked === OLLAMA_CUSTOM_MODEL) return;
+                      const next = picked === OLLAMA_DEFAULT_MODEL ? "" : picked;
+                      void saveProviderModel(id, next);
+                    }}
+                    className="select"
+                    style={{ maxWidth: 420, flex: "1 1 220px" }}
+                  >
+                    <option value={OLLAMA_DEFAULT_MODEL}>Use provider default</option>
+                    {availableModels.ollama.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                    <option value={OLLAMA_CUSTOM_MODEL}>Custom model/tag (manual input below)</option>
+                  </select>
+                )}
+                <input
+                  id={"fallback-model-" + id}
+                  type="text"
+                  placeholder={
+                    id === "openrouter"
+                      ? "main-model, fallback1, fallback2 (comma-separated)"
+                      : id === "ollama"
+                        ? "Custom Ollama model/tag (optional)"
+                      : (defaults[id] ?? "Optional model override")
+                  }
+                  value={models[id] ?? ""}
+                  onChange={(e) => setModels((m) => ({ ...m, [id]: e.target.value }))}
+                  onBlur={() => void saveProviderModel(id)}
+                  className="input"
+                  style={{ maxWidth: 420, flex: "1 1 220px" }}
+                />
+                <button
+                  type="button"
+                  onClick={() => void saveProviderModel(id)}
+                  disabled={!!savingModelFor}
+                  className="btn btn-secondary"
+                >
+                  {savingModelFor === id ? "Saving…" : "Save model"}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {msg && (
+        <p
+          className="help"
+          style={{ marginTop: "0.5rem", color: msg.startsWith("Failed") ? "var(--error)" : "var(--success)" }}
+        >
+          {msg}
+        </p>
+      )}
     </div>
   );
 }
@@ -596,59 +848,6 @@ function SpotifySetup({ keysStatus, onSaved }: { keysStatus: Record<string, bool
           )}
         </p>
       </div>
-    </div>
-  );
-}
-
-
-
-function ModelsForm() {
-  const [models, setModels] = useState<Record<string, string>>({});
-  const [defaults, setDefaults] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  useEffect(() => {
-    api.getModels().then((r) => {
-      setModels(r.models);
-      setDefaults(r.defaults);
-      setLoading(false);
-    });
-  }, []);
-  const save = async () => {
-    setSaving(true);
-    try {
-      for (const provider of ["groq", "google", "claude", "ollama", "openai", "openrouter"]) {
-        await api.setModel(provider, models[provider] ?? "");
-      }
-    } finally {
-      setSaving(false);
-    }
-  };
-  if (loading) return <p style={{ color: "var(--muted)" }}>Loading…</p>;
-  return (
-    <div>
-      {(["groq", "google", "claude", "ollama", "openai", "openrouter"] as const).map((provider) => (
-        <div key={provider} className="field">
-          <div className="field-row">
-            <label className="label" htmlFor={"model-" + provider}>
-              {PROVIDER_LABELS[provider]}
-            </label>
-            <span className="help">default: {defaults[provider] ?? "—"}</span>
-          </div>
-          <input
-            id={"model-" + provider}
-            type="text"
-            placeholder={provider === "openrouter" ? "main-model, fallback1, fallback2 (comma-separated)" : (defaults[provider] ?? "e.g. llama-3.3-70b-versatile")}
-            value={models[provider] ?? ""}
-            onChange={(e) => setModels((m) => ({ ...m, [provider]: e.target.value }))}
-            className="input"
-            style={{ maxWidth: 520 }}
-          />
-        </div>
-      ))}
-      <button type="button" onClick={save} disabled={saving} className="btn btn-primary">
-        {saving ? "Saving…" : "Save models"}
-      </button>
     </div>
   );
 }
@@ -816,23 +1015,6 @@ export default function Settings() {
             <FallbackProviderSelect />
           </div>
         </details>
-
-        <details>
-          <summary>
-            <span>Models per provider</span>
-            <span className="acc-meta">Optional overrides</span>
-          </summary>
-          <div className="acc-body">
-            <p className="help">
-              Leave blank to use defaults. For <strong>OpenRouter</strong>, use a model ID (browse at{" "}
-              <a href="https://openrouter.ai/models" target="_blank" rel="noreferrer" className="link">openrouter.ai/models</a>).
-              You can add <strong>fallback models</strong> separated by commas — if the first model fails, the next one is tried automatically.
-            </p>
-            <ModelsForm />
-          </div>
-        </details>
-
-
 
         <details>
           <summary>
