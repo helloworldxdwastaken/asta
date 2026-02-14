@@ -715,7 +715,7 @@ print_commands() {
     cecho "  ${CYAN}stop${NC}     Stop all services"
     cecho "  ${CYAN}restart${NC}  Restart all services"
     cecho "  ${CYAN}status${NC}   Show service status + integrations"
-    cecho "  ${CYAN}doc${NC}      Safe diagnostics (alias: doctor)"
+    cecho "  ${CYAN}doc${NC}      Safe diagnostics (alias: doctor). Use --fix to auto-fix setup/deps"
     cecho "  ${CYAN}update${NC}   Pull latest code and restart"
     cecho "  ${CYAN}install${NC}  Symlink asta to /usr/local/bin"
     cecho "  ${CYAN}setup${NC}    Create backend venv (Python 3.12/3.13) + frontend deps"
@@ -725,11 +725,161 @@ print_commands() {
     echo ""
 }
 
+doc_create_workspace_user() {
+    local user_file="$SCRIPT_DIR/workspace/USER.md"
+    mkdir -p "$SCRIPT_DIR/workspace"
+    if [ ! -f "$user_file" ]; then
+        cat > "$user_file" <<'EOF'
+# About you
+
+- **Preferred name:** 
+- **Location:** 
+- **Timezone:** 
+- **Important:** 
+  - 
+EOF
+    fi
+}
+
+doc_api_python() {
+    if [ -f "$BACKEND_DIR/.venv/bin/python" ]; then
+        echo "$BACKEND_DIR/.venv/bin/python"
+        return 0
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        echo "python3"
+        return 0
+    fi
+    echo ""
+    return 1
+}
+
+doc_check_skill_dependencies() {
+    # $1 = 1 to auto-fix installable dependency issues
+    local fix_mode="$1"
+    local api_py
+    api_py=$(doc_api_python)
+    if [ -z "$api_py" ]; then
+        print_warning "skill deps   ${YELLOW}skip${NC}  ${GRAY}python not available for API check${NC}"
+        return 0
+    fi
+    if ! lsof -Pi ":$BACKEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
+        print_warning "skill deps   ${YELLOW}skip${NC}  ${GRAY}backend not running (start Asta to inspect skills)${NC}"
+        return 0
+    fi
+
+    local line exit_code
+    while IFS=$'\t' read -r kind a b c; do
+        case "$kind" in
+            ISSUE)
+                print_warning "skill dep    ${YELLOW}${a}${NC}  ${GRAY}${b}${NC}"
+                ;;
+            FIXED)
+                print_success "skill dep    ${GREEN}fixed${NC}  ${GRAY}${a}${NC}"
+                ;;
+            FAILED)
+                print_warning "skill dep    ${YELLOW}auto-fix failed${NC}  ${GRAY}${a}: ${b}${NC}"
+                ;;
+            MANUAL)
+                print_warning "skill dep    ${YELLOW}manual${NC}  ${GRAY}${a}: ${b}${NC}"
+                ;;
+            SUMMARY)
+                local total fixed remaining
+                total="$a"
+                fixed="$b"
+                remaining="$c"
+                if [ "${total:-0}" -eq 0 ]; then
+                    print_success "skill deps   ${GREEN}ok${NC}  ${GRAY}all enabled skills available${NC}"
+                else
+                    print_warning "skill deps   ${YELLOW}${remaining}/${total} unresolved${NC}  ${GRAY}${fixed} auto-fixed${NC}"
+                fi
+                ;;
+            ERROR)
+                print_warning "skill deps   ${YELLOW}check failed${NC}  ${GRAY}${a}${NC}"
+                ;;
+        esac
+    done < <(
+        ASTA_ROOT="$SCRIPT_DIR" "$api_py" - "$BACKEND_PORT" "$fix_mode" <<'PY'
+import json
+import os
+import subprocess
+import sys
+import urllib.request
+
+port = int(sys.argv[1])
+fix_mode = sys.argv[2] == "1"
+root = os.environ.get("ASTA_ROOT", ".")
+url = f"http://localhost:{port}/api/settings/skills?user_id=default"
+
+def fetch_skills():
+    with urllib.request.urlopen(url, timeout=4) as r:
+        if r.status != 200:
+            raise RuntimeError(f"HTTP {r.status}")
+        data = json.loads(r.read().decode("utf-8"))
+    return data.get("skills", []) if isinstance(data, dict) else []
+
+try:
+    skills = fetch_skills()
+except Exception as e:
+    print("ERROR\t" + str(e).replace("\n", " ")[:220])
+    raise SystemExit(2)
+
+issues = [s for s in skills if s.get("enabled") and not s.get("available")]
+fixed = 0
+
+for s in issues:
+    name = str(s.get("name") or s.get("id") or "unknown").strip()
+    hint = str(s.get("action_hint") or "missing dependency").strip()
+    install_cmd = str(s.get("install_cmd") or "").strip()
+    auto_fixable = bool(install_cmd) and ("install" in hint.lower() or "exec" in hint.lower())
+    print(f"ISSUE\t{name}\t{hint}\t{'yes' if auto_fixable else 'no'}")
+    if fix_mode:
+        if auto_fixable:
+            p = subprocess.run(
+                install_cmd,
+                shell=True,
+                cwd=root,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            if p.returncode == 0:
+                fixed += 1
+                print(f"FIXED\t{name}\t\t")
+            else:
+                out = (p.stdout or "").strip().replace("\n", " ")
+                print(f"FAILED\t{name}\t{out[:180]}\t")
+        else:
+            print(f"MANUAL\t{name}\t{hint}\t")
+
+remaining = len(issues)
+if fix_mode and fixed > 0:
+    try:
+        skills_after = fetch_skills()
+        remaining = len([s for s in skills_after if s.get("enabled") and not s.get("available")])
+    except Exception:
+        pass
+
+print(f"SUMMARY\t{len(issues)}\t{fixed}\t{remaining}")
+PY
+    )
+    exit_code=$?
+    return "$exit_code"
+}
+
 run_doc() {
+    local fix_mode=0
+    if [ "$1" = "--fix" ]; then
+        fix_mode=1
+    fi
     local issues=0
     echo ""
     cecho "  ${GRAY}─────────────────────────────────────────${NC}"
-    cecho "  ${WHITE}${BOLD}doc${NC}  ${GRAY}(safe diagnostics)${NC}"
+    if [ "$fix_mode" -eq 1 ]; then
+        cecho "  ${WHITE}${BOLD}doc${NC}  ${GRAY}(safe diagnostics + auto-fix)${NC}"
+    else
+        cecho "  ${WHITE}${BOLD}doc${NC}  ${GRAY}(safe diagnostics)${NC}"
+    fi
     cecho "  ${GRAY}─────────────────────────────────────────${NC}"
 
     local py
@@ -751,37 +901,64 @@ run_doc() {
     if [ -f "$BACKEND_DIR/.venv/bin/activate" ]; then
         print_success "backend venv   ${GREEN}present${NC}"
     else
-        print_warning "backend venv   ${YELLOW}missing${NC}  ${GRAY}run ./asta.sh setup${NC}"
-        issues=1
+        if [ "$fix_mode" -eq 1 ]; then
+            print_warning "backend venv   ${YELLOW}missing${NC}  ${GRAY}attempting auto-fix${NC}"
+            if ensure_backend_venv; then
+                print_success "backend venv   ${GREEN}fixed${NC}"
+            else
+                print_error "backend venv   ${RED}failed to fix${NC}"
+                issues=1
+            fi
+        else
+            print_warning "backend venv   ${YELLOW}missing${NC}  ${GRAY}run ./asta.sh setup${NC}"
+            issues=1
+        fi
     fi
 
     if [ -d "$FRONTEND_DIR/node_modules" ]; then
         print_success "frontend deps  ${GREEN}present${NC}"
     else
-        print_warning "frontend deps  ${YELLOW}missing${NC}  ${GRAY}run ./asta.sh setup${NC}"
-        issues=1
+        if [ "$fix_mode" -eq 1 ] && command -v npm >/dev/null 2>&1; then
+            print_warning "frontend deps  ${YELLOW}missing${NC}  ${GRAY}attempting auto-fix${NC}"
+            if (cd "$FRONTEND_DIR" && npm install >/dev/null 2>&1); then
+                print_success "frontend deps  ${GREEN}fixed${NC}"
+            else
+                print_error "frontend deps  ${RED}failed to fix${NC}  ${GRAY}run: cd frontend && npm install${NC}"
+                issues=1
+            fi
+        else
+            print_warning "frontend deps  ${YELLOW}missing${NC}  ${GRAY}run ./asta.sh setup${NC}"
+            issues=1
+        fi
     fi
 
     if [ -f "$BACKEND_DIR/.env" ]; then
         print_success "backend .env   ${GREEN}present${NC}"
     else
-        print_warning "backend .env   ${YELLOW}missing${NC}  ${GRAY}copy from .env.example${NC}"
-        issues=1
+        if [ "$fix_mode" -eq 1 ] && [ -f "$SCRIPT_DIR/.env.example" ]; then
+            cp "$SCRIPT_DIR/.env.example" "$BACKEND_DIR/.env"
+            print_success "backend .env   ${GREEN}fixed${NC}  ${GRAY}copied from .env.example${NC}"
+        else
+            print_warning "backend .env   ${YELLOW}missing${NC}  ${GRAY}copy from .env.example${NC}"
+            issues=1
+        fi
     fi
 
     if [ -f "$SCRIPT_DIR/workspace/USER.md" ]; then
         print_success "workspace user ${GREEN}present${NC}"
     else
-        print_warning "workspace user ${YELLOW}missing${NC}  ${GRAY}create workspace/USER.md${NC}"
+        if [ "$fix_mode" -eq 1 ]; then
+            doc_create_workspace_user
+            print_success "workspace user ${GREEN}fixed${NC}  ${GRAY}created workspace/USER.md${NC}"
+        else
+            print_warning "workspace user ${YELLOW}missing${NC}  ${GRAY}create workspace/USER.md${NC}"
+        fi
     fi
 
+    local api_ok=0
     if lsof -Pi ":$BACKEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
         local api_py=""
-        if [ -f "$BACKEND_DIR/.venv/bin/python" ]; then
-            api_py="$BACKEND_DIR/.venv/bin/python"
-        elif command -v python3 >/dev/null 2>&1; then
-            api_py="python3"
-        fi
+        api_py=$(doc_api_python)
 
         if [ -n "$api_py" ]; then
             if "$api_py" - "$BACKEND_PORT" <<'PY'
@@ -799,11 +976,19 @@ if not ok:
 PY
             then
                 print_success "api health   ${GREEN}ok${NC}  ${GRAY}/api/health${NC}"
+                api_ok=1
             else
                 print_warning "api health   ${YELLOW}unreachable${NC}  ${GRAY}backend process is up but API is not responding${NC}"
                 issues=1
             fi
         fi
+    fi
+    if [ "$api_ok" -eq 1 ]; then
+        if ! doc_check_skill_dependencies "$fix_mode"; then
+            issues=1
+        fi
+    else
+        print_warning "skill deps   ${YELLOW}skip${NC}  ${GRAY}api not ready (start Asta to inspect skills)${NC}"
     fi
 
     show_status full
@@ -862,7 +1047,19 @@ case "$1" in
         ;;
     doc|doctor)
         print_asta_banner
-        run_doc
+        case "$2" in
+            "")
+                run_doc
+                ;;
+            --fix)
+                run_doc --fix
+                ;;
+            *)
+                print_error "Unknown doc option: $2"
+                cecho "  ${GRAY}Use: ./asta.sh doc [--fix]${NC}"
+                exit 1
+                ;;
+        esac
         ;;
     update)
         print_asta_banner

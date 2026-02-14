@@ -77,6 +77,7 @@ If the panel shows "API off", start the backend first or use **Settings -> Run t
 | `./asta.sh restart` | Restart both services |
 | `./asta.sh status` | Show backend/frontend process status |
 | `./asta.sh doc` | Run safe diagnostics (setup + service checks) |
+| `./asta.sh doc --fix` | Run diagnostics + auto-fix common setup/dependency issues |
 
 ## Core Features
 

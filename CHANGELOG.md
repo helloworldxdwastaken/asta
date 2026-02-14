@@ -29,6 +29,24 @@ All notable changes to Asta are documented here.
 
 ---
 
+## [1.3.4] - 2026-02-14
+
+### Added
+
+- **`asta doc --fix` auto-remediation mode** — `doc` now supports `--fix` to auto-repair common setup issues:
+  - create backend venv + install backend deps
+  - install frontend dependencies
+  - create `backend/.env` from `.env.example` when missing
+  - create `workspace/USER.md` template when missing
+
+### Changed
+
+- **Skill/tool dependency diagnostics in `doc`** — `asta doc` now checks enabled skill availability via `/api/settings/skills` and reports missing dependencies/action hints.
+- **Optional dependency auto-install for skills** — in `doc --fix`, installable skill dependency issues with `install_cmd` are attempted automatically; non-installable cases are reported as manual actions.
+- **CLI/docs update** — command help and docs now document `doc --fix` usage.
+
+---
+
 ## [1.3.3] - 2026-02-14
 
 ### Changed
