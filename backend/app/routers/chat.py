@@ -5,8 +5,32 @@ from pydantic import BaseModel
 from app.handler import handle_message
 from app.db import get_db
 from app.providers.registry import list_providers
+from app.message_queue import queue_key
 
 router = APIRouter()
+
+
+def _normalize_wa_number(raw: str) -> str:
+    base = (raw or "").strip()
+    if "@" in base:
+        base = base.split("@", 1)[0]
+    return "".join(ch for ch in base if ch.isdigit())
+
+
+def _whatsapp_sender_allowed(
+    *,
+    whitelist: set[str],
+    owner_number: str,
+    self_chat_only: bool,
+    raw_number: str,
+) -> bool:
+    clean = _normalize_wa_number(raw_number)
+    owner = _normalize_wa_number(owner_number)
+    if self_chat_only:
+        return bool(owner) and clean == owner
+    if not whitelist:
+        return True
+    return (clean in whitelist) or (raw_number in whitelist)
 
 
 @router.get("/chat/messages")
@@ -47,13 +71,14 @@ async def chat(body: ChatIn):
         provider = body.provider
         if provider == "default":
             provider = await db.get_user_default_ai(body.user_id)
-        reply = await handle_message(
-            body.user_id, "web", body.text,
-            provider_name=provider,
-            conversation_id=cid,
-            channel_target="web",
-            mood=body.mood,
-        )
+        async with queue_key(f"web:{cid}"):
+            reply = await handle_message(
+                body.user_id, "web", body.text,
+                provider_name=provider,
+                conversation_id=cid,
+                channel_target="web",
+                mood=body.mood,
+            )
         return ChatOut(reply=reply, conversation_id=cid, provider=provider)
     except Exception as e:
         reply = str(e).strip() or "Unknown error"
@@ -64,10 +89,10 @@ async def chat(body: ChatIn):
 
 class IncomingWhatsApp(BaseModel):
     from_number: str
+    reply_to: str | None = None
     message: str
 
 
-@router.post("/incoming/whatsapp")
 @router.post("/incoming/whatsapp")
 async def incoming_whatsapp(body: IncomingWhatsApp):
     """Called by WhatsApp bridge when a message is received. Reminders will be sent back to this number."""
@@ -76,30 +101,35 @@ async def incoming_whatsapp(body: IncomingWhatsApp):
     import logging
     
     settings = get_settings()
-    whitelist = settings.whatsapp_whitelist
+    whitelist = set(settings.whatsapp_whitelist)
     
     # Add auto-detected owner from DB
+    owner = ""
     try:
         db = get_db()
         await db.connect()
-        owner = await db.get_system_config("whatsapp_owner")
+        owner = (await db.get_system_config("whatsapp_owner")) or ""
         if owner:
             whitelist.add(owner)
     except Exception as e:
         logging.error(f"Failed to get whatsapp_owner: {e}")
     
+    reply_target = (body.reply_to or body.from_number or "").strip()
     user_id = f"wa:{body.from_number}"
     # Strip suffix (e.g. @s.whatsapp.net or @lid) for whitelist check
-    clean_number = body.from_number.split("@")[0] if "@" in body.from_number else body.from_number
-
-    # Whitelist check
-    if whitelist and clean_number not in whitelist and body.from_number not in whitelist:
-        logging.warning(f"WhatsApp message from {body.from_number} ignored (not in whitelist).")
+    if not _whatsapp_sender_allowed(
+        whitelist=whitelist,
+        owner_number=owner,
+        self_chat_only=bool(settings.asta_whatsapp_self_chat_only),
+        raw_number=body.from_number,
+    ):
+        logging.warning(f"WhatsApp message from {body.from_number} ignored by policy.")
         return {"ignored": True}
 
-    reply = await handle_message(
-        user_id, "whatsapp", body.message, provider_name="default",
-        channel_target=body.from_number,
-    )
+    async with queue_key(f"whatsapp:{reply_target or body.from_number}"):
+        reply = await handle_message(
+            user_id, "whatsapp", body.message, provider_name="default",
+            channel_target=reply_target or body.from_number,
+        )
 
     return {"reply": reply}

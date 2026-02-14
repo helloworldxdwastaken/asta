@@ -34,3 +34,4 @@ psutil
 timezonefinder
 # Testing
 pytest
+pytest-asyncio

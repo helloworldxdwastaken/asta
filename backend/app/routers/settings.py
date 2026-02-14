@@ -5,14 +5,16 @@ import re
 import shutil
 import tempfile
 import zipfile
+from datetime import datetime, timezone
 import httpx
 from pathlib import Path
 from fastapi import APIRouter, Request, UploadFile, File, HTTPException
 from pydantic import BaseModel
 
-from app.config import get_settings
+from app.config import get_settings, set_env_value
 from app.db import get_db
 from app.exec_tool import get_effective_exec_bins, resolve_executable
+from app.whatsapp_bridge import get_whatsapp_bridge_status
 
 router = APIRouter()
 
@@ -74,7 +76,7 @@ SKILLS = [
     {"id": "weather", "name": "Weather", "description": "Current weather and forecast (today, tomorrow). Set your location once so Asta can answer."},
     {"id": "google_search", "name": "Google search", "description": "Search the web for current information"},
     {"id": "lyrics", "name": "Lyrics", "description": "Find song lyrics (free, no key). Ask e.g. 'lyrics for Bohemian Rhapsody'"},
-    {"id": "spotify", "name": "Spotify", "description": "Search songs on Spotify. Set Client ID and Secret in Settings → Spotify (or in backend/.env). Playback on your devices (with device picker) coming soon."},
+    {"id": "spotify", "name": "Spotify", "description": "Search songs on Spotify. Set Client ID and Secret in Settings → Spotify (or in backend/.env). You can also connect your Spotify account for playback on your devices (with device picker)."},
     {"id": "reminders", "name": "Reminders", "description": "Wake me up or remind me at a time. Set your location so times are in your timezone. E.g. 'Wake me up tomorrow at 7am' or 'Remind me at 6pm to call mom'."},
     {"id": "audio_notes", "name": "Audio notes", "description": "Upload audio (meetings, calls, voice memos); Asta transcribes and formats as meeting notes, action items, or conversation summary. No API key for transcription (runs locally)."},
     {"id": "silly_gif", "name": "Silly GIF", "description": "Occasionally replies with a relevant GIF in friendly chats. Requires Giphy API key."},
@@ -98,6 +100,14 @@ class DefaultAiIn(BaseModel):
     provider: str  # groq | google | claude | ollama | openrouter
 
 
+class ThinkingIn(BaseModel):
+    thinking_level: str  # off | low | medium | high
+
+
+class ReasoningIn(BaseModel):
+    reasoning_mode: str  # off | on | stream
+
+
 @router.get("/settings/default-ai")
 async def get_default_ai(user_id: str = "default"):
     db = get_db()
@@ -114,6 +124,48 @@ async def set_default_ai(body: DefaultAiIn, user_id: str = "default"):
     await db.connect()
     await db.set_user_default_ai(user_id, body.provider)
     return {"provider": body.provider}
+
+
+@router.get("/settings/thinking")
+@router.get("/api/settings/thinking")
+async def get_thinking(user_id: str = "default"):
+    db = get_db()
+    await db.connect()
+    level = await db.get_user_thinking_level(user_id)
+    return {"thinking_level": level}
+
+
+@router.put("/settings/thinking")
+@router.put("/api/settings/thinking")
+async def set_thinking(body: ThinkingIn, user_id: str = "default"):
+    level = (body.thinking_level or "").strip().lower()
+    if level not in ("off", "low", "medium", "high"):
+        raise HTTPException(status_code=400, detail="thinking_level must be off, low, medium, or high")
+    db = get_db()
+    await db.connect()
+    await db.set_user_thinking_level(user_id, level)
+    return {"thinking_level": level}
+
+
+@router.get("/settings/reasoning")
+@router.get("/api/settings/reasoning")
+async def get_reasoning(user_id: str = "default"):
+    db = get_db()
+    await db.connect()
+    mode = await db.get_user_reasoning_mode(user_id)
+    return {"reasoning_mode": mode}
+
+
+@router.put("/settings/reasoning")
+@router.put("/api/settings/reasoning")
+async def set_reasoning(body: ReasoningIn, user_id: str = "default"):
+    mode = (body.reasoning_mode or "").strip().lower()
+    if mode not in ("off", "on", "stream"):
+        raise HTTPException(status_code=400, detail="reasoning_mode must be off, on, or stream")
+    db = get_db()
+    await db.connect()
+    await db.set_user_reasoning_mode(user_id, mode)
+    return {"reasoning_mode": mode}
 
 
 class FallbackProvidersIn(BaseModel):
@@ -228,6 +280,13 @@ async def get_status(user_id: str = "default"):
     s = get_settings()
     api_status = await db.get_api_keys_status()
     ollama_ok = await _ollama_reachable()
+    whatsapp = await get_whatsapp_bridge_status(s.asta_whatsapp_bridge_url)
+    from app.memory_health import get_memory_health
+    from app.security_audit import collect_security_warnings
+    memory = await get_memory_health()
+    security = await collect_security_warnings(db, user_id=user_id)
+    thinking_level = await db.get_user_thinking_level(user_id)
+    reasoning_mode = await db.get_user_reasoning_mode(user_id)
     apis = {
         "groq": api_status.get("groq_api_key", False),
         "gemini": api_status.get("gemini_api_key", False) or api_status.get("google_ai_key", False),
@@ -238,7 +297,8 @@ async def get_status(user_id: str = "default"):
     }
     integrations = {
         "telegram": bool(api_status.get("telegram_bot_token") or s.telegram_bot_token),
-        "whatsapp": bool(s.asta_whatsapp_bridge_url),
+        # Single-user semantics: integration is "on" only when linked and connected.
+        "whatsapp": bool(whatsapp.get("connected")),
     }
     toggles = await db.get_all_skill_toggles(user_id)
     files_avail = bool(s.asta_allowed_paths and s.asta_allowed_paths.strip()) or bool(s.workspace_path)
@@ -286,10 +346,40 @@ async def get_status(user_id: str = "default"):
     return {
         "apis": apis,
         "integrations": integrations,
+        "memory": memory,
+        "security": security,
+        "thinking": {"level": thinking_level},
+        "reasoning": {"mode": reasoning_mode},
+        "channels": {
+            "telegram": {
+                "configured": bool(api_status.get("telegram_bot_token") or s.telegram_bot_token),
+            },
+            "whatsapp": whatsapp,
+        },
         "skills": skills,
         "app": s.app_name,
         "version": version,
     }
+
+
+@router.get("/settings/memory-health")
+@router.get("/api/settings/memory-health")
+async def memory_health_endpoint(force: bool = False):
+    """Doctor-style memory diagnostics (no model call)."""
+    from app.memory_health import get_memory_health
+
+    return await get_memory_health(force=force)
+
+
+@router.get("/settings/security-audit")
+@router.get("/api/settings/security-audit")
+async def security_audit_endpoint(user_id: str = "default"):
+    """Return lightweight security findings for risky runtime configuration."""
+    from app.security_audit import collect_security_warnings
+
+    db = get_db()
+    await db.connect()
+    return await collect_security_warnings(db, user_id=user_id)
 
 
 @router.get("/settings/keys")
@@ -349,6 +439,12 @@ class WhatsAppOwnerIn(BaseModel):
     number: str
 
 
+class WhatsAppPolicyIn(BaseModel):
+    allowed_numbers: str = ""
+    self_chat_only: bool = False
+    owner_number: str | None = None
+
+
 @router.post("/settings/whatsapp/owner")
 @router.post("/api/settings/whatsapp/owner")
 async def set_whatsapp_owner(body: WhatsAppOwnerIn):
@@ -359,6 +455,44 @@ async def set_whatsapp_owner(body: WhatsAppOwnerIn):
     num = "".join(filter(str.isdigit, body.number))
     await db.set_system_config("whatsapp_owner", num)
     return {"ok": True, "number": num}
+
+
+@router.get("/settings/whatsapp/policy")
+@router.get("/api/settings/whatsapp/policy")
+async def get_whatsapp_policy():
+    """Return WhatsApp sender policy controls for UI."""
+    s = get_settings()
+    db = get_db()
+    await db.connect()
+    owner = (await db.get_system_config("whatsapp_owner")) or ""
+    return {
+        "allowed_numbers": sorted(s.whatsapp_whitelist),
+        "self_chat_only": bool(s.asta_whatsapp_self_chat_only),
+        "owner_number": owner,
+    }
+
+
+@router.put("/settings/whatsapp/policy")
+@router.put("/api/settings/whatsapp/policy")
+async def set_whatsapp_policy(body: WhatsAppPolicyIn):
+    """Update WhatsApp sender policy controls."""
+    # Normalize comma/newline separated numbers into digits-only CSV.
+    parts = re.split(r"[\s,]+", body.allowed_numbers or "")
+    nums = sorted({"".join(ch for ch in p if ch.isdigit()) for p in parts if p.strip()})
+    set_env_value("ASTA_WHATSAPP_ALLOWED_NUMBERS", ",".join(nums), allow_empty=True)
+    set_env_value("ASTA_WHATSAPP_SELF_CHAT_ONLY", "1" if body.self_chat_only else "0")
+
+    owner = "".join(ch for ch in (body.owner_number or "") if ch.isdigit())
+    db = get_db()
+    await db.connect()
+    if owner:
+        await db.set_system_config("whatsapp_owner", owner)
+    return {
+        "ok": True,
+        "allowed_numbers": nums,
+        "self_chat_only": bool(body.self_chat_only),
+        "owner_number": owner or ((await db.get_system_config("whatsapp_owner")) or ""),
+    }
 
 
 @router.get("/settings/test-key")
@@ -461,6 +595,7 @@ def _get_all_skill_defs():
             "install_cmd": getattr(r, "install_cmd", None),
             "install_label": getattr(r, "install_label", None),
             "required_bins": list(getattr(r, "required_bins", ())),
+            "supported_os": list(getattr(r, "supported_os", ())),
         })
     return out
 
@@ -480,7 +615,7 @@ async def get_skills(user_id: str = "default"):
         files_available = files_available or bool(await db.get_allowed_paths(user_id))
     except Exception:
         pass
-    effective_exec_bins = await get_effective_exec_bins(db)
+    effective_exec_bins = await get_effective_exec_bins(db, user_id)
     skills_available = {
         "files": files_available,
         "drive": False,  # OAuth not wired yet
@@ -505,17 +640,25 @@ async def get_skills(user_id: str = "default"):
         "silly_gif": "Set API key",
     }
     all_skill_defs = _get_all_skill_defs()
+    from app.workspace import get_host_os_tag
+    host_os = get_host_os_tag()
     out = []
     for sk in all_skill_defs:
         sid = sk["id"]
         available = skills_available.get(sid, True)
+        supported_os = [str(x).lower() for x in (sk.get("supported_os") or []) if str(x).strip()]
+        os_ok = (not supported_os) or (host_os in supported_os)
+        if not os_ok:
+            available = False
         required_bins = sk.get("required_bins") or []
         if required_bins:
             # Exec-based skill: available if all bins are in allowlist and findable (PATH or common paths)
             on_path = all(resolve_executable(b) for b in required_bins)
             in_allowlist = all(b.lower() in effective_exec_bins for b in required_bins)
-            available = on_path and in_allowlist
+            available = available and on_path and in_allowlist
         action_hint = action_hints.get(sid) if not available else None
+        if not available and not os_ok:
+            action_hint = f"Only on {', '.join(supported_os)}"
         if required_bins and not available and not action_hint:
             action_hint = "Install & enable exec"
         out.append({
@@ -530,7 +673,7 @@ async def get_skills(user_id: str = "default"):
 @router.put("/settings/skills")
 @router.put("/api/settings/skills")
 async def set_skill_toggle(body: SkillToggleIn, user_id: str = "default"):
-    """Enable or disable a skill for the AI (built-in or workspace). When enabling a skill with required_bins (e.g. apple-notes), auto-adds those bins to exec allowlist."""
+    """Enable or disable a skill for the AI (built-in or workspace)."""
     all_defs = _get_all_skill_defs()
     valid_ids = {s["id"] for s in all_defs}
     if body.skill_id not in valid_ids:
@@ -538,17 +681,27 @@ async def set_skill_toggle(body: SkillToggleIn, user_id: str = "default"):
     db = get_db()
     await db.connect()
     await db.set_skill_enabled(user_id, body.skill_id, body.enabled)
-    # When enabling a skill that requires exec bins (e.g. memo for apple-notes), add them to DB allowlist
-    if body.enabled:
-        skill_def = next((s for s in all_defs if s["id"] == body.skill_id), None)
-        required_bins = (skill_def or {}).get("required_bins") or []
-        if required_bins:
-            from app.exec_tool import SYSTEM_CONFIG_EXEC_BINS_KEY
-            extra = (await db.get_system_config(SYSTEM_CONFIG_EXEC_BINS_KEY)) or ""
-            existing = {b.strip().lower() for b in extra.split(",") if b.strip()}
-            for b in required_bins:
-                existing.add(b.strip().lower())
-            await db.set_system_config(SYSTEM_CONFIG_EXEC_BINS_KEY, ",".join(sorted(existing)))
+    # Keep exec allowlist aligned with enabled workspace skills:
+    # preserve manually configured non-workspace bins, but sync workspace bins dynamically.
+    from app.exec_tool import SYSTEM_CONFIG_EXEC_BINS_KEY
+    from app.workspace import discover_workspace_skills
+
+    workspace_skills = discover_workspace_skills()
+    all_workspace_bins: set[str] = set()
+    enabled_workspace_bins: set[str] = set()
+    for ws in workspace_skills:
+        ws_bins = {b.strip().lower() for b in (ws.required_bins or ()) if b.strip()}
+        if not ws_bins:
+            continue
+        all_workspace_bins |= ws_bins
+        if await db.get_skill_enabled(user_id, ws.name):
+            enabled_workspace_bins |= ws_bins
+
+    extra = (await db.get_system_config(SYSTEM_CONFIG_EXEC_BINS_KEY)) or ""
+    existing = {b.strip().lower() for b in extra.split(",") if b.strip()}
+    next_bins = {b for b in existing if b not in all_workspace_bins}
+    next_bins |= enabled_workspace_bins
+    await db.set_system_config(SYSTEM_CONFIG_EXEC_BINS_KEY, ",".join(sorted(next_bins)))
     return {"skill_id": body.skill_id, "enabled": body.enabled}
 
 
@@ -642,20 +795,69 @@ async def get_notifications(user_id: str = "default", limit: int = 50):
     return {"notifications": items}
 
 
+@router.get("/settings/notes")
+@router.get("/api/settings/notes")
+async def get_workspace_notes(limit: int = 20):
+    """List markdown notes from workspace/notes for Dashboard (local notes, not Apple Notes)."""
+    lim = max(1, min(int(limit), 100))
+    workspace = get_settings().workspace_path
+    if not workspace:
+        return {"notes": []}
+
+    items: list[dict] = []
+    candidates = [workspace / "notes", workspace / "workspace" / "notes"]
+    for notes_dir in candidates:
+        if not notes_dir.exists() or not notes_dir.is_dir():
+            continue
+        for file_path in notes_dir.rglob("*.md"):
+            if not file_path.is_file():
+                continue
+            try:
+                st = file_path.stat()
+            except OSError:
+                continue
+            rel = file_path.relative_to(workspace).as_posix()
+            items.append(
+                {
+                    "name": file_path.name,
+                    "path": rel,
+                    "size": int(st.st_size),
+                    "modified_at": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
+                }
+            )
+    if not items:
+        return {"notes": []}
+    seen_paths: set[str] = set()
+    deduped: list[dict] = []
+    for item in sorted(items, key=lambda x: x["modified_at"], reverse=True):
+        path = str(item.get("path") or "")
+        if not path or path in seen_paths:
+            continue
+        seen_paths.add(path)
+        deduped.append(item)
+    return {"notes": deduped[:lim]}
+
+
 @router.delete("/notifications/{id}")
 @router.delete("/api/notifications/{id}")
 async def delete_notification(id: int, user_id: str = "default"):
     """Delete a reminder/notification."""
+    from app.db import decode_one_shot_reminder_id
     db = get_db()
     await db.connect()
     # Remove from DB
-    deleted = await db.delete_reminder(id)
+    deleted = await db.delete_reminder(id, user_id)
     # Also try to remove from scheduler if it's pending
     from app.tasks.scheduler import get_scheduler
     sch = get_scheduler()
-    job_id = f"rem_{id}"
-    if sch.get_job(job_id):
-        sch.remove_job(job_id)
+    legacy_job_id = f"rem_{id}"
+    if sch.get_job(legacy_job_id):
+        sch.remove_job(legacy_job_id)
+    one_shot_id = decode_one_shot_reminder_id(id)
+    if one_shot_id is not None:
+        cron_job_id = f"cron_{one_shot_id}"
+        if sch.get_job(cron_job_id):
+            sch.remove_job(cron_job_id)
     return {"ok": deleted, "id": id}
 
 

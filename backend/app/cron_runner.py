@@ -7,9 +7,15 @@ from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
 
-from app.db import get_db
-from app.reminders import send_notification
+from app.db import (
+    encode_one_shot_reminder_id,
+    get_db,
+    is_one_shot_cron_expr,
+    one_shot_cron_expr_to_run_at,
+)
+from app.reminders import _format_reminder_message, send_notification
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +38,17 @@ async def _fire_cron_job_async(cron_job_id: int) -> None:
     channel = job.get("channel") or "web"
     channel_target = (job.get("channel_target") or "").strip()
     message = (job.get("message") or "").strip()
+    cron_expr = (job.get("cron_expr") or "").strip()
     if not message:
+        return
+    if is_one_shot_cron_expr(cron_expr):
+        # One-shot reminders should not call handle_message again.
+        try:
+            await send_notification(channel, channel_target, _format_reminder_message(message))
+        except Exception as e:
+            logger.exception("One-shot reminder job %s failed: %s", cron_job_id, e)
+            return
+        await db.mark_reminder_sent(encode_one_shot_reminder_id(cron_job_id))
         return
     try:
         from app.handler import handle_message
@@ -51,8 +67,29 @@ async def _fire_cron_job_async(cron_job_id: int) -> None:
             await send_notification(channel, channel_target, f"Cron job failed: {str(e)[:300]}")
 
 
-def _make_cron_trigger(cron_expr: str, tz_str: str | None) -> CronTrigger:
-    """Build CronTrigger from 5-field cron and optional IANA timezone."""
+def _parse_iso_utc(value: str) -> datetime | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _make_cron_trigger(cron_expr: str, tz_str: str | None):
+    """Build trigger from cron expr or one-shot @at expression."""
+    if is_one_shot_cron_expr(cron_expr):
+        run_at = _parse_iso_utc(one_shot_cron_expr_to_run_at(cron_expr) or "")
+        if not run_at:
+            raise ValueError(f"Invalid one-shot cron expression: {cron_expr}")
+        return DateTrigger(run_date=run_at)
+
     tz = None
     if (tz_str or "").strip():
         try:
@@ -94,15 +131,26 @@ async def reload_cron_jobs() -> None:
     for j in sch.get_jobs():
         if j.id and j.id.startswith(CRON_JOB_PREFIX):
             sch.remove_job(j.id)
+    fired_due = 0
+    now_utc = datetime.now(timezone.utc)
     for j in jobs:
         job_id = j.get("id")
         cron_expr = (j.get("cron_expr") or "").strip()
         tz_str = (j.get("tz") or "").strip() or None
         if not job_id or not cron_expr:
             continue
+        if is_one_shot_cron_expr(cron_expr):
+            run_at = _parse_iso_utc(one_shot_cron_expr_to_run_at(cron_expr) or "")
+            if run_at and run_at <= now_utc:
+                try:
+                    await _fire_cron_job_async(int(job_id))
+                    fired_due += 1
+                except Exception as e:
+                    logger.warning("Could not fire due one-shot reminder %s: %s", job_id, e)
+                continue
         try:
             add_cron_job_to_scheduler(sch, job_id, cron_expr, tz_str)
         except Exception as e:
             logger.warning("Could not schedule cron job %s (%s): %s", job_id, cron_expr, e)
     if jobs:
-        logger.info("Reloaded %d cron job(s)", len(jobs))
+        logger.info("Reloaded %d cron job(s) (%d fired immediately)", len(jobs), fired_due)

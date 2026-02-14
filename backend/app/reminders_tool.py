@@ -110,14 +110,22 @@ async def run_reminders_tool(
         reminder_id = params.get("id")
         if not isinstance(reminder_id, int) or reminder_id <= 0:
             return "Error: remove action requires integer `id`."
-        deleted = await db.delete_reminder(reminder_id)
+        deleted = await db.delete_reminder(reminder_id, user_id)
         try:
+            from app.db import decode_one_shot_reminder_id
             from app.tasks.scheduler import get_scheduler
 
             sch = get_scheduler()
-            job_id = f"rem_{reminder_id}"
-            if sch.get_job(job_id):
-                sch.remove_job(job_id)
+            # Legacy reminder jobs (pre-migration).
+            legacy_job_id = f"rem_{reminder_id}"
+            if sch.get_job(legacy_job_id):
+                sch.remove_job(legacy_job_id)
+            # One-shot cron-backed reminders.
+            one_shot_id = decode_one_shot_reminder_id(reminder_id)
+            if one_shot_id is not None:
+                cron_job_id = f"cron_{one_shot_id}"
+                if sch.get_job(cron_job_id):
+                    sch.remove_job(cron_job_id)
         except Exception:
             pass
         return json.dumps({"ok": bool(deleted), "removed_id": reminder_id}, indent=0)

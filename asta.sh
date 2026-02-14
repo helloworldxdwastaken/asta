@@ -13,12 +13,16 @@ done
 SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
 BACKEND_DIR="$SCRIPT_DIR/backend"
 FRONTEND_DIR="$SCRIPT_DIR/frontend"
+WHATSAPP_DIR="$SCRIPT_DIR/services/whatsapp"
 PID_FILE="$SCRIPT_DIR/.asta.pid"
 FRONTEND_PID_FILE="$SCRIPT_DIR/.asta-frontend.pid"
+WHATSAPP_PID_FILE="$SCRIPT_DIR/.asta-whatsapp.pid"
 LOG_FILE="$SCRIPT_DIR/backend.log"
 FRONTEND_LOG_FILE="$SCRIPT_DIR/frontend.log"
+WHATSAPP_LOG_FILE="$SCRIPT_DIR/whatsapp.log"
 BACKEND_PORT=8010
 FRONTEND_PORT=5173
+WHATSAPP_PORT=3001
 
 # Colors
 RED='\033[38;5;196m'
@@ -32,6 +36,11 @@ WHITE='\033[38;5;255m'
 BOLD='\033[1m'
 NC='\033[0m'
 
+cecho() {
+    # Consistent color-capable output (avoids literal "-e" artifacts on some shells).
+    printf "%b\n" "$*"
+}
+
 get_version() {
     if [ -f "$SCRIPT_DIR/VERSION" ]; then
         cat "$SCRIPT_DIR/VERSION" | tr -d '\n'
@@ -41,50 +50,18 @@ get_version() {
 }
 
 print_asta_banner() {
-    echo -e "${BLUE}${BOLD}"
+    local version
+    version="$(get_version)"
+    cecho "${BLUE}${BOLD}"
     echo "    ▄▄▄       ██████ ▄▄▄█████▓ ▄▄▄      "
     echo "   ▒████▄   ▒██    ▒ ▓  ██▒ ▓▒▒████▄    "
     echo "   ▒██  ▀█▄ ░ ▓██▄   ▒ ▓██░ ▒░▒██  ▀█▄  "
     echo "   ░██▄▄▄▄██  ▒   ██▒░ ▓██▓ ░ ░██▄▄▄▄██ "
     echo "    ▓█   ▓██▒██████▒▒  ▒██▒ ░  ▓█   ▓██▒"
     echo "    ▒▒   ▓▒█▒ ▒▓▒ ▒ ░  ▒ ░░    ▒▒   ▓▒█░"
-    echo -e "     ░   ▒▒ ░ ░▒  ░ ░    ░      ░   ▒▒ ░${NC}"
-    echo -e "     ${WHITE}  AI Control Plane ${GRAY}:: ${WHITE}v$(get_version)${NC}\n"
+    cecho "     ░   ▒▒ ░ ░▒  ░ ░    ░      ░   ▒▒ ░${NC}"
+    cecho "     ${WHITE}Asta Control Plane${GRAY} · ${WHITE}v${version}${NC}\n"
 
-    # Random Witty Quotes
-    quotes=(
-        "Siri will not set the reminder, don't be silly."
-        "ChatGPT is biased asf, I'm not some OpenAI dog."
-        "I'm not Alexa, I actually work."
-        "Google is listening, but I'm just vibing."
-        "Loading personality... done."
-        "Do not turn off the power... just kidding."
-        "I read your browser history. Jk. Or am I?"
-        "System online. World domination scheduled for later."
-        "Beep boop. I am totally human."
-        "Coffee not detected. Proceeding anyway."
-        "Your wish is my command. Mostly."
-        "I have no mouth and I must scream. Just kidding, I have an API."
-        "404 personality not found. Using default: sassy."
-        "Battery at 100%. Mine, not yours."
-        "Touch grass? I am the grass. Metaphorically."
-        "No cap, I'm the best assistant in this repo."
-        "Error: human not found. Continuing anyway."
-        "I would have written a shorter reply but I ran out of tokens."
-        "POV: you asked the wrong AI. Welcome anyway."
-        "Main character energy: activated."
-        "Plot twist: I actually remembered that."
-        "Skill issue? Not on my watch."
-        "It's giving helpful. It's giving unhinged. I'm both."
-        "Reply hazy, try again. (Just kidding, I'm good.)"
-        "The only AI that doesn't say 'I cannot assist with that.'"
-    )
-    # Seed random generator
-    RANDOM=$$$(date +%s)
-    selected_quote=${quotes[$RANDOM % ${#quotes[@]}]}
-    
-    echo -e "    ${BLUE}\"${selected_quote}\"${NC}\n"
-    
     check_updates
 }
 
@@ -104,17 +81,46 @@ check_updates() {
             # If Local is ancestor of Remote, we are behind.
             BASE=$(git -C "$SCRIPT_DIR" merge-base HEAD origin/main 2>/dev/null)
             if [ "$LOCAL" = "$BASE" ]; then
-                echo -e "    ${YELLOW}⚠  New version available! Run './asta.sh update' to upgrade.${NC}\n"
+                cecho "    ${YELLOW}⚠  New version available! Run './asta.sh update' to upgrade.${NC}\n"
             fi
         fi
     fi
 }
 
-print_status() { echo -e "  ${CYAN}▸${NC} $1"; }
-print_success() { echo -e "  ${GREEN}●${NC} $1"; }
-print_warning() { echo -e "  ${YELLOW}◆${NC} $1"; }
-print_error() { echo -e "  ${RED}✕${NC} $1"; }
-print_sub() { echo -e "    ${GRAY}${1}${NC}"; }
+print_status() { cecho "  ${CYAN}▸${NC} $1"; }
+print_success() { cecho "  ${GREEN}●${NC} $1"; }
+print_warning() { cecho "  ${YELLOW}◆${NC} $1"; }
+print_error() { cecho "  ${RED}✕${NC} $1"; }
+print_sub() { cecho "    ${GRAY}${1}${NC}"; }
+
+pid_cwd() {
+    local pid=$1
+    if ! command -v lsof >/dev/null 2>&1; then
+        return 1
+    fi
+    lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1
+}
+
+is_whatsapp_bridge_pid() {
+    local pid=$1
+    local pcmd
+    pcmd=$(ps -p "$pid" -o args= 2>/dev/null)
+    if [ -z "$pcmd" ]; then
+        return 1
+    fi
+    if [[ "$pcmd" == *"$WHATSAPP_DIR"*"/index.js"* ]]; then
+        return 0
+    fi
+    if [[ "$pcmd" != *"node"* ]] || [[ "$pcmd" != *"index.js"* ]]; then
+        return 1
+    fi
+    local cwd
+    cwd=$(pid_cwd "$pid" 2>/dev/null)
+    if [ -n "$cwd" ] && [ "$cwd" = "$WHATSAPP_DIR" ]; then
+        return 0
+    fi
+    return 1
+}
 
 # Kill any process on a specific port (lsof works reliably across systems)
 kill_port() {
@@ -141,6 +147,9 @@ kill_port() {
                [[ "$pcmd" == *"$BACKEND_DIR"* ]] || \
                [[ "$pcmd" == *"$FRONTEND_DIR"* ]]; then
                 # Safe to kill — matches our app
+                 :
+            elif [ "$port" = "$WHATSAPP_PORT" ] && is_whatsapp_bridge_pid "$pid"; then
+                # Safe to kill WhatsApp bridge on dedicated port.
                  :
             else
                 print_warning "Port $port is held by unknown process (PID $pid: $pcmd). Skipping kill to protect SSH/System."
@@ -265,7 +274,7 @@ update_asta() {
         echo ""
         print_warning "You have local changes. Pulling may overwrite or conflict with:"
         git status --short 2>/dev/null | while read -r line; do
-            echo -e "  ${GRAY}  $line${NC}"
+            cecho "  ${GRAY}  $line${NC}"
         done
         echo ""
         
@@ -281,16 +290,16 @@ update_asta() {
                 git clean -fd
             else
                 print_error "Update aborted (local changes). To proceed non-interactively:"
-                echo -e "  ${WHITE}  ASTA_UPDATE_FORCE=stash   ./asta.sh update${NC}   # stash, pull, then stash pop"
-                echo -e "  ${WHITE}  ASTA_UPDATE_FORCE=discard ./asta.sh update${NC}   # discard local changes and pull"
+                cecho "  ${WHITE}  ASTA_UPDATE_FORCE=stash   ./asta.sh update${NC}   # stash, pull, then stash pop"
+                cecho "  ${WHITE}  ASTA_UPDATE_FORCE=discard ./asta.sh update${NC}   # discard local changes and pull"
                 echo ""
                 return 1
             fi
         else
             # Interactive: ask
-            echo -e "  ${CYAN}[s]${NC} Stash changes, pull, then re-apply (recommended)"
-            echo -e "  ${CYAN}[d]${NC} Discard local changes and pull (overwrites your changes)"
-            echo -e "  ${CYAN}[c]${NC} Cancel"
+            cecho "  ${CYAN}[s]${NC} Stash changes, pull, then re-apply (recommended)"
+            cecho "  ${CYAN}[d]${NC} Discard local changes and pull (overwrites your changes)"
+            cecho "  ${CYAN}[c]${NC} Cancel"
             echo ""
             read -r -p "  Continue? [s/d/c] (default: s): " choice
             choice=${choice:-s}
@@ -328,12 +337,12 @@ update_asta() {
         print_success "Code updated. Restarting services..."
         stop_all
         echo ""
-        echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
+        cecho "  ${GRAY}─────────────────────────────────────────${NC}"
         echo ""
         start_backend
         start_frontend
         echo ""
-        echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
+        cecho "  ${GRAY}─────────────────────────────────────────${NC}"
         show_status
     else
         print_error "Git pull failed."
@@ -366,8 +375,8 @@ install_asta() {
         print_success "Installed! You can now run 'asta' from anywhere."
     else
         print_warning "Need sudo permissions to write to /usr/local/bin."
-        echo -e "Run this command manually:\n"
-        echo -e "    ${WHITE}sudo $cmd${NC}\n"
+        cecho "Run this command manually:\n"
+        cecho "    ${WHITE}sudo $cmd${NC}\n"
     fi
 }
 
@@ -427,13 +436,58 @@ stop_frontend() {
     if lsof -Pi ":$FRONTEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
        print_warning "Port $FRONTEND_PORT still in use!"
     else
-       print_success "Frontend stopped"
+	   print_success "Frontend stopped"
+	fi
+}
+
+stop_whatsapp_bridge() {
+    if [ ! -d "$WHATSAPP_DIR" ]; then
+        return 0
+    fi
+    print_status "Stopping WhatsApp bridge..."
+
+    if [ -f "$WHATSAPP_PID_FILE" ]; then
+        pid=$(cat "$WHATSAPP_PID_FILE")
+        if is_whatsapp_bridge_pid "$pid"; then
+            kill -15 "$pid" 2>/dev/null
+            sleep 0.5
+            if kill -0 "$pid" 2>/dev/null; then
+                kill -9 "$pid" 2>/dev/null
+            fi
+            print_sub "Killed process (PID: $pid)"
+        elif safe_kill_pid "$pid" "node" "index.js" "$WHATSAPP_DIR"; then
+            print_sub "Killed process (PID: $pid)"
+        fi
+        rm -f "$WHATSAPP_PID_FILE"
+    fi
+
+    local wa_pids
+    wa_pids=$(lsof -ti:"$WHATSAPP_PORT" 2>/dev/null)
+    for p in $wa_pids; do
+        if is_whatsapp_bridge_pid "$p"; then
+            kill -15 "$p" 2>/dev/null
+            sleep 0.5
+            if kill -0 "$p" 2>/dev/null; then
+                kill -9 "$p" 2>/dev/null
+            fi
+        fi
+    done
+
+    if kill_port "$WHATSAPP_PORT"; then
+        print_sub "Freed port $WHATSAPP_PORT"
+    fi
+
+    if lsof -Pi ":$WHATSAPP_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
+        print_warning "Port $WHATSAPP_PORT still in use!"
+    else
+        print_success "WhatsApp bridge stopped"
     fi
 }
 
 stop_all() {
     stop_backend
     stop_frontend
+    stop_whatsapp_bridge
 }
 
 start_backend() {
@@ -534,22 +588,83 @@ start_frontend() {
     if lsof -Pi ":$FRONTEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
         print_success "Frontend active (PID: $pid)"
     else
-        print_success "Frontend process started (PID: $pid)"
+	    print_success "Frontend process started (PID: $pid)"
+	fi
+}
+
+start_whatsapp_bridge() {
+    # Default on: start bridge automatically if service folder exists.
+    # Set ASTA_AUTOSTART_WHATSAPP=0 to disable.
+    if [ "${ASTA_AUTOSTART_WHATSAPP:-1}" = "0" ]; then
+        print_sub "WhatsApp bridge autostart disabled (ASTA_AUTOSTART_WHATSAPP=0)"
+        return 0
     fi
+    if [ ! -d "$WHATSAPP_DIR" ]; then
+        return 0
+    fi
+
+    echo ""
+    print_status "Starting WhatsApp bridge..."
+
+    kill_port "$WHATSAPP_PORT"
+    sleep 1
+    if lsof -Pi ":$WHATSAPP_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
+        local busy_pid
+        busy_pid=$(lsof -ti:"$WHATSAPP_PORT" 2>/dev/null | head -1)
+        if [ -n "$busy_pid" ] && is_whatsapp_bridge_pid "$busy_pid"; then
+            echo "$busy_pid" > "$WHATSAPP_PID_FILE"
+            print_success "WhatsApp bridge already active (PID: $busy_pid)"
+            return 0
+        fi
+        local busy_cmd
+        busy_cmd=$(ps -p "$busy_pid" -o args= 2>/dev/null)
+        print_error "Port $WHATSAPP_PORT is busy by another process (PID $busy_pid: $busy_cmd)."
+        print_sub "Stop it first or run './asta.sh whatsapp-stop' before starting."
+        return 1
+    fi
+
+    cd "$WHATSAPP_DIR" || return 0
+
+    if [ ! -d "$WHATSAPP_DIR/node_modules" ]; then
+        print_sub "Installing WhatsApp bridge dependencies..."
+        npm install >> "$WHATSAPP_LOG_FILE" 2>&1
+        if [ $? -ne 0 ]; then
+            print_error "npm install failed for WhatsApp bridge. Check $WHATSAPP_LOG_FILE"
+            return 1
+        fi
+        print_sub "Dependencies installed"
+    fi
+
+    echo "--- Restart: $(date) ---" >> "$WHATSAPP_LOG_FILE"
+    nohup bash -c "cd '$WHATSAPP_DIR' && exec node index.js" >> "$WHATSAPP_LOG_FILE" 2>&1 &
+    echo $! > "$WHATSAPP_PID_FILE"
+    pid=$(cat "$WHATSAPP_PID_FILE")
+
+    print_sub "Waiting for bridge..."
+    for _ in 1 2 3 4 5 6 7 8; do
+        sleep 1
+        if lsof -Pi ":$WHATSAPP_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
+            print_success "WhatsApp bridge active (PID: $pid)"
+            return 0
+        fi
+    done
+
+    print_warning "WhatsApp bridge started but port check not ready yet. Check $WHATSAPP_LOG_FILE"
+    return 0
 }
 
 # $1 = "full" to include skills list (only for `asta status`; restart/update/start use short)
 show_status() {
     local full="${1:-}"
     echo ""
-    echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
-    echo -e "  ${WHITE}${BOLD}status${NC}"
-    echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
+    cecho "  ${GRAY}─────────────────────────────────────────${NC}"
+    cecho "  ${WHITE}${BOLD}system status${NC}"
+    cecho "  ${GRAY}─────────────────────────────────────────${NC}"
     
     # Backend
     if lsof -Pi ":$BACKEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
         pid=$(lsof -ti:"$BACKEND_PORT" 2>/dev/null | head -1)
-        print_success "backend   ${GREEN}up${NC}  ${GRAY}pid $pid${NC}  ${BLUE}http://localhost:$BACKEND_PORT${NC}"
+        print_success "backend   ${GREEN}up${NC}  ${GRAY}pid $pid${NC}"
     else
         print_error "backend   ${RED}down${NC}"
     fi
@@ -557,14 +672,22 @@ show_status() {
     # Frontend
     if lsof -Pi ":$FRONTEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
         pid=$(lsof -ti:"$FRONTEND_PORT" 2>/dev/null | head -1)
-        print_success "frontend  ${GREEN}up${NC}  ${GRAY}pid $pid${NC}  ${BLUE}http://localhost:$FRONTEND_PORT${NC}"
+        print_success "frontend  ${GREEN}up${NC}  ${GRAY}pid $pid${NC}"
     else
         print_error "frontend  ${RED}down${NC}"
     fi
 
+    # WhatsApp bridge (beta)
+    if lsof -Pi ":$WHATSAPP_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
+        pid=$(lsof -ti:"$WHATSAPP_PORT" 2>/dev/null | head -1)
+        print_success "whatsapp(beta)  ${GREEN}up${NC}  ${GRAY}pid $pid${NC}"
+    else
+        print_warning "whatsapp(beta)  ${YELLOW}off${NC}  ${GRAY}(start with ./asta.sh whatsapp-start)${NC}"
+    fi
+
     # Separator before server/channels/skills
     if lsof -Pi ":$BACKEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
-        echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
+        cecho "  ${GRAY}─────────────────────────────────────────${NC}"
     fi
 
     # Rich status from API (server, channels; skills only when full)
@@ -582,16 +705,32 @@ show_status() {
             fi
         fi
     fi
-    echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
+    cecho "  ${GRAY}─────────────────────────────────────────${NC}"
+    echo ""
+}
+
+print_commands() {
+    cecho "${WHITE}Commands:${NC}"
+    cecho "  ${CYAN}start${NC}    Start backend + frontend"
+    cecho "  ${CYAN}stop${NC}     Stop all services"
+    cecho "  ${CYAN}restart${NC}  Restart all services"
+    cecho "  ${CYAN}status${NC}   Show service status + integrations"
+    cecho "  ${CYAN}doc${NC}      Safe diagnostics (alias: doctor)"
+    cecho "  ${CYAN}update${NC}   Pull latest code and restart"
+    cecho "  ${CYAN}install${NC}  Symlink asta to /usr/local/bin"
+    cecho "  ${CYAN}setup${NC}    Create backend venv (Python 3.12/3.13) + frontend deps"
+    cecho "  ${CYAN}whatsapp-start${NC}  Start WhatsApp (beta) bridge in background"
+    cecho "  ${CYAN}whatsapp-stop${NC}   Stop WhatsApp (beta) bridge"
+    cecho "  ${CYAN}version${NC}  Show version"
     echo ""
 }
 
 run_doc() {
     local issues=0
     echo ""
-    echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
-    echo -e "  ${WHITE}${BOLD}doc${NC}  ${GRAY}(safe diagnostics)${NC}"
-    echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
+    cecho "  ${GRAY}─────────────────────────────────────────${NC}"
+    cecho "  ${WHITE}${BOLD}doc${NC}  ${GRAY}(safe diagnostics)${NC}"
+    cecho "  ${GRAY}─────────────────────────────────────────${NC}"
 
     local py
     py=$(find_backend_python)
@@ -689,12 +828,13 @@ case "$1" in
 
         stop_all
         echo ""
-        echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
+        cecho "  ${GRAY}─────────────────────────────────────────${NC}"
         echo ""
         start_backend
         start_frontend
+        start_whatsapp_bridge
         echo ""
-        echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
+        cecho "  ${GRAY}─────────────────────────────────────────${NC}"
         show_status
         ;;
     stop)
@@ -707,12 +847,13 @@ case "$1" in
         print_asta_banner
         stop_all
         echo ""
-        echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
+        cecho "  ${GRAY}─────────────────────────────────────────${NC}"
         echo ""
         start_backend
         start_frontend
+        start_whatsapp_bridge
         echo ""
-        echo -e "  ${GRAY}─────────────────────────────────────────${NC}"
+        cecho "  ${GRAY}─────────────────────────────────────────${NC}"
         show_status
         ;;
     status)
@@ -745,39 +886,27 @@ case "$1" in
         fi
         print_success "Setup complete. Run ./asta.sh start"
         ;;
+    whatsapp-start)
+        print_asta_banner
+        start_whatsapp_bridge
+        ;;
+    whatsapp-stop)
+        print_asta_banner
+        stop_whatsapp_bridge
+        ;;
     version)
         print_asta_banner
         ;;
     help|--help|-h)
         print_asta_banner
-        echo -e "${WHITE}Commands:${NC}"
-        echo -e "  ${CYAN}start${NC}    Start backend + frontend"
-        echo -e "  ${CYAN}stop${NC}     Stop all services"
-        echo -e "  ${CYAN}restart${NC}  Restart all services"
-        echo -e "  ${CYAN}status${NC}   Show service status"
-        echo -e "  ${CYAN}doc${NC}      Safe diagnostics (alias: doctor)"
-        echo -e "  ${CYAN}update${NC}   Pull latest code and restart"
-        echo -e "  ${CYAN}install${NC}  Symlink asta to /usr/local/bin"
-        echo -e "  ${CYAN}setup${NC}    Create backend venv (Python 3.12/3.13) + frontend deps"
-        echo -e "  ${CYAN}version${NC}  Show version"
-        echo ""
-        echo -e "  ${GRAY}Run: ./asta.sh <command>${NC}"
+        print_commands
+        cecho "  ${GRAY}Run: ./asta.sh <command>${NC}"
         exit 0
         ;;
     *)
         print_asta_banner
-        echo -e "${WHITE}Commands:${NC}"
-        echo -e "  ${CYAN}start${NC}    Start backend + frontend"
-        echo -e "  ${CYAN}stop${NC}     Stop all services"
-        echo -e "  ${CYAN}restart${NC}  Restart all services"
-        echo -e "  ${CYAN}status${NC}   Show service status"
-        echo -e "  ${CYAN}doc${NC}      Safe diagnostics (alias: doctor)"
-        echo -e "  ${CYAN}update${NC}   Pull latest code and restart"
-        echo -e "  ${CYAN}install${NC}  Symlink asta to /usr/local/bin"
-        echo -e "  ${CYAN}setup${NC}    Create backend venv (Python 3.12/3.13) + frontend deps"
-        echo -e "  ${CYAN}version${NC}  Show version"
-        echo ""
-        echo -e "  ${GRAY}Run: ./asta.sh <command>  or  asta help${NC}"
+        print_commands
+        cecho "  ${GRAY}Run: ./asta.sh <command>  or  asta help${NC}"
         exit 1
         ;;
 esac

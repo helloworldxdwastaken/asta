@@ -11,6 +11,7 @@ const PROVIDER_LABELS: Record<string, string> = {
 };
 
 const USER_ID = "default";
+const STATUS_PREFIX = "[[ASTA_STATUS]]";
 
 type ChatChannel = "web" | "telegram";
 
@@ -26,20 +27,44 @@ export default function Chat() {
   const [loading, setLoading] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
   const bottom = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const pollRef = useRef<number | null>(null);
+  const [requestStartedAt, setRequestStartedAt] = useState<number | null>(null);
+  const [elapsedSec, setElapsedSec] = useState(0);
 
   const conversationId = `${USER_ID}:${channel}`;
+
+  const normalizeMessages = useCallback(
+    (rows: { role: string; content: string }[]) =>
+      (rows ?? []).map((m) => {
+        const raw = String(m.content ?? "");
+        const content = raw.startsWith(STATUS_PREFIX) ? raw.slice(STATUS_PREFIX.length).trim() : raw;
+        return { role: m.role as "user" | "assistant", content };
+      }),
+    []
+  );
+
+  const syncMessages = useCallback(async (): Promise<boolean> => {
+    try {
+      const r = await api.getChatMessages(conversationId, USER_ID);
+      setMessages(normalizeMessages(r.messages ?? []));
+      return true;
+    } catch {
+      return false;
+    }
+  }, [conversationId, normalizeMessages]);
 
   const loadMessages = useCallback(async () => {
     setLoadingHistory(true);
     try {
       const r = await api.getChatMessages(conversationId, USER_ID);
-      setMessages((r.messages ?? []).map((m) => ({ role: m.role as "user" | "assistant", content: m.content })));
+      setMessages(normalizeMessages(r.messages ?? []));
     } catch {
       setMessages([]);
     } finally {
       setLoadingHistory(false);
     }
-  }, [conversationId]);
+  }, [conversationId, normalizeMessages]);
 
   useEffect(() => {
     loadMessages();
@@ -58,9 +83,30 @@ export default function Chat() {
     bottom.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  useEffect(() => {
+    return () => {
+      if (pollRef.current != null) {
+        window.clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!loading || requestStartedAt == null) {
+      setElapsedSec(0);
+      return;
+    }
+    const update = () => setElapsedSec(Math.max(0, Math.floor((Date.now() - requestStartedAt) / 1000)));
+    update();
+    const t = window.setInterval(update, 1000);
+    return () => window.clearInterval(t);
+  }, [loading, requestStartedAt]);
+
   const resetChat = () => {
     setMessages([]);
     setInput("");
+    inputRef.current?.focus();
   };
 
   const send = async () => {
@@ -69,11 +115,25 @@ export default function Chat() {
     setInput("");
     setMessages((m) => [...m, { role: "user", content: text }]);
     setLoading(true);
+    setRequestStartedAt(Date.now());
+    if (pollRef.current != null) {
+      window.clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    pollRef.current = window.setInterval(() => {
+      void syncMessages();
+    }, 1000);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 120_000); // 120s for exec (e.g. Apple Notes)
     try {
       const r = await api.chat(text, provider, conversationId, controller.signal);
-      setMessages((m) => [...m, { role: "assistant", content: r.reply }]);
+      const synced = await syncMessages();
+      if (!synced) {
+        const reply = (r.reply || "").trim();
+        if (reply) {
+          setMessages((m) => [...m, { role: "assistant", content: reply }]);
+        }
+      }
     } catch (e) {
       const msg = (e as Error).message || String(e);
       const isTimeout = msg.includes("abort") || msg.includes("Timeout");
@@ -88,13 +148,24 @@ export default function Chat() {
       ]);
     } finally {
       clearTimeout(timeoutId);
+      if (pollRef.current != null) {
+        window.clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
       setLoading(false);
+      setRequestStartedAt(null);
+      setElapsedSec(0);
     }
   };
 
   const effectiveProvider = provider === "default" ? defaultProvider : provider;
   const modelName = models[effectiveProvider] || defaults[effectiveProvider];
   const channelLabel = channel === "telegram" ? "Telegram" : "Web";
+  const quickPrompts = [
+    "What reminders do I have?",
+    "Check my desktop files",
+    "What time is it for me?",
+  ];
 
   return (
     <div className="chat-page">
@@ -133,6 +204,7 @@ export default function Chat() {
             ))}
           </select>
           {modelName ? <span className="chat-model-badge" title="Model">{modelName.split(",")[0].trim()}</span> : null}
+          {loading ? <span className="chat-working-pill">Working {elapsedSec > 0 ? `${elapsedSec}s` : ""}</span> : null}
           <button
             type="button"
             className="chat-new-btn"
@@ -146,6 +218,12 @@ export default function Chat() {
       </header>
 
       <div className="chat-main">
+        {loading && (
+          <div className="chat-working-banner">
+            <span className="chat-working-dot" />
+            Asta is working. Tool-heavy requests can take up to 2 minutes.
+          </div>
+        )}
         <div className="chat-pane">
           {loadingHistory ? (
             <div className="chat-empty">
@@ -157,6 +235,21 @@ export default function Chat() {
               <div className="chat-empty-icon" aria-hidden>💬</div>
               <p className="chat-empty-title">{channelLabel} thread</p>
               <p className="chat-empty-hint">Send a message to start. Asta can use files, Drive, and learned knowledge.</p>
+              <div className="chat-quick-prompts">
+                {quickPrompts.map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    className="chat-quick-btn"
+                    onClick={() => {
+                      setInput(p);
+                      inputRef.current?.focus();
+                    }}
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : (
             <div className="chat-thread">
@@ -181,6 +274,7 @@ export default function Chat() {
 
         <div className="chat-input-wrap">
           <textarea
+            ref={inputRef}
             className="chat-input-field"
             value={input}
             onChange={(e) => setInput(e.target.value)}

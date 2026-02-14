@@ -6,7 +6,7 @@ metadata: {"clawdbot":{"emoji":"📝","os":["darwin","linux"]}}
 
 # Notes (OpenClaw-style)
 
-Save notes and lists to **workspace/notes/** so they persist and can be read later. Uses the same file-creation convention as the files skill.
+Save notes and lists to **`notes/`** (workspace-relative) so they persist and can be read later. Uses the same file-creation convention as the files skill.
 
 ## When to use
 
@@ -44,9 +44,9 @@ After the block is processed, Asta will confirm e.g. "I've saved that to `…/wo
 
 ## Reading notes
 
-If the user asks "what's in my notes" or "read my note about X", use the **files** skill context: list or read from `workspace/notes/` (user may need to open Files and grant access to the workspace if not already allowed). You can describe how to open the file in the panel or summarize if you have path access.
+If the user asks "what's in my notes" or "read my note about X", use the **files** skill context: list or read from `notes/` (do **not** prefix with `workspace/` in tool paths). You can describe how to open the file in the panel or summarize if you have path access.
 
 ## Requirements
 
-- Workspace must be set (default: project `workspace/`). Notes are stored under `workspace/notes/`.
+- Workspace must be set (default: project `workspace/`). Notes are stored under `workspace/notes/` on disk, but tool paths should be workspace-relative like `notes/my-note.md`.
 - The files skill’s file-creation convention is used; no extra install.

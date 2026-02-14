@@ -42,8 +42,8 @@ def resolve_executable(name: str) -> str | None:
     return None
 
 
-async def get_effective_exec_bins(db: Db | None) -> set[str]:
-    """OpenClaw-style: env + DB + bins from all workspace skills (autoAllowSkills)."""
+async def get_effective_exec_bins(db: Db | None, user_id: str | None = None) -> set[str]:
+    """OpenClaw-style: env + DB + bins from enabled workspace skills (autoAllowSkills)."""
     settings = get_settings()
     allowed = set(settings.exec_allowed_bins or [])
     if db:
@@ -57,9 +57,18 @@ async def get_effective_exec_bins(db: Db | None) -> set[str]:
                         allowed.add(b)
         except Exception:
             pass
-    # Bins from all workspace skills (OpenClaw autoAllowSkills: any skill in workspace contributes its required_bins)
-    from app.workspace import discover_workspace_skills
+    # Bins from enabled workspace skills only (OpenClaw autoAllowSkills behavior).
+    from app.workspace import discover_workspace_skills, is_skill_runtime_eligible
     for skill in discover_workspace_skills():
+        # OpenClaw-style: only host-eligible skills should influence runtime command surface.
+        if not is_skill_runtime_eligible(skill, require_bins=False):
+            continue
+        if db and user_id:
+            try:
+                if not await db.get_skill_enabled(user_id, skill.name):
+                    continue
+            except Exception:
+                pass
         for b in (skill.required_bins or ()):
             if b:
                 allowed.add(b.strip().lower())
@@ -94,13 +103,14 @@ def prepare_allowlisted_command(
     *,
     allowed_bins: set[str] | None = None,
 ) -> tuple[list[str] | None, str | None]:
-    """Parse and validate command against allowlist. Returns (argv, error)."""
+    """Parse and validate command against exec security policy. Returns (argv, error)."""
     cmd = (cmd or "").strip()
     if not cmd:
         return None, "Empty command."
-    allowed = allowed_bins if allowed_bins is not None else get_settings().exec_allowed_bins
-    if not allowed:
-        return None, "Exec is disabled (ASTA_EXEC_ALLOWED_BINS not set)."
+    settings = get_settings()
+    security_mode = settings.exec_security
+    if security_mode == "deny":
+        return None, "Exec is disabled (ASTA_EXEC_SECURITY=deny)."
     try:
         parts = shlex.split(cmd)
     except ValueError as e:
@@ -108,9 +118,13 @@ def prepare_allowlisted_command(
     if not parts:
         return None, "Empty command."
     binary = Path(parts[0]).name.lower()
-    if binary not in allowed:
-        logger.warning("Exec rejected: binary %r not in allowlist %s", binary, sorted(allowed))
-        return None, f"Command not allowed (binary '{binary}' not in allowlist)."
+    if security_mode == "allowlist":
+        allowed = allowed_bins if allowed_bins is not None else settings.exec_allowed_bins
+        if not allowed:
+            return None, "Exec is disabled (ASTA_EXEC_ALLOWED_BINS not set; security=allowlist)."
+        if binary not in allowed:
+            logger.warning("Exec rejected: binary %r not in allowlist %s", binary, sorted(allowed))
+            return None, f"Command not allowed (binary '{binary}' not in allowlist)."
     exe = parts[0]
     if os.path.sep not in exe and not Path(exe).is_absolute():
         resolved = resolve_executable(exe)
@@ -172,9 +186,17 @@ async def run_allowlisted_command(
         return "", str(e), False
 
 
-def get_exec_tool_openai_def(allowed_bins: set[str]) -> list[dict]:
+def get_exec_tool_openai_def(allowed_bins: set[str], security_mode: str | None = None) -> list[dict]:
     """OpenAI-style tool definition for exec (Claw-style). Pass to providers that support tools. When model calls exec with a command, handler runs it and re-calls with result."""
+    mode = (security_mode or get_settings().exec_security).strip().lower()
     bins_str = ", ".join(sorted(allowed_bins)) if allowed_bins else "none"
+    policy_line = (
+        f"Security policy: {mode}. "
+        + (
+            "Any command is allowed (dangerous mode)." if mode == "full"
+            else f"Allowed binaries: {bins_str}."
+        )
+    )
     return [
         {
             "type": "function",
@@ -183,7 +205,7 @@ def get_exec_tool_openai_def(allowed_bins: set[str]) -> list[dict]:
                 "description": (
                     "Run a shell command on the user's machine. Use this when the user asks to check Apple Notes (command: memo notes or memo notes -s \"search\"), "
                     "list or search Things (command: things inbox, things search \"query\"), or run another allowlisted CLI. "
-                    f"Allowed binaries: {bins_str}. Only use commands that start with one of these. "
+                    + policy_line + " "
                     "Do NOT use exec to list directories (e.g. ls) — use list_directory instead. Do NOT use exec for Spotify (what's playing, search, play) — that is handled by the Spotify skill and Settings."
                 ),
                 "parameters": {
@@ -197,17 +219,41 @@ def get_exec_tool_openai_def(allowed_bins: set[str]) -> list[dict]:
                             "type": "integer",
                             "description": f"Optional timeout in seconds (1-{MAX_TIMEOUT_SECONDS}).",
                         },
+                        "timeout": {
+                            "type": "integer",
+                            "description": f"OpenClaw-compatible alias for timeout_sec (seconds, 1-{MAX_TIMEOUT_SECONDS}).",
+                        },
+                        "timeoutSec": {
+                            "type": "integer",
+                            "description": f"CamelCase alias for timeout_sec (seconds, 1-{MAX_TIMEOUT_SECONDS}).",
+                        },
                         "yield_ms": {
                             "type": "integer",
                             "description": "Optional yield window in milliseconds for auto-background behavior (e.g. 10000).",
+                        },
+                        "yieldMs": {
+                            "type": "integer",
+                            "description": "OpenClaw-compatible alias for yield_ms.",
                         },
                         "background": {
                             "type": "boolean",
                             "description": "If true, start command in background and return a process session id.",
                         },
+                        "pty": {
+                            "type": "boolean",
+                            "description": "If true, run command in a pseudo-terminal (TTY-like behavior).",
+                        },
+                        "tty": {
+                            "type": "boolean",
+                            "description": "Alias for pty.",
+                        },
                         "workdir": {
                             "type": "string",
                             "description": "Optional working directory (must be under user's home or workspace).",
+                        },
+                        "workDir": {
+                            "type": "string",
+                            "description": "CamelCase alias for workdir.",
                         },
                     },
                     "required": ["command"],
@@ -217,12 +263,80 @@ def get_exec_tool_openai_def(allowed_bins: set[str]) -> list[dict]:
     ]
 
 
+def get_bash_tool_openai_def(allowed_bins: set[str], security_mode: str | None = None) -> list[dict]:
+    """OpenClaw-compatible bash alias (same runtime path as exec)."""
+    tools = get_exec_tool_openai_def(allowed_bins, security_mode=security_mode)
+    fn = dict(tools[0].get("function") or {})
+    fn["name"] = "bash"
+    desc = str(fn.get("description") or "")
+    fn["description"] = (
+        "Alias of exec for OpenClaw compatibility. Use the same command semantics and safety policy. "
+        + desc
+    )
+    return [{"type": "function", "function": fn}]
+
+
 def parse_exec_arguments(arguments_str: str) -> dict:
     """Parse tool call arguments JSON (may be a string). Returns dict with 'command' key."""
+    data: dict = {}
     try:
         if isinstance(arguments_str, dict):
-            return arguments_str
-        data = json.loads(arguments_str)
-        return data if isinstance(data, dict) else {}
+            data = arguments_str
+        else:
+            parsed = json.loads(arguments_str)
+            data = parsed if isinstance(parsed, dict) else {}
     except (json.JSONDecodeError, TypeError):
-        return {}
+        data = {}
+
+    def _int_or_none(*keys: str) -> int | None:
+        for key in keys:
+            val = data.get(key)
+            if isinstance(val, bool):
+                continue
+            if isinstance(val, int):
+                return val
+            if isinstance(val, str):
+                raw = val.strip()
+                if raw.isdigit():
+                    return int(raw)
+        return None
+
+    command = data.get("command")
+    if not isinstance(command, str):
+        command = data.get("cmd")
+
+    workdir = data.get("workdir")
+    if not isinstance(workdir, str):
+        workdir = data.get("workDir")
+    if not isinstance(workdir, str):
+        workdir = data.get("cwd")
+
+    background_raw = data.get("background")
+    background = False
+    if isinstance(background_raw, bool):
+        background = background_raw
+    elif isinstance(background_raw, str):
+        background = background_raw.strip().lower() in ("1", "true", "yes", "on")
+    pty_raw = data.get("pty")
+    if not isinstance(pty_raw, (bool, str)):
+        pty_raw = data.get("tty")
+    pty = False
+    if isinstance(pty_raw, bool):
+        pty = pty_raw
+    elif isinstance(pty_raw, str):
+        pty = pty_raw.strip().lower() in ("1", "true", "yes", "on")
+
+    out: dict = {}
+    if isinstance(command, str):
+        out["command"] = command
+    timeout_sec = _int_or_none("timeout_sec", "timeout", "timeoutSec")
+    if isinstance(timeout_sec, int):
+        out["timeout_sec"] = timeout_sec
+    yield_ms = _int_or_none("yield_ms", "yieldMs")
+    if isinstance(yield_ms, int):
+        out["yield_ms"] = yield_ms
+    out["background"] = background
+    out["pty"] = pty
+    if isinstance(workdir, str):
+        out["workdir"] = workdir
+    return out

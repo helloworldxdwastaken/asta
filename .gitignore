@@ -28,6 +28,7 @@ backend/chroma_db/
 # WhatsApp bridge (session, cache, any stored numbers)
 services/whatsapp/.wweb_auth/
 services/whatsapp/.wweb_cache/
+services/whatsapp/auth_info_baileys/
 services/whatsapp/*.json
 !services/whatsapp/package.json
 
@@ -50,6 +51,8 @@ venv/
 dist/
 build/
 *.log
+*.pid
+*.tsbuildinfo
 .idea/
 .vscode/
 *.swp

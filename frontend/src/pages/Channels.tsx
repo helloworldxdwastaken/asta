@@ -1,8 +1,14 @@
 import { useState, useEffect, useCallback } from "react";
+import type { Status } from "../api/client";
 import { api } from "../api/client";
 
-function WhatsAppQr() {
+function WhatsAppQr({ status }: { status: Status | null }) {
     const [state, setState] = useState<{ connected?: boolean; qr?: string | null; error?: string } | null>(null);
+    const [allowedNumbers, setAllowedNumbers] = useState("");
+    const [ownerNumber, setOwnerNumber] = useState("");
+    const [selfChatOnly, setSelfChatOnly] = useState(false);
+    const [policySaving, setPolicySaving] = useState(false);
+    const [policyMsg, setPolicyMsg] = useState<string | null>(null);
 
     const fetchQr = useCallback(() => {
         api.whatsappQr()
@@ -10,11 +16,53 @@ function WhatsAppQr() {
             .catch((e) => setState({ connected: false, qr: null, error: e.message }));
     }, []);
 
+    const fetchPolicy = useCallback(() => {
+        api.whatsappPolicy()
+            .then((p) => {
+                setAllowedNumbers((p.allowed_numbers || []).join(", "));
+                setOwnerNumber(p.owner_number || "");
+                setSelfChatOnly(!!p.self_chat_only);
+            })
+            .catch(() => { });
+    }, []);
+
     useEffect(() => {
         fetchQr();
+        fetchPolicy();
         const t = setInterval(fetchQr, 4000);
         return () => clearInterval(t);
-    }, [fetchQr]);
+    }, [fetchQr, fetchPolicy]);
+
+    const savePolicy = async () => {
+        setPolicySaving(true);
+        setPolicyMsg(null);
+        try {
+            const out = await api.setWhatsappPolicy({
+                allowed_numbers: allowedNumbers,
+                self_chat_only: selfChatOnly,
+                owner_number: ownerNumber,
+            });
+            setAllowedNumbers((out.allowed_numbers || []).join(", "));
+            setOwnerNumber(out.owner_number || "");
+            setSelfChatOnly(!!out.self_chat_only);
+            setPolicyMsg("WhatsApp policy saved.");
+        } catch (e) {
+            setPolicyMsg("Error: " + ((e as Error).message || String(e)));
+        } finally {
+            setPolicySaving(false);
+        }
+    };
+    const ownerMissing = selfChatOnly && !ownerNumber.trim();
+
+    const wa = status?.channels?.whatsapp;
+    const waBadge = (() => {
+        if (!wa?.configured) return { label: "Not configured", tone: "neutral" as const };
+        if (wa.connected || state?.connected) return { label: "Connected", tone: "ok" as const };
+        if (!wa.reachable) return { label: "Bridge offline", tone: "warn" as const };
+        if (wa.has_qr || state?.qr) return { label: "Scan QR", tone: "pending" as const };
+        if (wa.connecting) return { label: "Connecting", tone: "pending" as const };
+        return { label: "Disconnected", tone: "warn" as const };
+    })();
 
     return (
         <div className="channel-section">
@@ -23,10 +71,10 @@ function WhatsAppQr() {
                     <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z" /></svg>
                 </div>
                 <div>
-                    <h3>WhatsApp</h3>
-                    <p className="help">Scan QR to connect your account</p>
+                    <h3>WhatsApp (Beta)</h3>
+                    <p className="help">Best for quick voice notes and daily replies.</p>
                 </div>
-                {state?.connected && <span className="status-badge ok">Connected</span>}
+                <span className={`status-badge ${waBadge.tone === "ok" ? "ok" : waBadge.tone === "warn" ? "warn" : waBadge.tone === "pending" ? "pending" : ""}`}>{waBadge.label}</span>
             </div>
 
             <div className="channel-body">
@@ -49,7 +97,7 @@ function WhatsAppQr() {
 
                 {state?.connected && (
                     <div className="channel-connected-info">
-                        <p>Your WhatsApp account is connected. Asta can read and reply to messages.</p>
+                        <p>Your WhatsApp (Beta) account is connected. Asta can read and reply to messages.</p>
                         <button
                             className="btn btn-danger"
                             style={{ marginTop: '1rem' }}
@@ -63,12 +111,65 @@ function WhatsAppQr() {
                         </button>
                     </div>
                 )}
+
+                <div className="field" style={{ marginTop: "1rem" }}>
+                    <label className="label" htmlFor="wa-owner">Owner number (for self-chat mode)</label>
+                    <input
+                        id="wa-owner"
+                        type="text"
+                        className="input"
+                        placeholder="e.g. +15551234567"
+                        value={ownerNumber}
+                        onChange={(e) => setOwnerNumber(e.target.value)}
+                    />
+                    <p className="help">Use your full number with country code (E.164 style). Spaces and + are fine; Asta normalizes to digits.</p>
+                </div>
+
+                <div className="field" style={{ marginTop: "0.75rem" }}>
+                    <label className="label" htmlFor="wa-allow">Allowed sender numbers</label>
+                    <input
+                        id="wa-allow"
+                        type="text"
+                        className="input"
+                        placeholder="+15551234567, +15550001111"
+                        value={allowedNumbers}
+                        onChange={(e) => setAllowedNumbers(e.target.value)}
+                    />
+                    <p className="help">Use full numbers with country code, separated by comma or newline. Leave empty to allow all senders (unless self-chat-only is enabled).</p>
+                </div>
+
+                <div className="field" style={{ marginTop: "0.75rem" }}>
+                    <label style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem" }}>
+                        <input
+                            type="checkbox"
+                            checked={selfChatOnly}
+                            onChange={(e) => setSelfChatOnly(e.target.checked)}
+                        />
+                        Self chat only (reply only to owner number)
+                    </label>
+                </div>
+                {ownerMissing && (
+                    <div className="alert" style={{ marginTop: "0.5rem" }}>
+                        Self-chat-only is enabled but owner number is empty. Add owner number to avoid all inbound messages being ignored.
+                    </div>
+                )}
+
+                <div className="actions" style={{ marginTop: "0.75rem" }}>
+                    <button type="button" className="btn btn-secondary" onClick={savePolicy} disabled={policySaving}>
+                        {policySaving ? "Saving…" : "Save policy"}
+                    </button>
+                </div>
+                {policyMsg && (
+                    <div className={policyMsg.startsWith("Error:") ? "alert alert-error" : "alert"} style={{ marginTop: "0.75rem" }}>
+                        {policyMsg}
+                    </div>
+                )}
             </div>
         </div>
     );
 }
 
-function TelegramSettings({ keysStatus, onSaved }: { keysStatus: Record<string, boolean>; onSaved: () => void }) {
+function TelegramSettings({ keysStatus, onSaved, status }: { keysStatus: Record<string, boolean>; onSaved: () => void; status: Status | null }) {
     const [token, setToken] = useState("");
     const [saving, setSaving] = useState(false);
     const [msg, setMsg] = useState<string | null>(null);
@@ -90,6 +191,7 @@ function TelegramSettings({ keysStatus, onSaved }: { keysStatus: Record<string, 
         }
     };
 
+    const tgConfigured = !!status?.channels?.telegram?.configured || isSet;
     return (
         <div className="channel-section">
             <div className="channel-header">
@@ -98,15 +200,18 @@ function TelegramSettings({ keysStatus, onSaved }: { keysStatus: Record<string, 
                 </div>
                 <div>
                     <h3>Telegram</h3>
-                    <p className="help">Configure Bot Token</p>
+                    <p className="help">Most stable channel for everyday chat.</p>
                 </div>
-                {isSet && <span className="status-badge ok">Configured</span>}
+                <span className={`status-badge ${tgConfigured ? "ok" : ""}`}>{tgConfigured ? "Ready" : "Not configured"}</span>
             </div>
 
             <div className="channel-body">
                 <p className="help">
                     Create a bot at <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="link">t.me/BotFather</a>.
                 </p>
+                <div className="alert" style={{ marginTop: "0.75rem" }}>
+                    Bot menu commands: <code>/start</code>, <code>/status</code>, <code>/exec_mode</code>, <code>/thinking</code>, <code>/reasoning</code>. If they don&apos;t appear, restart backend and reopen the bot chat.
+                </div>
 
                 <div className="field-row" style={{ marginTop: '1rem' }}>
                     <input
@@ -148,9 +253,15 @@ function TelegramSettings({ keysStatus, onSaved }: { keysStatus: Record<string, 
 
 export default function Channels() {
     const [keysStatus, setKeysStatus] = useState<Record<string, boolean>>({});
+    const [status, setStatus] = useState<Status | null>(null);
 
     useEffect(() => {
         api.getSettingsKeys().then(setKeysStatus);
+        api.status().then(setStatus).catch(() => setStatus(null));
+        const t = setInterval(() => {
+            api.status().then(setStatus).catch(() => setStatus(null));
+        }, 5000);
+        return () => clearInterval(t);
     }, []);
 
     const refreshKeys = () => api.getSettingsKeys().then(setKeysStatus);
@@ -158,11 +269,20 @@ export default function Channels() {
     return (
         <div className="channels-page">
             <h1 className="page-title">Channels</h1>
-            <p className="page-subtitle">Connect Asta to your favorite messaging platforms.</p>
+            <p className="page-subtitle">Connect one channel first, test with a simple “hi”, then enable extra policies.</p>
+
+            <div className="channel-quickstart">
+                <strong>Quick start</strong>
+                <ol>
+                    <li>Connect Telegram or scan WhatsApp QR.</li>
+                    <li>Send “hi” to confirm replies work.</li>
+                    <li>Only then enable allowlists / self-chat policy.</li>
+                </ol>
+            </div>
 
             <div className="channels-grid">
-                <WhatsAppQr />
-                <TelegramSettings keysStatus={keysStatus} onSaved={refreshKeys} />
+                <WhatsAppQr status={status} />
+                <TelegramSettings keysStatus={keysStatus} onSaved={refreshKeys} status={status} />
             </div>
 
             <style>{`
@@ -171,7 +291,25 @@ export default function Channels() {
         }
         .page-subtitle {
             color: var(--muted);
-            margin-bottom: 2rem;
+            margin-bottom: 1rem;
+        }
+        .channel-quickstart {
+            border: 1px solid var(--border);
+            background: var(--surface);
+            border-radius: 10px;
+            padding: 0.75rem 1rem;
+            margin-bottom: 1.25rem;
+        }
+        .channel-quickstart strong {
+            display: block;
+            margin-bottom: 0.4rem;
+            font-size: 0.9rem;
+        }
+        .channel-quickstart ol {
+            margin: 0;
+            padding-left: 1.1rem;
+            color: var(--muted);
+            font-size: 0.86rem;
         }
         .channels-grid {
             display: grid;
@@ -220,6 +358,14 @@ export default function Channels() {
         .status-badge.ok {
             background: rgba(var(--rgb-success), 0.15);
             color: var(--success);
+        }
+        .status-badge.warn {
+            background: rgba(249, 115, 22, 0.12);
+            color: #c2410c;
+        }
+        .status-badge.pending {
+            background: rgba(var(--rgb-accent), 0.12);
+            color: var(--accent);
         }
         
         .qr-container {

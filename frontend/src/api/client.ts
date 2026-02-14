@@ -14,6 +14,31 @@ async function req<T>(path: string, options?: RequestInit): Promise<T> {
 export type Status = {
   apis: Record<string, boolean>;
   integrations: Record<string, boolean>;
+  thinking?: {
+    level: "off" | "low" | "medium" | "high";
+  };
+  reasoning?: {
+    mode: "off" | "on" | "stream";
+  };
+  channels?: {
+    telegram?: {
+      configured: boolean;
+    };
+    whatsapp?: {
+      configured: boolean;
+      reachable: boolean;
+      connected: boolean;
+      connecting: boolean;
+      has_qr: boolean;
+      state: string;
+      reconnect_attempts?: number | null;
+      owner_jid?: string | null;
+      last_connected_at?: string | null;
+      last_disconnect?: unknown;
+      uptime_sec?: number | null;
+      error?: string | null;
+    };
+  };
   skills: { id: string; name: string; description: string; enabled: boolean; available: boolean }[];
   app: string;
   version: string;
@@ -56,6 +81,19 @@ export type CronJob = {
   channel_target: string;
   enabled: number;
   created_at: string;
+};
+
+export type WorkspaceNote = {
+  name: string;
+  path: string;
+  size: number;
+  modified_at: string;
+};
+
+export type WhatsAppPolicy = {
+  allowed_numbers: string[];
+  self_chat_only: boolean;
+  owner_number: string;
 };
 
 export const api = {
@@ -162,6 +200,20 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ provider }),
     }),
+  getThinking: () =>
+    req<{ thinking_level: "off" | "low" | "medium" | "high" }>("/settings/thinking"),
+  setThinking: (thinking_level: "off" | "low" | "medium" | "high") =>
+    req<{ thinking_level: "off" | "low" | "medium" | "high" }>("/settings/thinking", {
+      method: "PUT",
+      body: JSON.stringify({ thinking_level }),
+    }),
+  getReasoning: () =>
+    req<{ reasoning_mode: "off" | "on" | "stream" }>("/settings/reasoning"),
+  setReasoning: (reasoning_mode: "off" | "on" | "stream") =>
+    req<{ reasoning_mode: "off" | "on" | "stream" }>("/settings/reasoning", {
+      method: "PUT",
+      body: JSON.stringify({ reasoning_mode }),
+    }),
   getFallbackProviders: () =>
     req<{ providers: string }>("/settings/fallback"),
   setFallbackProviders: (providers: string) =>
@@ -183,6 +235,13 @@ export const api = {
     req<{ connected: boolean; qr: string | null; error?: string }>("/whatsapp/qr"),
   whatsappLogout: () =>
     req<{ ok: boolean; error?: string }>("/settings/whatsapp/logout", { method: "POST" }),
+  whatsappPolicy: () =>
+    req<WhatsAppPolicy>("/settings/whatsapp/policy"),
+  setWhatsappPolicy: (body: { allowed_numbers: string; self_chat_only: boolean; owner_number?: string }) =>
+    req<{ ok: boolean; allowed_numbers: string[]; self_chat_only: boolean; owner_number: string }>("/settings/whatsapp/policy", {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
   getSpotifySetup: () =>
     req<{ dashboard_url: string; docs_url: string; steps: string[]; redirect_uri: string; connect_url: string }>("/spotify/setup"),
   getSpotifyStatus: () =>
@@ -210,6 +269,10 @@ export const api = {
     return req<{ notifications: any[] }>(`/notifications?limit=${limit}`);
   },
 
+  getWorkspaceNotes(limit = 20) {
+    return req<{ notes: WorkspaceNote[] }>(`/settings/notes?limit=${limit}`);
+  },
+
   deleteNotification(id: number) {
     return req<{ ok: boolean }>(`/notifications/${id}`, { method: "DELETE" });
   },
@@ -233,4 +296,3 @@ export const api = {
       body: JSON.stringify({ ...body, channel: body.channel ?? "web", channel_target: body.channel_target ?? "" }),
     }),
 };
-

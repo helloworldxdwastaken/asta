@@ -172,64 +172,46 @@ async def schedule_reminder(
     message: str,
     run_at: datetime,
 ) -> int:
-    """Persist reminder and add to scheduler. Returns reminder id."""
-    from app.db import get_db
+    """Persist reminder and add one-shot scheduler job. Returns reminder id."""
+    from app.cron_runner import add_cron_job_to_scheduler
+    from app.db import decode_one_shot_reminder_id, get_db, run_at_to_one_shot_cron_expr
     from app.tasks.scheduler import get_scheduler
 
     db = get_db()
     await db.connect()
     run_at_iso = run_at.strftime("%Y-%m-%dT%H:%M:%SZ")
     rid = await db.add_reminder(user_id, channel, channel_target, message, run_at_iso)
-    sch = get_scheduler()
-    sch.add_job(
-        _fire_reminder,
-        "date",
-        run_date=run_at,
-        args=[rid],
-        id=f"rem_{rid}",
-    )
+    one_shot_id = decode_one_shot_reminder_id(rid)
+    if one_shot_id is not None:
+        sch = get_scheduler()
+        add_cron_job_to_scheduler(
+            sch,
+            one_shot_id,
+            run_at_to_one_shot_cron_expr(run_at_iso),
+            None,
+        )
+    else:
+        # Legacy fallback for pre-migration reminder ids.
+        sch = get_scheduler()
+        sch.add_job(
+            _fire_reminder,
+            "date",
+            run_date=run_at,
+            args=[rid],
+            id=f"rem_{rid}",
+        )
     return rid
 
 
 async def reload_pending_reminders() -> None:
-    """Load all pending reminders from DB and add them to the scheduler (call on startup)."""
+    """Startup migration hook for legacy reminders."""
     from app.db import get_db
-    from app.tasks.scheduler import get_scheduler
 
     db = get_db()
     await db.connect()
-    pending = await db.get_all_pending_reminders()
-    now_utc = datetime.now(timezone.utc)
-    sch = get_scheduler()
-    loaded = 0
-    for r in pending:
-        rid = r["id"]
-        run_at_str = (r.get("run_at") or "").strip()
-        if not run_at_str:
-            continue
-        try:
-            # Parse ISO format e.g. 2025-02-09T12:00:00Z
-            if run_at_str.endswith("Z"):
-                run_at_str = run_at_str[:-1] + "+00:00"
-            run_at = datetime.fromisoformat(run_at_str)
-            if run_at.tzinfo is None:
-                run_at = run_at.replace(tzinfo=timezone.utc)
-            if run_at <= now_utc:
-                # Past-due: fire now so user still gets the message (e.g. after server restart)
-                try:
-                    await _fire_reminder_async(rid)
-                except Exception as e:
-                    logger.warning("Could not fire past-due reminder %s: %s", rid, e)
-                continue
-            job_id = f"rem_{rid}"
-            if sch.get_job(job_id):
-                continue
-            sch.add_job(_fire_reminder, "date", run_date=run_at, args=[rid], id=job_id)
-            loaded += 1
-        except (ValueError, TypeError) as e:
-            logger.warning("Could not reschedule reminder %s: %s", rid, e)
-    if loaded:
-        logger.info("Reloaded %d pending reminder(s) into scheduler", loaded)
+    moved = await db.migrate_legacy_pending_reminders_to_one_shot()
+    if moved:
+        logger.info("Migrated %d legacy pending reminder(s) to one-shot cron jobs", moved)
 
 
 def _fire_reminder(reminder_id: int) -> None:

@@ -1,7 +1,10 @@
 """OpenClaw-style workspace: context files (AGENTS.md, USER.md, etc.) and skills from SKILL.md."""
 from __future__ import annotations
 import json
+import os
+import platform
 import re
+import shutil
 from pathlib import Path
 from typing import NamedTuple
 
@@ -19,6 +22,7 @@ class ResolvedSkill(NamedTuple):
     install_cmd: str | None = None  # e.g. "brew tap antoniorodr/memo && brew install antoniorodr/memo/memo"
     install_label: str | None = None  # e.g. "Install memo via Homebrew"
     required_bins: tuple[str, ...] = ()  # e.g. ("memo",) — must be in exec allowlist
+    supported_os: tuple[str, ...] = ()  # e.g. ("darwin", "linux")
 
 
 def get_workspace_dir() -> Path | None:
@@ -103,6 +107,93 @@ def _extract_bins_from_frontmatter(frontmatter_text: str) -> tuple[str, ...]:
                 if part.strip():
                     bins.append(part.strip().lower())
     return tuple(dict.fromkeys(bins))
+
+
+def _normalize_os_tag(value: str) -> str | None:
+    v = (value or "").strip().lower()
+    if not v:
+        return None
+    aliases = {
+        "mac": "darwin",
+        "macos": "darwin",
+        "osx": "darwin",
+        "darwin": "darwin",
+        "linux": "linux",
+        "windows": "windows",
+        "win32": "windows",
+    }
+    return aliases.get(v, v)
+
+
+def _extract_supported_os_from_frontmatter(frontmatter_text: str) -> tuple[str, ...]:
+    """Extract metadata.openclaw.os from frontmatter, if present."""
+    ns = _extract_metadata_namespace(frontmatter_text)
+    os_values: list[str] = []
+
+    direct = ns.get("os")
+    if isinstance(direct, list):
+        for item in direct:
+            if isinstance(item, str):
+                tag = _normalize_os_tag(item)
+                if tag:
+                    os_values.append(tag)
+
+    raw_block = ns.get("__raw_block__")
+    if isinstance(raw_block, str):
+        # Inline list: os: ["darwin","linux"]
+        m = re.search(r"(?im)^\s*os\s*:\s*\[(.*?)\]\s*$", raw_block)
+        if m:
+            inner = m.group(1)
+            # Prefer quoted entries, fallback to comma split.
+            quoted = re.findall(r"[\"']([^\"']+)[\"']", inner)
+            values = quoted if quoted else [p.strip() for p in inner.split(",") if p.strip()]
+            for item in values:
+                tag = _normalize_os_tag(item)
+                if tag:
+                    os_values.append(tag)
+        else:
+            # YAML-style block list:
+            # os:
+            #   - darwin
+            block = re.search(r"(?ims)^\s*os\s*:\s*(.*?)\n\s*(?:[a-z_]+:|$)", raw_block)
+            if block:
+                for item in re.findall(r"(?im)^\s*-\s*([a-z0-9_-]+)\s*$", block.group(1)):
+                    tag = _normalize_os_tag(item)
+                    if tag:
+                        os_values.append(tag)
+
+    return tuple(dict.fromkeys(os_values))
+
+
+def get_host_os_tag() -> str:
+    """Return normalized host OS tag used by skill metadata."""
+    return _normalize_os_tag(platform.system()) or "linux"
+
+
+def _resolve_bin_for_eligibility(name: str) -> str | None:
+    """Best-effort bin lookup for skill eligibility checks."""
+    n = (name or "").strip()
+    if not n:
+        return None
+    found = shutil.which(n)
+    if found:
+        return found
+    for prefix in ("/opt/homebrew/bin", "/usr/local/bin", os.path.expanduser("~/.local/bin")):
+        candidate = os.path.join(prefix, n)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def is_skill_runtime_eligible(skill: ResolvedSkill, *, require_bins: bool = True) -> bool:
+    """OpenClaw-style host eligibility: OS-gated, optionally requiring declared bins."""
+    if skill.supported_os:
+        if get_host_os_tag() not in {o.lower() for o in skill.supported_os}:
+            return False
+    if require_bins and skill.required_bins:
+        if not all(_resolve_bin_for_eligibility(b) for b in skill.required_bins):
+            return False
+    return True
 
 
 def _skill_install_from_frontmatter(
@@ -190,6 +281,7 @@ def discover_workspace_skills() -> list[ResolvedSkill]:
             # Normalize id: lowercase, no spaces
             skill_id = re.sub(r"[^a-z0-9_-]", "", name.lower()) or path.name
             install_cmd, install_label, required_bins = _skill_install_from_frontmatter(fm_text, skill_id)
+            supported_os = _extract_supported_os_from_frontmatter(fm_text)
             out.append(ResolvedSkill(
                 name=skill_id,
                 description=desc,
@@ -199,10 +291,16 @@ def discover_workspace_skills() -> list[ResolvedSkill]:
                 install_cmd=install_cmd,
                 install_label=install_label,
                 required_bins=required_bins,
+                supported_os=supported_os,
             ))
         except Exception:
             continue
     return out
+
+
+def discover_workspace_skills_runtime() -> list[ResolvedSkill]:
+    """Workspace skills that are eligible on this host right now."""
+    return [s for s in discover_workspace_skills() if is_skill_runtime_eligible(s, require_bins=True)]
 
 
 # Optional context files (OpenClaw-style). User context = workspace/USER.md only (no separate data/User.md).

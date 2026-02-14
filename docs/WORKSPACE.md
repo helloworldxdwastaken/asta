@@ -7,7 +7,7 @@ Asta can use an **OpenClaw-style workspace**: context files (AGENTS.md, USER.md,
 - **Default:** `workspace/` at the project root (next to `backend/`).
 - **Override:** set `ASTA_WORKSPACE_DIR` in `backend/.env` to any path.
 
-If the directory doesn’t exist, workspace features are skipped (no error).
+If the directory doesn’t exist, Asta creates it automatically.
 
 ## Context files (injected into every context)
 
@@ -16,9 +16,9 @@ If the directory doesn’t exist, workspace features are skipped (no error).
 | **AGENTS.md** | Workspace rules, memory, safety. “This folder is home.” |
 | **USER.md**   | **Who you are:** name, timezone, location, preferences. This is the single place for user context; put e.g. `**Location:** City, Country` for time/weather/reminders. Edited in the repo. |
 | **SOUL.md**   | Who Asta is: tone, boundaries, personality. |
-| **TOOLS.md**  | Your local notes: SSH hosts, device names, TTS preferences. |
+| **TOOLS.md**  | Your local notes: SSH hosts, device names, TTS preferences. Not executable tools. |
 
-Create these in the workspace root. Asta reads them at the start of each context build. **User context lives under workspace only** (workspace/USER.md); there is no separate data folder for “user” identity.
+Create these in the workspace root. Asta reads them at the start of each context build. **User context lives under workspace only** (`workspace/USER.md`); there is no separate data folder for “user” identity.
 
 ## Skills from SKILL.md (workspace skills)
 
@@ -49,11 +49,20 @@ description: Do X when the user asks about Y. Use when ...
 Instructions for the AI (commands, examples, notes).
 ```
 
-- **Eligibility:** Asta considers the skill eligible if significant words from `description` appear in the user message.
-- **Context:** When the skill is selected, the full contents of `SKILL.md` are injected into the prompt under `[SKILL: <name>]`.
+- **Selection:** Workspace skills are selected OpenClaw-style from `<available_skills>` by the model, then loaded with the `read` tool on demand.
+- **Context:** `SKILL.md` is **not** preloaded for all skills. Only the selected skill file is read.
 - **Toggle:** Workspace skills appear in **Settings → Skills** and can be enabled/disabled like built-in skills.
+- **Runtime eligibility (OpenClaw-style):** Skills with `metadata.openclaw.os` and `requires.bins` are only exposed to the model when they match the current host and required binaries are present. Example: `apple-notes` is hidden on Linux and unavailable until `memo` exists on macOS.
+- **Notes policy:** Generic “notes” requests go to the workspace `notes` skill (`workspace/notes/*.md`). `apple-notes` is only used when the user explicitly asks for Apple Notes / Notes.app / iCloud Notes / `memo`.
 
 You can copy skills from Atomic Bot’s `openclaw/workspace/skills/` or write your own.
+
+## Built-in vs workspace skills
+
+Asta has two skill types:
+
+- **Built-in skills (Python code):** Spotify, reminders, weather, files, etc. These do **not** use `SKILL.md`; they are selected by intent routing in code.
+- **Workspace skills (`SKILL.md`):** Imported/custom OpenClaw-style skills under `workspace/skills/`. The model picks and reads one on demand.
 
 ## Skill-creator and OpenClaw skills
 
@@ -76,10 +85,20 @@ To restrict who can use the Telegram bot:
 
 - In `backend/.env` set:
   - `ASTA_TELEGRAM_ALLOWED_IDS=6168747695,123456789`
+- Use numeric Telegram sender IDs only (`@username` entries are ignored).
 - Only these Telegram user IDs can send messages; others get “You’re not authorized to use this bot.”
 - Leave empty to allow anyone with the bot token (default).
 
 To get your Telegram user ID: message [@userinfobot](https://t.me/userinfobot) or check the bot’s updates.
+
+## Telegram runtime controls
+
+From Telegram chat, you can control core runtime behavior without opening the panel:
+
+- `/status` — server health card
+- `/exec_mode` — exec security mode (`deny/allowlist/full`)
+- `/thinking` — thinking level (`off/low/medium/high`)
+- `/reasoning` — reasoning visibility (`off/on/stream`)
 
 ## Summary
 

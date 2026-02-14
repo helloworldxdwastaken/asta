@@ -14,7 +14,7 @@ from app.skills.learning import LearningSkill
 from app.skills.audio_notes import AudioNotesSkill
 from app.skills.silly_gif import SillyGifSkill
 from app.skills.markdown_skill import MarkdownSkill
-from app.workspace import discover_workspace_skills
+from app.workspace import discover_workspace_skills_runtime
 
 # Built-in skills (singletons)
 _BUILTIN_SKILLS: list[Skill] = [
@@ -38,7 +38,7 @@ _BUILTIN_SKILLS: list[Skill] = [
 def get_all_skills() -> list[Skill]:
     """All skills: built-in + OpenClaw-style workspace/skills/*/SKILL.md."""
     out: list[Skill] = list(_BUILTIN_SKILLS)
-    for r in discover_workspace_skills():
+    for r in discover_workspace_skills_runtime():
         out.append(MarkdownSkill(r))
     return out
 

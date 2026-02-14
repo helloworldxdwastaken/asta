@@ -44,9 +44,11 @@ async def build_context(
 
     # 3a. Exec (OpenClaw-style): when enabled, use the exec tool to run allowlisted commands. Model calls the tool; we run and return output.
     from app.exec_tool import get_effective_exec_bins
-    effective_bins = await get_effective_exec_bins(db)
-    if effective_bins:
-        bins = ", ".join(sorted(effective_bins))
+    effective_bins = await get_effective_exec_bins(db, user_id)
+    from app.config import get_settings
+    exec_mode = get_settings().exec_security
+    if exec_mode != "deny" and (exec_mode == "full" or effective_bins):
+        bins = "any command (security=full)" if exec_mode == "full" else ", ".join(sorted(effective_bins))
         parts.append(
             f"[EXEC] Allowed binaries: {bins}. Use the exec tool when the user asks to check Apple Notes (memo notes, memo notes -s \"query\"), "
             "list Things (things inbox), or run another allowlisted CLI. Do not say you will check — call the exec tool with the command; you will get the real output and then answer. "
@@ -59,16 +61,18 @@ async def build_context(
     # 3a1. Files tools: list/read/allow/delete for allowed paths
     if skills_in_use and "files" in skills_in_use:
         parts.append(
-            "[FILES] You have list_directory, read_file, allow_path, delete_file, and delete_matching_files tools. "
+            "[FILES] You have list_directory, read_file, write_file, allow_path, delete_file, and delete_matching_files tools. "
             "When the user asks 'what files on my desktop', 'list my desktop', 'what do I have on desktop', or similar: call allow_path(\"~/Desktop\") to request access, then list_directory(\"~/Desktop\") to list the files. Do not say you cannot run ls — use these tools instead. "
             "If the path is already allowed, list_directory works directly. "
+            "For save/create requests (e.g. shopping list), call write_file with a sensible workspace path and exact content. "
             "For deleting one file use delete_file(path). For multiple similar files (like screenshots) use delete_matching_files(directory, glob_pattern). "
             "Only paths under the user's home can be added via allow_path."
         )
         parts.append("")
 
     # 3a2. Reminders tool (one-shot)
-    if skills_in_use and "reminders" in skills_in_use:
+    # Keep guidance whenever reminders are enabled since the tool is available globally.
+    if await db.get_skill_enabled(user_id, "reminders"):
         parts.append(
             "[REMINDERS] Use the reminders tool for one-time reminders. "
             "Use action='add' with natural text (e.g. 'remind me in 30 min to call mom', 'wake me up tomorrow at 7am'). "
@@ -147,6 +151,7 @@ async def _get_available_skills_prompt(db: "Db", user_id: str, skills_in_use: se
     from app.skills.markdown_skill import MarkdownSkill
 
     skill_lines: list[str] = []
+    markdown_skill_names: set[str] = set()
     for skill in get_all_skills():
         try:
             enabled = await db.get_skill_enabled(user_id, skill.name)
@@ -157,6 +162,7 @@ async def _get_available_skills_prompt(db: "Db", user_id: str, skills_in_use: se
         if not isinstance(skill, MarkdownSkill):
             continue
         r = skill._resolved
+        markdown_skill_names.add(skill.name)
         skill_lines.append("  <skill>")
         skill_lines.append(f"    <name>{skill.name}</name>")
         skill_lines.append(f"    <description>{r.description}</description>")
@@ -173,9 +179,13 @@ async def _get_available_skills_prompt(db: "Db", user_id: str, skills_in_use: se
         "- If none clearly apply: do not read any SKILL.md.",
         "Constraints: never read more than one skill up front; only read after selecting.",
         "When a selected skill references relative paths, resolve them from the skill directory (parent of SKILL.md).",
+        "Notes policy: prefer `notes` (workspace markdown files) for generic note-taking/reading.",
+        "Only select `apple-notes` when the user explicitly asks for Apple Notes / Notes.app / iCloud Notes / `memo`.",
         "",
         "<available_skills>",
     ]
+    if not ({"notes", "apple-notes"} <= markdown_skill_names):
+        lines = [l for l in lines if not l.startswith("Notes policy:") and not l.startswith("Only select `apple-notes`")]
     lines.extend(skill_lines)
     lines.append("</available_skills>")
     lines.append("")

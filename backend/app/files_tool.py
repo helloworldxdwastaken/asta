@@ -97,6 +97,26 @@ async def read_file_content(path: str, user_id: str, db: "Db | None", max_chars:
         return f"Error reading file: {e}"
 
 
+async def write_file(path: str, content: str, user_id: str, db: "Db | None") -> str:
+    """Write file content under allowed/workspace paths."""
+    path = (path or "").strip()
+    if not path:
+        return "Error: path is required."
+    if not isinstance(content, str):
+        return "Error: content must be a string."
+    if not db:
+        return "Error: database not available."
+    try:
+        from app.routers.files import write_to_allowed_path
+
+        written = await write_to_allowed_path(user_id, path, content)
+        return json.dumps({"ok": True, "path": written}, indent=0)
+    except ValueError as e:
+        return f"Error: {e}"
+    except Exception as e:
+        return f"Error writing file: {e}"
+
+
 async def allow_path(path: str, user_id: str, db: "Db | None") -> str:
     """Add a path to the user's allowed list (request access). Only allows paths under the user's home directory."""
     path = (path or "").strip()
@@ -228,7 +248,7 @@ async def delete_matching_files(
 
 
 def get_files_tools_openai_def() -> list[dict]:
-    """OpenAI-style tool definitions for list/read/allow/delete file operations."""
+    """OpenAI-style tool definitions for list/read/write/allow/delete file operations."""
     return [
         {
             "type": "function",
@@ -266,6 +286,30 @@ def get_files_tools_openai_def() -> list[dict]:
                         "path": {"type": "string", "description": "Full path to the file"},
                     },
                     "required": ["path"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "write_file",
+                "description": (
+                    "Write text/markdown content to a file under allowed paths or workspace. "
+                    "Use this when the user asks to save or create a file (e.g. shopping list, notes)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "Target file path. Relative paths are resolved under workspace.",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Exact file content to write.",
+                        },
+                    },
+                    "required": ["path", "content"],
                 },
             },
         },

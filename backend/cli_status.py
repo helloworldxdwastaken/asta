@@ -13,6 +13,11 @@ BLUE = "\033[38;5;39m"
 CYAN = "\033[38;5;51m"
 GRAY = "\033[38;5;240m"
 WHITE = "\033[38;5;255m"
+YELLOW = "\033[38;5;226m"
+
+
+def divider() -> str:
+    return f"  {GRAY}─────────────────────────────────────────{RESET}"
 
 def fetch_json(url):
     try:
@@ -35,29 +40,63 @@ def main():
         print(f"{RED}Error: Could not reach API at {api_base}{RESET}")
         sys.exit(1)
 
-    # --- Server & Channels (compact) ---
+    # --- Separated status blocks ---
+    print(divider())
+    print(f"  {WHITE}{BOLD}server{RESET}")
     if server and server.get("ok"):
         cpu = server.get("cpu_percent", 0)
         ram = server.get("ram", {})
         uptime = server.get("uptime_str", "?")
         ram_str = f"{ram.get('used_gb', 0)}/{ram.get('total_gb', 0)}GB"
-        print(f"  {WHITE}server{RESET}   {CYAN}cpu {cpu}%{RESET}  {CYAN}ram {ram_str}{RESET}  {CYAN}uptime {uptime}{RESET}")
+        print(f"    {CYAN}cpu{RESET} {cpu}%")
+        print(f"    {CYAN}ram{RESET} {ram_str}")
+        print(f"    {CYAN}uptime{RESET} {uptime}")
+    else:
+        print(f"    {YELLOW}status unavailable{RESET}")
 
+    print(divider())
+    print(f"  {WHITE}{BOLD}channels{RESET}")
     integrations = status.get("integrations", {})
+    channels = status.get("channels", {}) if isinstance(status, dict) else {}
+
     t = f"{GREEN}active{RESET}" if integrations.get("telegram") else f"{GRAY}off{RESET}"
-    w = f"{GREEN}active{RESET}" if integrations.get("whatsapp") else f"{GRAY}off{RESET}"
-    print(f"  {WHITE}channels{RESET} telegram {t}  whatsapp {w}")
+
+    wa = channels.get("whatsapp", {}) if isinstance(channels, dict) else {}
+    if isinstance(wa, dict) and wa:
+        if not wa.get("configured"):
+            w = f"{GRAY}not configured{RESET}"
+        elif wa.get("connected"):
+            w = f"{GREEN}connected{RESET}"
+        elif not wa.get("reachable"):
+            w = f"{YELLOW}bridge offline{RESET}"
+        elif wa.get("has_qr"):
+            w = f"{YELLOW}awaiting qr{RESET}"
+        elif wa.get("connecting"):
+            w = f"{YELLOW}connecting{RESET}"
+        else:
+            w = f"{YELLOW}disconnected{RESET}"
+    else:
+        w = f"{GREEN}active{RESET}" if integrations.get("whatsapp") else f"{GRAY}off{RESET}"
+    print(f"    telegram {t}")
+    print(f"    whatsapp(beta) {w}")
 
     # Skills list only when running `asta status` (not on restart/update/start)
     show_skills = os.environ.get("ASTA_STATUS_FULL") == "1" or "--full" in sys.argv
     if show_skills:
+        print(divider())
+        print(f"  {WHITE}{BOLD}skills{RESET}")
         skills = status.get("skills", [])
         enabled_skills = [s for s in skills if s.get("enabled")]
         if enabled_skills:
-            skill_names = [f"● {s['name']}" for s in enabled_skills]
-            print(f"  {WHITE}skills{RESET}   {BLUE}" + f"{RESET}   {BLUE}".join(skill_names) + f"{RESET}")
+            print(f"    enabled {len(enabled_skills)}")
+            max_show = 12
+            for s in enabled_skills[:max_show]:
+                print(f"    {BLUE}● {s['name']}{RESET}")
+            if len(enabled_skills) > max_show:
+                print(f"    {GRAY}... +{len(enabled_skills) - max_show} more{RESET}")
         else:
-            print(f"  {WHITE}skills{RESET}   {GRAY}none{RESET}")
+            print(f"    {GRAY}none{RESET}")
+    print(divider())
 
 if __name__ == "__main__":
     main()

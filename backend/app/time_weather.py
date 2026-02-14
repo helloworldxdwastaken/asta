@@ -177,7 +177,7 @@ _LOCATION_TZ_FALLBACKS: list[tuple[list[str], str]] = [
 ]
 
 
-async def get_timezone_for_coords(latitude: float, longitude: float, location_name: str | None = None) -> str:
+async def get_timezone_for_coords(latitude: float, longitude: float, location_name: str | None = None) -> str | None:
     """Return IANA timezone (e.g. 'Asia/Jerusalem') for lat/lon. Location-name override when it clearly indicates a region (e.g. Holon, Israel -> Asia/Jerusalem)."""
     # Location name override: if user said "Holon" or "Israel", trust it over coords (coords can be wrong)
     if location_name:
@@ -190,7 +190,7 @@ async def get_timezone_for_coords(latitude: float, longitude: float, location_na
         return tz
     
     logger.info("Timezonefinder returned None for %.4f,%.4f; falling back to Open-Meteo", latitude, longitude)
-    fallback = "UTC"
+    fallback: str | None = None
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             r = await client.get(
@@ -199,16 +199,21 @@ async def get_timezone_for_coords(latitude: float, longitude: float, location_na
             )
             r.raise_for_status()
             data = r.json()
-        fallback = data.get("timezone") or "UTC"
+        fallback = data.get("timezone") or None
         logger.info("Open-Meteo returned timezone: %s", fallback)
     except Exception as e:
         logger.warning("Open-Meteo timezone lookup failed for %.2f,%.2f: %s", latitude, longitude, e)
     
-    # Sanity check: if we got UTC but the user said "Israel" or "Holon", warn loudly
-    if fallback == "UTC" and location_name:
+    # Sanity check: if lookup failed or returned UTC while user said a known non-UTC place, warn loudly
+    if (not fallback or fallback == "UTC") and location_name:
         name_lower = location_name.lower()
         if any(k in name_lower for k in ("israel", "holon", "jerusalem", "tel aviv")):
-             logger.error("SUSPICIOUS TIMEZONE: Resolved to UTC for location '%s' (lat=%.4f, lon=%.4f). Check network or timezonefinder installation.", location_name, latitude, longitude)
+             logger.error(
+                 "SUSPICIOUS TIMEZONE: Could not confidently resolve timezone for location '%s' (lat=%.4f, lon=%.4f). Check network or timezonefinder installation.",
+                 location_name,
+                 latitude,
+                 longitude,
+             )
     
     return fallback
 

@@ -39,7 +39,8 @@ class FilesSkill(Skill):
             if settings.workspace_path:
                 lines.append("")
                 lines.append("To CREATE or SAVE a new file when the user asks (e.g. 'save that to a file', 'create a shopping list'):")
-                lines.append("Output the following block with the path (relative to workspace, e.g. shopping-list.md or notes/foo.md) and the exact content:")
+                lines.append("Prefer calling the write_file tool with path + exact content (path can be workspace-relative like shopping-list.md or notes/foo.md).")
+                lines.append("If tool calls are unavailable, output the following fallback block with the exact content:")
                 lines.append("[ASTA_WRITE_FILE: path/filename.md]")
                 lines.append("content here (markdown or text)")
                 lines.append("[/ASTA_WRITE_FILE]")

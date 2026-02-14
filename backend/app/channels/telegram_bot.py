@@ -33,6 +33,8 @@ from app.config import get_settings, set_env_value
 
 logger = logging.getLogger(__name__)
 _EXEC_MODES = ("deny", "allowlist", "full")
+_THINK_LEVELS = ("off", "low", "medium", "high")
+_REASONING_MODES = ("off", "on", "stream")
 
 
 def to_telegram_format(text: str) -> str:
@@ -181,10 +183,14 @@ async def _fetch_audio_from_url(url: str) -> tuple[bytes, str] | None:
 
 
 def _telegram_user_allowed(update: Update) -> bool:
-    """OpenClaw-style allowlist: if ASTA_TELEGRAM_ALLOWED_IDS is set, only those user IDs can use the bot."""
-    allowed = get_settings().telegram_allowed_ids
-    if not allowed:
+    """OpenClaw-style allowlist: numeric sender IDs only when configured."""
+    settings = get_settings()
+    allowed = settings.telegram_allowed_ids
+    if not settings.telegram_allowlist_configured:
         return True
+    # Fail closed: allowlist configured but no valid numeric IDs parsed.
+    if not allowed:
+        return False
     user = update.effective_user if update else None
     if not user:
         return False
@@ -253,6 +259,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 user_id, "telegram", text, provider_name="default",
                 channel_target=chat_id_str,
             )
+            if not (reply or "").strip():
+                logger.info("Telegram reply suppressed (silent control token) for %s", user_id)
+                return
             
             # Check for markdown GIF (Giphy or .gif) and send as animation
             # Regex matches ![alt](url) where url contains giphy.com or ends in .gif
@@ -463,6 +472,169 @@ async def exec_mode_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.warning("Could not set exec mode from telegram callback: %s", e)
 
 
+def _thinking_markup(current: str) -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(("✅ " if level == current else "") + level, callback_data=f"thinking:{level}")
+        for level in _THINK_LEVELS
+    ]
+    return InlineKeyboardMarkup([buttons])
+
+
+def _thinking_text(current: str) -> str:
+    return (
+        "Thinking level controls how much internal effort Asta spends before replying.\n\n"
+        f"Current level: {current}\n"
+        "- off: fastest\n"
+        "- low: light extra verification\n"
+        "- medium: more planning/verification\n"
+        "- high: deepest verification for complex tasks"
+    )
+
+
+async def _set_thinking_level(level: str) -> str:
+    if level not in _THINK_LEVELS:
+        raise ValueError("invalid thinking level")
+    from app.db import get_db
+
+    db = get_db()
+    await db.connect()
+    await db.set_user_thinking_level("default", level)
+    return await db.get_user_thinking_level("default")
+
+
+async def _get_thinking_level() -> str:
+    from app.db import get_db
+
+    db = get_db()
+    await db.connect()
+    return await db.get_user_thinking_level("default")
+
+
+async def thinking_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    if not _telegram_user_allowed(update):
+        await update.message.reply_text("You're not authorized to use this bot.")
+        return
+    current = await _get_thinking_level()
+    arg = ((context.args[0] if context.args else "") or "").strip().lower()
+    if arg:
+        if arg not in _THINK_LEVELS:
+            await update.message.reply_text(
+                "Invalid level. Use /thinking off, /thinking low, /thinking medium, or /thinking high."
+            )
+            return
+        try:
+            current = await _set_thinking_level(arg)
+            await update.message.reply_text(_thinking_text(current), reply_markup=_thinking_markup(current))
+        except Exception as e:
+            await update.message.reply_text(f"Could not change thinking level: {str(e)[:200]}")
+        return
+    await update.message.reply_text(_thinking_text(current), reply_markup=_thinking_markup(current))
+
+
+async def thinking_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    if not _telegram_user_allowed(update):
+        await query.answer("Unauthorized", show_alert=True)
+        return
+    data = (query.data or "").strip()
+    level = data.split(":", 1)[1].strip().lower() if ":" in data else ""
+    if level not in _THINK_LEVELS:
+        await query.answer("Invalid level", show_alert=True)
+        return
+    try:
+        current = await _set_thinking_level(level)
+        await query.answer(f"Thinking: {current}")
+        await query.edit_message_text(_thinking_text(current), reply_markup=_thinking_markup(current))
+    except Exception as e:
+        await query.answer("Failed to update thinking", show_alert=True)
+        logger.warning("Could not set thinking level from telegram callback: %s", e)
+
+
+def _reasoning_markup(current: str) -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(("✅ " if mode == current else "") + mode, callback_data=f"reasoning:{mode}")
+        for mode in _REASONING_MODES
+    ]
+    return InlineKeyboardMarkup([buttons])
+
+
+def _reasoning_text(current: str) -> str:
+    return (
+        "Reasoning visibility controls whether <think> rationale is shown.\n\n"
+        f"Current mode: {current}\n"
+        "- off: hide reasoning blocks\n"
+        "- on: show reasoning before final answer\n"
+        "- stream: same as on for now (final render only)"
+    )
+
+
+async def _set_reasoning_mode(mode: str) -> str:
+    if mode not in _REASONING_MODES:
+        raise ValueError("invalid reasoning mode")
+    from app.db import get_db
+
+    db = get_db()
+    await db.connect()
+    await db.set_user_reasoning_mode("default", mode)
+    return await db.get_user_reasoning_mode("default")
+
+
+async def _get_reasoning_mode() -> str:
+    from app.db import get_db
+
+    db = get_db()
+    await db.connect()
+    return await db.get_user_reasoning_mode("default")
+
+
+async def reasoning_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    if not _telegram_user_allowed(update):
+        await update.message.reply_text("You're not authorized to use this bot.")
+        return
+    current = await _get_reasoning_mode()
+    arg = ((context.args[0] if context.args else "") or "").strip().lower()
+    if arg:
+        if arg not in _REASONING_MODES:
+            await update.message.reply_text(
+                "Invalid mode. Use /reasoning off, /reasoning on, or /reasoning stream."
+            )
+            return
+        try:
+            current = await _set_reasoning_mode(arg)
+            await update.message.reply_text(_reasoning_text(current), reply_markup=_reasoning_markup(current))
+        except Exception as e:
+            await update.message.reply_text(f"Could not change reasoning mode: {str(e)[:200]}")
+        return
+    await update.message.reply_text(_reasoning_text(current), reply_markup=_reasoning_markup(current))
+
+
+async def reasoning_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    if not _telegram_user_allowed(update):
+        await query.answer("Unauthorized", show_alert=True)
+        return
+    data = (query.data or "").strip()
+    mode = data.split(":", 1)[1].strip().lower() if ":" in data else ""
+    if mode not in _REASONING_MODES:
+        await query.answer("Invalid mode", show_alert=True)
+        return
+    try:
+        current = await _set_reasoning_mode(mode)
+        await query.answer(f"Reasoning: {current}")
+        await query.edit_message_text(_reasoning_text(current), reply_markup=_reasoning_markup(current))
+    except Exception as e:
+        await query.answer("Failed to update reasoning", show_alert=True)
+        logger.warning("Could not set reasoning mode from telegram callback: %s", e)
+
+
 def build_telegram_app(token: str) -> Application:
     """Build configured Application (handlers only). Caller must initialize/start in same event loop."""
     # Use AIORateLimiter to respect Telegram limits (30 msg/sec, etc.)
@@ -472,7 +644,11 @@ def build_telegram_app(token: str) -> Application:
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("exec_mode", exec_mode_cmd))
+    app.add_handler(CommandHandler("thinking", thinking_cmd))
+    app.add_handler(CommandHandler("reasoning", reasoning_cmd))
     app.add_handler(CallbackQueryHandler(exec_mode_callback, pattern=r"^exec_mode:"))
+    app.add_handler(CallbackQueryHandler(thinking_callback, pattern=r"^thinking:"))
+    app.add_handler(CallbackQueryHandler(reasoning_callback, pattern=r"^reasoning:"))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice_or_audio))
     app.add_handler(MessageHandler(filters.Document.AUDIO, on_voice_or_audio))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
@@ -512,6 +688,9 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 image_bytes=image_bytes,
                 image_mime=image_mime
             )
+            if not (reply or "").strip():
+                logger.info("Telegram photo reply suppressed (silent control token) for %s", user_id)
+                return
             
             out = (reply or "").strip()[:TELEGRAM_MAX_MESSAGE_LENGTH] or "No response."
             await _reply_text_safe_html(update.message, out)
@@ -596,9 +775,17 @@ async def start_telegram_bot_in_loop(app: Application) -> None:
             BotCommand("start", "Start Asta"),
             BotCommand("status", "Show server status"),
             BotCommand("exec_mode", "Set exec security mode (deny/allowlist/full)"),
+            BotCommand("thinking", "Set thinking level (off/low/medium/high)"),
+            BotCommand("reasoning", "Set reasoning visibility (off/on/stream)"),
         ])
     except Exception as e:
         logger.warning("Could not register Telegram bot commands: %s", e)
     await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
     await app.start()
+    invalid = sorted(get_settings().telegram_allowlist_invalid)
+    if invalid:
+        logger.warning(
+            "ASTA_TELEGRAM_ALLOWED_IDS contains non-numeric entries (ignored): %s",
+            ", ".join(invalid[:5]) + (f" (+{len(invalid) - 5} more)" if len(invalid) > 5 else ""),
+        )
     logger.info("Telegram bot polling started (same loop as FastAPI)")

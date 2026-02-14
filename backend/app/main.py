@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.db import get_db
+from app.whatsapp_bridge import get_whatsapp_bridge_status
 from app.routers import chat, files, drive, rag, providers, tasks, settings as settings_router, spotify as spotify_router, audio as audio_router, cron as cron_router
 
 logger = logging.getLogger(__name__)
@@ -185,13 +186,25 @@ def restart_backend():
 async def whatsapp_qr():
     """Proxy to WhatsApp bridge: return QR code (data URL) or connected status for the panel."""
     import httpx
-    url = settings.asta_whatsapp_bridge_url
-    if not url:
-        return {"connected": False, "qr": None, "error": "Bridge URL not set. Add ASTA_WHATSAPP_BRIDGE_URL in backend/.env (e.g. http://localhost:3001)."}
-    base = url.rstrip("/")
+    runtime = await get_whatsapp_bridge_status(settings.asta_whatsapp_bridge_url)
+    base = (runtime.get("bridge_url") or "").rstrip("/")
+    if not runtime.get("configured"):
+        return {"connected": False, "qr": None, "error": runtime.get("error"), "status": runtime}
+    if not runtime.get("reachable"):
+        return {"connected": False, "qr": None, "error": runtime.get("error"), "status": runtime}
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             r = await client.get(f"{base}/qr")
-            return r.json()
-    except Exception as e:
-        return {"connected": False, "qr": None, "error": f"Cannot reach bridge at {base}. Start it with: cd services/whatsapp && npm run start"}
+            payload = r.json() if r.content else {}
+            if not isinstance(payload, dict):
+                payload = {"connected": bool(runtime.get("connected")), "qr": None}
+            if "connected" not in payload:
+                payload["connected"] = bool(runtime.get("connected"))
+            if "qr" not in payload:
+                payload["qr"] = None
+            payload["status"] = runtime
+            if runtime.get("error") and not payload.get("error"):
+                payload["error"] = runtime["error"]
+            return payload
+    except Exception:
+        return {"connected": False, "qr": None, "error": runtime.get("error"), "status": runtime}

@@ -73,6 +73,18 @@ DEFAULT_MODEL = "arcee-ai/trinity-large-preview:free"
 MODEL_TIMEOUT = 60
 
 
+def _reasoning_effort_from_level(level: str | None) -> str | None:
+    lv = (level or "").strip().lower()
+    if lv in ("low", "medium", "high"):
+        return lv
+    return None
+
+
+def _is_reasoning_param_unsupported_error(msg: str) -> bool:
+    low = (msg or "").lower()
+    return ("reasoning_effort" in low) or ("unknown parameter" in low) or ("unrecognized request argument" in low)
+
+
 class OpenRouterProvider(BaseProvider):
     @property
     def name(self) -> str:
@@ -156,7 +168,17 @@ class OpenRouterProvider(BaseProvider):
                 if tools:
                     create_kwargs["tools"] = tools
                     create_kwargs["tool_choice"] = "auto"
-                r = await client.chat.completions.create(**create_kwargs)
+                effort = _reasoning_effort_from_level(kwargs.get("thinking_level"))
+                if effort:
+                    create_kwargs["reasoning_effort"] = effort
+                try:
+                    r = await client.chat.completions.create(**create_kwargs)
+                except Exception as first_err:
+                    if effort and _is_reasoning_param_unsupported_error(str(first_err)):
+                        create_kwargs.pop("reasoning_effort", None)
+                        r = await client.chat.completions.create(**create_kwargs)
+                    else:
+                        raise
                 msg = r.choices[0].message
                 content = (msg.content or "").strip()
                 raw_tc = getattr(msg, "tool_calls", None)

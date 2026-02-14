@@ -2,10 +2,64 @@
 from __future__ import annotations
 import aiosqlite
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 DB_PATH = os.environ.get("ASTA_DB_PATH", str(Path(__file__).resolve().parent.parent / "asta.db"))
+
+# One-shot reminders are stored as cron jobs with an "@at <ISO-UTC>" expression.
+ONE_SHOT_CRON_PREFIX = "@at "
+ONE_SHOT_REMINDER_NAME_PREFIX = "__reminder__:"
+ONE_SHOT_REMINDER_ID_OFFSET = 1_000_000_000
+
+
+def normalize_iso_utc(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return raw
+    try:
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return (value or "").strip()
+
+
+def is_one_shot_cron_expr(expr: str) -> bool:
+    return (expr or "").strip().lower().startswith(ONE_SHOT_CRON_PREFIX)
+
+
+def run_at_to_one_shot_cron_expr(run_at_iso: str) -> str:
+    return f"{ONE_SHOT_CRON_PREFIX}{normalize_iso_utc(run_at_iso)}"
+
+
+def one_shot_cron_expr_to_run_at(expr: str) -> str | None:
+    raw = (expr or "").strip()
+    if not is_one_shot_cron_expr(raw):
+        return None
+    run_at_raw = raw[len(ONE_SHOT_CRON_PREFIX):].strip()
+    if not run_at_raw:
+        return None
+    return normalize_iso_utc(run_at_raw)
+
+
+def encode_one_shot_reminder_id(cron_job_id: int) -> int:
+    return ONE_SHOT_REMINDER_ID_OFFSET + int(cron_job_id)
+
+
+def decode_one_shot_reminder_id(reminder_id: int) -> int | None:
+    try:
+        rid = int(reminder_id)
+    except Exception:
+        return None
+    if rid >= ONE_SHOT_REMINDER_ID_OFFSET:
+        return rid - ONE_SHOT_REMINDER_ID_OFFSET
+    return None
 
 
 class Db:
@@ -61,6 +115,8 @@ class Db:
                 user_id TEXT PRIMARY KEY,
                 mood TEXT NOT NULL DEFAULT 'normal',
                 default_ai_provider TEXT NOT NULL DEFAULT 'openrouter',
+                thinking_level TEXT NOT NULL DEFAULT 'off',
+                reasoning_mode TEXT NOT NULL DEFAULT 'off',
                 updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS api_keys (
@@ -179,6 +235,22 @@ class Db:
                 await self._conn.commit()
             except Exception as e:
                 self.logger.exception("Failed to add fallback_providers column: %s", e)
+        if "thinking_level" not in columns:
+            try:
+                await self._conn.execute(
+                    "ALTER TABLE user_settings ADD COLUMN thinking_level TEXT NOT NULL DEFAULT 'off'"
+                )
+                await self._conn.commit()
+            except Exception as e:
+                self.logger.exception("Failed to add thinking_level column: %s", e)
+        if "reasoning_mode" not in columns:
+            try:
+                await self._conn.execute(
+                    "ALTER TABLE user_settings ADD COLUMN reasoning_mode TEXT NOT NULL DEFAULT 'off'"
+                )
+                await self._conn.commit()
+            except Exception as e:
+                self.logger.exception("Failed to add reasoning_mode column: %s", e)
 
     async def get_or_create_conversation(self, user_id: str, channel: str) -> str:
         if not self._conn:
@@ -263,6 +335,70 @@ class Db:
             """INSERT INTO user_settings (user_id, mood, default_ai_provider, updated_at) VALUES (?, 'normal', ?, datetime('now'))
                ON CONFLICT(user_id) DO UPDATE SET default_ai_provider = ?, updated_at = datetime('now')""",
             (user_id, provider, provider),
+        )
+        await self._conn.commit()
+
+    async def get_user_thinking_level(self, user_id: str) -> str:
+        if not self._conn:
+            await self.connect()
+        try:
+            cursor = await self._conn.execute(
+                "SELECT thinking_level FROM user_settings WHERE user_id = ?", (user_id,)
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return "off"
+            level = (row["thinking_level"] or "off").strip().lower()
+            if level not in ("off", "low", "medium", "high"):
+                return "off"
+            return level
+        except Exception as e:
+            self.logger.exception("Failed to get user thinking level: %s", e)
+            return "off"
+
+    async def set_user_thinking_level(self, user_id: str, level: str) -> None:
+        if not self._conn:
+            await self.connect()
+        normalized = (level or "off").strip().lower()
+        if normalized not in ("off", "low", "medium", "high"):
+            normalized = "off"
+        await self._conn.execute(
+            """INSERT INTO user_settings (user_id, mood, default_ai_provider, thinking_level, updated_at)
+               VALUES (?, 'normal', 'openrouter', ?, datetime('now'))
+               ON CONFLICT(user_id) DO UPDATE SET thinking_level = ?, updated_at = datetime('now')""",
+            (user_id, normalized, normalized),
+        )
+        await self._conn.commit()
+
+    async def get_user_reasoning_mode(self, user_id: str) -> str:
+        if not self._conn:
+            await self.connect()
+        try:
+            cursor = await self._conn.execute(
+                "SELECT reasoning_mode FROM user_settings WHERE user_id = ?", (user_id,)
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return "off"
+            mode = (row["reasoning_mode"] or "off").strip().lower()
+            if mode not in ("off", "on", "stream"):
+                return "off"
+            return mode
+        except Exception as e:
+            self.logger.exception("Failed to get user reasoning mode: %s", e)
+            return "off"
+
+    async def set_user_reasoning_mode(self, user_id: str, mode: str) -> None:
+        if not self._conn:
+            await self.connect()
+        normalized = (mode or "off").strip().lower()
+        if normalized not in ("off", "on", "stream"):
+            normalized = "off"
+        await self._conn.execute(
+            """INSERT INTO user_settings (user_id, mood, default_ai_provider, reasoning_mode, updated_at)
+               VALUES (?, 'normal', 'openrouter', ?, datetime('now'))
+               ON CONFLICT(user_id) DO UPDATE SET reasoning_mode = ?, updated_at = datetime('now')""",
+            (user_id, normalized, normalized),
         )
         await self._conn.commit()
 
@@ -409,72 +545,237 @@ class Db:
     ) -> int:
         if not self._conn:
             await self.connect()
-        await self._conn.execute(
-            """INSERT INTO reminders (user_id, channel, channel_target, message, run_at, status, created_at)
-               VALUES (?, ?, ?, ?, ?, 'pending', datetime('now'))""",
-            (user_id, channel, channel_target, message, run_at),
+        run_at_norm = normalize_iso_utc(run_at)
+        # OpenClaw-style internals: store one-shot reminders as cron jobs.
+        cron_expr = run_at_to_one_shot_cron_expr(run_at_norm)
+        name = f"{ONE_SHOT_REMINDER_NAME_PREFIX}{uuid4().hex}"
+        cron_id = await self.add_cron_job(
+            user_id,
+            name,
+            cron_expr,
+            message or "Reminder",
+            tz=None,
+            channel=channel or "web",
+            channel_target=channel_target or "",
         )
-        await self._conn.commit()
-        cursor = await self._conn.execute("SELECT last_insert_rowid()")
-        row = await cursor.fetchone()
-        return row[0] if row else 0
+        return encode_one_shot_reminder_id(cron_id)
 
     async def get_pending_reminders_due(self, now_iso: str) -> list[dict[str, Any]]:
         if not self._conn:
             await self.connect()
+        now_norm = normalize_iso_utc(now_iso)
+        pending_rows: list[dict[str, Any]] = []
+        cursor = await self._conn.execute(
+            """SELECT id, user_id, channel, channel_target, message, cron_expr
+               FROM cron_jobs
+               WHERE enabled = 1 AND lower(trim(cron_expr)) LIKE '@at %'"""
+        )
+        for row in await cursor.fetchall():
+            run_at = one_shot_cron_expr_to_run_at(row["cron_expr"] or "")
+            if run_at and run_at <= now_norm:
+                pending_rows.append(
+                    {
+                        "id": encode_one_shot_reminder_id(int(row["id"])),
+                        "user_id": row["user_id"],
+                        "channel": row["channel"],
+                        "channel_target": row["channel_target"],
+                        "message": row["message"],
+                    }
+                )
+        # Legacy fallback (pre-migration rows).
         cursor = await self._conn.execute(
             "SELECT id, user_id, channel, channel_target, message FROM reminders WHERE status = 'pending' AND run_at <= ?",
-            (now_iso,),
+            (now_norm,),
         )
         rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        pending_rows.extend(dict(r) for r in rows)
+        return pending_rows
 
     async def get_all_pending_reminders(self) -> list[dict[str, Any]]:
-        """All reminders with status=pending (for re-scheduling on startup)."""
+        """All pending reminders (one-shot cron + legacy rows)."""
         if not self._conn:
             await self.connect()
+        out: list[dict[str, Any]] = []
+        cursor = await self._conn.execute(
+            """SELECT id, cron_expr FROM cron_jobs
+               WHERE enabled = 1 AND lower(trim(cron_expr)) LIKE '@at %'
+               ORDER BY created_at ASC"""
+        )
+        for row in await cursor.fetchall():
+            run_at = one_shot_cron_expr_to_run_at(row["cron_expr"] or "")
+            if not run_at:
+                continue
+            out.append(
+                {
+                    "id": encode_one_shot_reminder_id(int(row["id"])),
+                    "run_at": run_at,
+                }
+            )
+        # Legacy fallback (pre-migration rows).
         cursor = await self._conn.execute(
             "SELECT id, run_at FROM reminders WHERE status = 'pending' ORDER BY run_at ASC",
             (),
         )
         rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        out.extend(dict(r) for r in rows)
+        return out
 
     async def mark_reminder_sent(self, reminder_id: int) -> None:
         if not self._conn:
             await self.connect()
-        await self._conn.execute("UPDATE reminders SET status = 'sent' WHERE id = ?", (reminder_id,))
+        one_shot_id = decode_one_shot_reminder_id(reminder_id)
+        if one_shot_id is not None:
+            cursor = await self._conn.execute(
+                "SELECT user_id, channel, channel_target, message, cron_expr FROM cron_jobs WHERE id = ?",
+                (one_shot_id,),
+            )
+            row = await cursor.fetchone()
+            if row:
+                run_at = one_shot_cron_expr_to_run_at(row["cron_expr"] or "") or datetime.now(
+                    timezone.utc
+                ).strftime("%Y-%m-%dT%H:%M:%SZ")
+                await self._conn.execute(
+                    """INSERT INTO reminders (user_id, channel, channel_target, message, run_at, status, created_at)
+                       VALUES (?, ?, ?, ?, ?, 'sent', datetime('now'))""",
+                    (
+                        row["user_id"],
+                        row["channel"],
+                        row["channel_target"] or "",
+                        row["message"] or "Reminder",
+                        run_at,
+                    ),
+                )
+                await self._conn.execute("DELETE FROM cron_jobs WHERE id = ?", (one_shot_id,))
+        else:
+            await self._conn.execute("UPDATE reminders SET status = 'sent' WHERE id = ?", (reminder_id,))
         await self._conn.commit()
 
     async def get_notifications(self, user_id: str, limit: int = 50) -> list[dict[str, Any]]:
         if not self._conn:
             await self.connect()
+        # Pending one-shot reminders are stored in cron_jobs.
+        pending_rows: list[dict[str, Any]] = []
+        cursor = await self._conn.execute(
+            """SELECT id, message, cron_expr, channel, created_at
+               FROM cron_jobs
+               WHERE user_id = ? AND enabled = 1 AND lower(trim(cron_expr)) LIKE '@at %'
+               ORDER BY created_at DESC""",
+            (user_id,),
+        )
+        for row in await cursor.fetchall():
+            run_at = one_shot_cron_expr_to_run_at(row["cron_expr"] or "")
+            if not run_at:
+                continue
+            pending_rows.append(
+                {
+                    "id": encode_one_shot_reminder_id(int(row["id"])),
+                    "message": row["message"] or "Reminder",
+                    "run_at": run_at,
+                    "status": "pending",
+                    "channel": row["channel"] or "web",
+                    "created_at": row["created_at"] or "",
+                }
+            )
+        # Sent/legacy reminders history stays in reminders table.
         cursor = await self._conn.execute(
             """SELECT id, message, run_at, status, channel, created_at FROM reminders
-               WHERE user_id = ? ORDER BY id DESC LIMIT ?""",
-            (user_id, limit),
+               WHERE user_id = ? ORDER BY created_at DESC LIMIT ?""",
+            (user_id, max(limit * 2, limit)),
         )
         rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
+        items = pending_rows + [dict(r) for r in rows]
+        items.sort(
+            key=lambda r: (
+                str(r.get("created_at") or ""),
+                int(r.get("id") or 0),
+            ),
+            reverse=True,
+        )
+        return items[:limit]
 
     async def get_pending_reminders_for_user(self, user_id: str, limit: int = 5) -> list[dict[str, Any]]:
-        """Pending reminders for context (message, run_at)."""
+        """Pending reminders for context (id, message, run_at)."""
+        if not self._conn:
+            await self.connect()
+        items = await self.get_notifications(user_id, limit=max(limit * 3, 50))
+        pending = [r for r in items if (r.get("status") or "").lower() == "pending"]
+        pending.sort(key=lambda r: str(r.get("run_at") or ""))
+        return [
+            {
+                "id": int(r.get("id") or 0),
+                "message": r.get("message") or "Reminder",
+                "run_at": r.get("run_at") or "",
+            }
+            for r in pending[:limit]
+        ]
+
+    async def delete_reminder(self, reminder_id: int, user_id: str) -> bool:
+        if not self._conn:
+            await self.connect()
+        one_shot_id = decode_one_shot_reminder_id(reminder_id)
+        if one_shot_id is not None:
+            cursor = await self._conn.execute(
+                """DELETE FROM cron_jobs
+                   WHERE id = ? AND user_id = ? AND lower(trim(cron_expr)) LIKE '@at %'""",
+                (one_shot_id, user_id),
+            )
+            await self._conn.commit()
+            return cursor.rowcount > 0
+
+        # Backward compatibility: allow deleting one-shot by raw cron id too.
+        cursor = await self._conn.execute(
+            """DELETE FROM cron_jobs
+               WHERE id = ? AND user_id = ? AND lower(trim(cron_expr)) LIKE '@at %'""",
+            (reminder_id, user_id),
+        )
+        if cursor.rowcount > 0:
+            await self._conn.commit()
+            return True
+
+        cursor = await self._conn.execute(
+            "DELETE FROM reminders WHERE id = ? AND user_id = ?",
+            (reminder_id, user_id),
+        )
+        await self._conn.commit()
+        return cursor.rowcount > 0
+
+    async def migrate_legacy_pending_reminders_to_one_shot(self) -> int:
+        """Move old pending reminders rows into one-shot cron jobs."""
         if not self._conn:
             await self.connect()
         cursor = await self._conn.execute(
-            """SELECT message, run_at FROM reminders WHERE user_id = ? AND status = 'pending'
-               ORDER BY run_at ASC LIMIT ?""",
-            (user_id, limit),
+            """SELECT id, user_id, channel, channel_target, message, run_at, created_at
+               FROM reminders
+               WHERE status = 'pending'
+               ORDER BY id ASC"""
         )
-        rows = await cursor.fetchall()
-        return [dict(r) for r in rows]
-
-    async def delete_reminder(self, reminder_id: int) -> bool:
-        if not self._conn:
-            await self.connect()
-        cursor = await self._conn.execute("DELETE FROM reminders WHERE id = ?", (reminder_id,))
-        await self._conn.commit()
-        return cursor.rowcount > 0
+        rows = [dict(r) for r in await cursor.fetchall()]
+        moved = 0
+        for row in rows:
+            run_at = normalize_iso_utc(row.get("run_at") or "")
+            if not run_at:
+                continue
+            name = f"{ONE_SHOT_REMINDER_NAME_PREFIX}legacy:{int(row['id'])}"
+            cron_expr = run_at_to_one_shot_cron_expr(run_at)
+            await self._conn.execute(
+                """INSERT OR IGNORE INTO cron_jobs
+                   (user_id, name, cron_expr, tz, message, channel, channel_target, enabled, created_at)
+                   VALUES (?, ?, ?, '', ?, ?, ?, 1, ?)""",
+                (
+                    row["user_id"],
+                    name,
+                    cron_expr,
+                    row.get("message") or "Reminder",
+                    row.get("channel") or "web",
+                    row.get("channel_target") or "",
+                    row.get("created_at") or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                ),
+            )
+            await self._conn.execute("DELETE FROM reminders WHERE id = ?", (row["id"],))
+            moved += 1
+        if moved:
+            await self._conn.commit()
+        return moved
 
     # Cron jobs (Claw-style recurring)
     async def add_cron_job(
@@ -503,11 +804,14 @@ class Db:
         return row["id"] if row else 0
 
     async def get_cron_jobs(self, user_id: str) -> list[dict[str, Any]]:
-        """List cron jobs for user."""
+        """List recurring cron jobs for user (one-shot reminders are excluded)."""
         if not self._conn:
             await self.connect()
         cursor = await self._conn.execute(
-            "SELECT id, name, cron_expr, tz, message, channel, channel_target, enabled, created_at FROM cron_jobs WHERE user_id = ? ORDER BY name",
+            """SELECT id, name, cron_expr, tz, message, channel, channel_target, enabled, created_at
+               FROM cron_jobs
+               WHERE user_id = ? AND lower(trim(cron_expr)) NOT LIKE '@at %'
+               ORDER BY name""",
             (user_id,),
         )
         return [dict(r) for r in await cursor.fetchall()]
