@@ -76,6 +76,39 @@ def _provider_supports_tools(provider_name: str) -> bool:
     return (provider_name or "").strip().lower() in _TOOL_CAPABLE_PROVIDERS
 
 
+def _looks_like_reminder_set_request(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    # List/status questions should not schedule.
+    if any(
+        q in t for q in (
+            "do i have reminder",
+            "do i have any reminder",
+            "what reminders",
+            "list reminders",
+            "show reminders",
+            "pending reminders",
+            "any reminders",
+        )
+    ):
+        return False
+    return any(
+        k in t for k in (
+            "remind me",
+            "set reminder",
+            "set a reminder",
+            "alarm at",
+            "alarm for",
+            "set alarm",
+            "set an alarm",
+            "wake me up",
+            "set timer",
+            "timer for",
+        )
+    )
+
+
 def _summarize_directory_json(raw: str, max_items: int = 40) -> str | None:
     try:
         data = json.loads(raw)
@@ -399,6 +432,7 @@ async def handle_message(
     current_messages = list(messages)
     ran_exec_tool = False
     ran_files_tool = False
+    reminder_tool_scheduled = False
     last_exec_stdout: str = ""
     for _ in range(MAX_TOOL_ROUNDS):
         if not response.tool_calls or not provider_used:
@@ -498,6 +532,19 @@ async def handle_message(
                     channel_target=channel_target,
                     db=db,
                 )
+                if (params.get("action") or "").strip().lower() == "add":
+                    try:
+                        parsed = json.loads(out)
+                        if isinstance(parsed, dict) and parsed.get("ok") is True:
+                            reminder_tool_scheduled = True
+                            extra["reminder_scheduled"] = True
+                            extra["reminder_at"] = (
+                                parsed.get("display_time")
+                                or parsed.get("run_at")
+                                or ""
+                            )
+                    except Exception:
+                        pass
                 current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
             elif name == "cron":
                 from app.cron_tool import run_cron_tool, parse_cron_tool_args
@@ -563,27 +610,30 @@ async def handle_message(
     exec_matches = list(exec_pattern.finditer(reply))
     exec_outputs: list[str] = []
     if exec_matches:
-        from app.exec_tool import get_effective_exec_bins, run_allowlisted_command
-        effective_bins = await get_effective_exec_bins(db)
-        for m in exec_matches:
-            cmd = m.group(1).strip()
-            stdout, stderr, ok = await run_allowlisted_command(cmd, allowed_bins=effective_bins)
-            if ok or stdout or stderr:
-                exec_outputs.append(f"Command: {cmd}\nOutput:\n{stdout}\n" + (f"Stderr:\n{stderr}\n" if stderr else ""))
-            else:
-                exec_outputs.append(f"Command: {cmd}\nError: {stderr or 'Command not allowed or failed.'}")
-        if exec_outputs:
-            exec_message = "[Command output from Asta]\n\n" + "\n---\n\n".join(exec_outputs)
-            exec_message += "\n\nReply to the user based on this output. Do not use [ASTA_EXEC] in your reply."
-            messages_plus = list(messages) + [{"role": "assistant", "content": reply}] + [{"role": "user", "content": exec_message}]
-            response2, _ = await chat_with_fallback(
-                provider, messages_plus, fallback_names,
-                context=context, model=user_model or None,
-                _fallback_models=fallback_models,
-            )
-            if response2.content and not response2.error:
-                reply = response2.content
-        # Strip any [ASTA_EXEC] blocks from reply so the user never sees the raw block
+        # Safety: only honor legacy [ASTA_EXEC] fallback when current user message is clearly exec-intent.
+        # Prevents unrelated requests (e.g. reminders/lists) from accidentally running stale exec commands.
+        if _is_exec_intent(text):
+            from app.exec_tool import get_effective_exec_bins, run_allowlisted_command
+            effective_bins = await get_effective_exec_bins(db)
+            for m in exec_matches:
+                cmd = m.group(1).strip()
+                stdout, stderr, ok = await run_allowlisted_command(cmd, allowed_bins=effective_bins)
+                if ok or stdout or stderr:
+                    exec_outputs.append(f"Command: {cmd}\nOutput:\n{stdout}\n" + (f"Stderr:\n{stderr}\n" if stderr else ""))
+                else:
+                    exec_outputs.append(f"Command: {cmd}\nError: {stderr or 'Command not allowed or failed.'}")
+            if exec_outputs:
+                exec_message = "[Command output from Asta]\n\n" + "\n---\n\n".join(exec_outputs)
+                exec_message += "\n\nReply to the user based on this output. Do not use [ASTA_EXEC] in your reply."
+                messages_plus = list(messages) + [{"role": "assistant", "content": reply}] + [{"role": "user", "content": exec_message}]
+                response2, _ = await chat_with_fallback(
+                    provider, messages_plus, fallback_names,
+                    context=context, model=user_model or None,
+                    _fallback_models=fallback_models,
+                )
+                if response2.content and not response2.error:
+                    reply = response2.content
+        # Always strip raw block from user-visible reply.
         reply = exec_pattern.sub("", reply).strip() or reply
 
     # Create file when AI outputs [ASTA_WRITE_FILE: path]...[/ASTA_WRITE_FILE]
@@ -642,6 +692,24 @@ async def handle_message(
                 reply = reply.replace(m.group(0), f"I couldn't remove the cron job: {e}.")
         else:
             reply = reply.replace(m.group(0), "I couldn't parse the cron job name.")
+
+    # Reliability fallback: for tool-capable providers that skipped reminder tool calls,
+    # schedule directly from parser so clear reminder intents still work.
+    if (
+        "reminders" in enabled
+        and _provider_supports_tools(provider_name)
+        and _looks_like_reminder_set_request(text)
+        and not extra.get("reminder_scheduled")
+        and not reminder_tool_scheduled
+    ):
+        reminder_result = await ReminderService.process_reminder(user_id, text, channel, channel_target)
+        if reminder_result:
+            extra.update(reminder_result)
+            if reminder_result.get("reminder_scheduled"):
+                when = (reminder_result.get("reminder_at") or "").strip()
+                reply = f"Done. I set your reminder{f' for {when}' if when else ''}."
+            elif reminder_result.get("reminder_needs_location"):
+                reply = "I can set that, but I need your location/timezone first. Tell me your city and country."
 
     # Post-reply validation: AI claimed it set a reminder but we didn't
     if "reminders" in skills_to_use and not extra.get("reminder_scheduled"):

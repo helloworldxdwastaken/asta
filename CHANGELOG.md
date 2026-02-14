@@ -2,6 +2,21 @@
 
 All notable changes to Asta are documented here.
 
+## [1.2.1] - 2026-02-14
+
+### Fixed
+
+- **Reminder requests no longer fall into Apple Notes fallback text** — Added a reliability fallback for tool-capable providers: when reminder tool-calls are skipped, Asta now parses and schedules reminders directly from user intent.
+- **Reminder parsing coverage** — Added support for common phrasing like `set an alarm for 10 am` and `set a reminder for tomorrow 11am`.
+- **Exec fallback guard** — Legacy `[ASTA_EXEC: ...]` fallback is now executed only for clear exec intents (Apple Notes/Things), preventing unrelated prompts (shopping lists, reminders) from triggering exec-side error replies.
+- **Shopping list intent routing** — Files skill eligibility now includes shopping/grocery list phrasing so list creation routes to workspace file-write flow more reliably.
+
+### Added
+
+- **Regression tests (parse/intent guards)** — Added focused tests for reminder parsing and exec-intent guard behavior.
+
+---
+
 ## [1.2.0] - 2026-02-14
 
 ### Added

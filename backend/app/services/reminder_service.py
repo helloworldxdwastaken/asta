@@ -6,11 +6,16 @@ from app.time_weather import get_timezone_for_coords
 
 # Absolute-time patterns: "at 7am", "at 6pm" require user timezone
 RE_WAKE_AT = re.compile(
-    r"(?:wake\s+me\s+up|wake\s+up|alarm)\s+(?:tomorrow\s+)?at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}:\d{2})",
+    r"(?:(?:wake\s+me\s+up)|(?:wake\s+up)|(?:alarm)|(?:set\s+(?:an?\s+)?alarm))\s+"
+    r"(?:for\s+)?(?:tomorrow\s+)?(?:at\s+)?"
+    r"(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}:\d{2})",
     re.I,
 )
 RE_REMIND_AT = re.compile(
-    r"remind\s+me\s+(?:tomorrow\s+)?at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}:\d{2})\s+(?:to\s+)?(.+)",
+    r"(?:(?:remind\s+me)|(?:set\s+(?:a\s+)?reminder))\s+"
+    r"(?:for\s+)?(?:tomorrow\s+)?(?:at\s+)?"
+    r"(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}:\d{2})"
+    r"(?:\s+(?:to\s+)?(.+))?",
     re.I,
 )
 def _is_absolute_time_reminder(text: str) -> bool:

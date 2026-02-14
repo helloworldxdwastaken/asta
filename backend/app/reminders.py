@@ -28,12 +28,17 @@ RE_FROM_NOW = re.compile(
 )
 # "remind me at 6pm to X", "remind me at 18:00 to X", "remind me tomorrow at 8am to X"
 RE_REMIND_AT = re.compile(
-    r"remind\s+me\s+(?:tomorrow\s+)?at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}:\d{2})\s+(?:to\s+)?(.+)",
+    r"(?:(?:remind\s+me)|(?:set\s+(?:a\s+)?reminder))\s+"
+    r"(?:for\s+)?(?:tomorrow\s+)?(?:at\s+)?"
+    r"(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}:\d{2})"
+    r"(?:\s+(?:to\s+)?(.+))?",
     re.I,
 )
-# "wake me up at 7am", "wake me up tomorrow at 7am", "alarm at 7am", "wake up at 9 am"
+# "wake me up at 7am", "wake me up tomorrow at 7am", "alarm at 7am", "set an alarm for 10am"
 RE_WAKE_AT = re.compile(
-    r"(?:wake\s+me\s+up|wake\s+up|alarm)\s+(?:tomorrow\s+)?at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}:\d{2})",
+    r"(?:(?:wake\s+me\s+up)|(?:wake\s+up)|(?:alarm)|(?:set\s+(?:an?\s+)?alarm))\s+"
+    r"(?:for\s+)?(?:tomorrow\s+)?(?:at\s+)?"
+    r"(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|\d{1,2}:\d{2})",
     re.I,
 )
 
@@ -114,10 +119,11 @@ def parse_reminder(text: str, tz_str: str | None = None) -> dict[str, Any] | Non
         display = _display_time(time_str)
         return {"message": display, "run_at": run_at_utc, "display_time": display, "wake_up": True}
 
-    # "remind me at 6pm to X" or "remind me tomorrow at 8am to X"
+    # "remind me at 6pm to X", "set a reminder for tomorrow 11am", etc.
     m = RE_REMIND_AT.search(text)
     if m:
-        time_str, msg = (m.group(1) or "").strip(), (m.group(2) or "").strip()
+        time_str = (m.group(1) or "").strip()
+        msg = (m.group(2) or "").strip()
         if not time_str:
             return None
         ref = ref_now + timedelta(days=1) if "tomorrow" in text.lower() else ref_now

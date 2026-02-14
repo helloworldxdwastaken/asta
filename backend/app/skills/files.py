@@ -11,6 +11,7 @@ class FilesSkill(Skill):
         return any(k in t for k in (
             "file", "files", "document", "folder", "path", "directory",
             "save", "write", "create", "store", "put it in",
+            "shopping list", "grocery list", "grocery", "make a list", "create a list",
             "desktop", "allow access", "allow my", "enter my", "check my desktop", "what can i delete",
             "what files", "files i have", "on my desktop", "list my desktop",
         ))
