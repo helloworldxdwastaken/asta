@@ -25,17 +25,6 @@ _SHORT_ACK_PHRASES = frozenset({
     "cool", "nice", "np", "alright", "k", "kk", "done", "good", "great", "perfect",
 })
 
-_DESKTOP_REQUEST_HINTS = (
-    "desktop",
-    "check my desktop",
-    "list my desktop",
-    "what files",
-    "files on my desktop",
-    "on my desktop",
-    "screenshot files",
-    "delete screenshots",
-)
-
 _EXEC_INTENT_HINTS = (
     "apple notes",
     "memo",
@@ -45,6 +34,7 @@ _EXEC_INTENT_HINTS = (
 )
 
 _TOOL_CAPABLE_PROVIDERS = frozenset({"openai", "groq", "openrouter", "claude", "google"})
+_GIF_COOLDOWN_SECONDS = 30 * 60
 
 
 def _is_short_acknowledgment(text: str) -> bool:
@@ -60,11 +50,6 @@ def _is_short_acknowledgment(text: str) -> bool:
     if base in _SHORT_ACK_PHRASES:
         return True
     return False
-
-
-def _is_desktop_request(text: str) -> bool:
-    t = (text or "").strip().lower()
-    return any(k in t for k in _DESKTOP_REQUEST_HINTS)
 
 
 def _is_exec_intent(text: str) -> bool:
@@ -107,42 +92,6 @@ def _looks_like_reminder_set_request(text: str) -> bool:
             "timer for",
         )
     )
-
-
-def _summarize_directory_json(raw: str, max_items: int = 40) -> str | None:
-    try:
-        data = json.loads(raw)
-        if not isinstance(data, dict):
-            return None
-        path = data.get("path") or "~/Desktop"
-        entries = data.get("entries") or []
-        if not isinstance(entries, list):
-            return None
-        dirs = [e for e in entries if isinstance(e, dict) and e.get("kind") == "dir"]
-        files = [e for e in entries if isinstance(e, dict) and e.get("kind") == "file"]
-        lines = [
-            f"I checked `{path}`.",
-            f"Found {len(dirs)} folder(s) and {len(files)} file(s).",
-        ]
-        shown = entries[:max_items]
-        if shown:
-            lines.append("")
-            lines.append("Top entries:")
-            for e in shown:
-                if not isinstance(e, dict):
-                    continue
-                name = str(e.get("name") or "")
-                kind = "dir" if e.get("kind") == "dir" else "file"
-                size = e.get("size")
-                if kind == "file" and isinstance(size, int):
-                    lines.append(f"- {name} ({size} bytes)")
-                else:
-                    lines.append(f"- {name} ({kind})")
-        if len(entries) > max_items:
-            lines.append(f"...and {len(entries) - max_items} more.")
-        return "\n".join(lines).strip()
-    except Exception:
-        return None
 
 
 async def handle_message(
@@ -370,36 +319,53 @@ async def handle_message(
         return f"No AI provider found for '{provider_name}'. Check your provider settings."
     user_model = await db.get_user_provider_model(user_id, provider.name)
 
-    # Exec tool (Claw-style): when allowlist is non-empty, pass tool so model can call exec(command)
+    # Exec tool (Claw-style): expose based on exec security policy.
     from app.exec_tool import (
         get_effective_exec_bins,
+        get_bash_tool_openai_def,
         get_exec_tool_openai_def,
         run_allowlisted_command,
         parse_exec_arguments,
     )
-    effective_bins = await get_effective_exec_bins(db)
-    # Guardrail: only expose exec when the user message is likely asking for an exec-backed workflow.
-    # This prevents models (especially free ones) from misusing exec for unrelated requests.
-    offer_exec = _is_exec_intent(text)
-    tools = list(get_exec_tool_openai_def(effective_bins)) if (effective_bins and offer_exec) else []
-    if effective_bins and offer_exec:
+    from app.config import get_settings
+    effective_bins = await get_effective_exec_bins(db, user_id)
+    # OpenClaw-style: expose exec based on security policy.
+    # - deny: hidden
+    # - allowlist: shown when allowlist has bins
+    # - full: always shown
+    exec_mode = get_settings().exec_security
+    offer_exec = exec_mode != "deny" and (exec_mode == "full" or bool(effective_bins))
+    tools = list(get_exec_tool_openai_def(effective_bins, security_mode=exec_mode)) if offer_exec else []
+    if offer_exec:
+        tools = tools + get_bash_tool_openai_def(effective_bins, security_mode=exec_mode)
+    if offer_exec:
         logger.info("Exec allowlist: %s; passing tools to provider=%s", sorted(effective_bins), provider.name)
     elif "notes" in text.lower() or "memo" in text.lower():
         logger.warning("User asked for notes/memo but exec allowlist is empty (enable Apple Notes skill or set ASTA_EXEC_ALLOWED_BINS)")
     # Process tool companion for long-running exec sessions (OpenClaw-style).
-    if effective_bins:
+    if offer_exec:
         from app.process_tool import get_process_tool_openai_def
         tools = tools + get_process_tool_openai_def()
 
-    # Workspace read tool (OpenClaw-style skills): lets model read selected SKILL.md on demand.
+    # Coding compatibility tools (OpenClaw-style): read/write/edit with alias normalization.
+    # Enabled for workspace skills and for files workflows.
     from app.workspace import discover_workspace_skills
     workspace_skill_names = {s.name for s in discover_workspace_skills()}
     has_enabled_workspace_skills = any(name in enabled for name in workspace_skill_names)
+    offer_coding_compat = has_enabled_workspace_skills or ("files" in enabled)
+    if offer_coding_compat:
+        from app.coding_compat_tool import get_coding_compat_tools_openai_def
+        from app.apply_patch_compat_tool import get_apply_patch_compat_tool_openai_def
+        tools = tools + get_coding_compat_tools_openai_def()
+        tools = tools + get_apply_patch_compat_tool_openai_def()
+    # High-value OpenClaw compat tools for imported skills.
     if has_enabled_workspace_skills:
-        from app.workspace_read_tool import get_workspace_read_tool_openai_def
-        tools = tools + get_workspace_read_tool_openai_def()
+        from app.openclaw_compat_tools import get_openclaw_web_memory_tools_openai_def
+        from app.message_compat_tool import get_message_compat_tool_openai_def
+        tools = tools + get_openclaw_web_memory_tools_openai_def()
+        tools = tools + get_message_compat_tool_openai_def()
 
-    # Files tool: list_directory, read_file, allow_path — when user has Files skill so they can "check desktop" / request access
+    # Files tool: list_directory/read_file/write_file/allow_path/delete* for filesystem workflows.
     if "files" in enabled:
         from app.files_tool import get_files_tools_openai_def
         tools = tools + get_files_tools_openai_def()
@@ -458,15 +424,16 @@ async def handle_message(
             fn = (tc.get("function") or {}) if isinstance(tc.get("function"), dict) else {}
             name = fn.get("name") or tc.get("function", {}).get("name")
             args_str = fn.get("arguments") or "{}"
-            if name == "exec":
+            if name in ("exec", "bash"):
                 params = parse_exec_arguments(args_str)
                 cmd = (params.get("command") or "").strip()
                 timeout_sec = params.get("timeout_sec")
                 yield_ms = params.get("yield_ms")
                 background = bool(params.get("background"))
+                pty = bool(params.get("pty"))
                 workdir = params.get("workdir") if isinstance(params.get("workdir"), str) else None
                 logger.info("Exec tool called: command=%r", cmd)
-                if background or isinstance(yield_ms, int):
+                if background or isinstance(yield_ms, int) or pty:
                     from app.process_tool import run_exec_with_process_support
 
                     exec_result = await run_exec_with_process_support(
@@ -476,6 +443,7 @@ async def handle_message(
                         workdir=workdir,
                         background=background,
                         yield_ms=yield_ms if isinstance(yield_ms, int) else None,
+                        pty=pty,
                     )
                     status = (exec_result.get("status") or "").strip().lower()
                     if status == "running":
@@ -525,6 +493,15 @@ async def handle_message(
                 out = await read_file_fn(path, user_id, db)
                 ran_files_tool = True
                 current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+            elif name == "write_file":
+                from app.files_tool import write_file as write_file_fn, parse_files_tool_args as parse_files_args
+
+                params = parse_files_args(args_str)
+                path = (params.get("path") or "").strip()
+                content = params.get("content")
+                out = await write_file_fn(path, content if isinstance(content, str) else "", user_id, db)
+                ran_files_tool = True
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
             elif name == "allow_path":
                 from app.files_tool import allow_path as allow_path_fn, parse_files_tool_args as parse_files_args
                 params = parse_files_args(args_str)
@@ -558,11 +535,63 @@ async def handle_message(
                 )
                 ran_files_tool = True
                 current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
-            elif name == "read":
-                from app.workspace_read_tool import read_workspace_file, parse_workspace_read_args
-                params = parse_workspace_read_args(args_str)
-                path = (params.get("path") or "").strip()
-                out = await read_workspace_file(path)
+            elif name in ("read", "write", "edit"):
+                from app.coding_compat_tool import (
+                    parse_coding_compat_args,
+                    run_read_compat,
+                    run_write_compat,
+                    run_edit_compat,
+                )
+
+                params = parse_coding_compat_args(args_str)
+                if name == "read":
+                    out = await run_read_compat(params, user_id, db)
+                elif name == "write":
+                    out = await run_write_compat(params, user_id, db)
+                else:
+                    out = await run_edit_compat(params, user_id, db)
+                ran_files_tool = True
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+            elif name == "web_search":
+                from app.openclaw_compat_tools import parse_openclaw_compat_args, run_web_search_compat
+
+                params = parse_openclaw_compat_args(args_str)
+                out = await run_web_search_compat(params)
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+            elif name == "web_fetch":
+                from app.openclaw_compat_tools import parse_openclaw_compat_args, run_web_fetch_compat
+
+                params = parse_openclaw_compat_args(args_str)
+                out = await run_web_fetch_compat(params)
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+            elif name == "memory_search":
+                from app.openclaw_compat_tools import parse_openclaw_compat_args, run_memory_search_compat
+
+                params = parse_openclaw_compat_args(args_str)
+                out = await run_memory_search_compat(params, user_id=user_id)
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+            elif name == "memory_get":
+                from app.openclaw_compat_tools import parse_openclaw_compat_args, run_memory_get_compat
+
+                params = parse_openclaw_compat_args(args_str)
+                out = await run_memory_get_compat(params)
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+            elif name == "apply_patch":
+                from app.apply_patch_compat_tool import parse_apply_patch_compat_args, run_apply_patch_compat
+
+                params = parse_apply_patch_compat_args(args_str)
+                out = await run_apply_patch_compat(params)
+                ran_files_tool = True
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+            elif name == "message":
+                from app.message_compat_tool import parse_message_compat_args, run_message_compat
+
+                params = parse_message_compat_args(args_str)
+                out = await run_message_compat(
+                    params,
+                    current_channel=channel,
+                    current_target=channel_target,
+                )
                 current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
             elif name == "reminders":
                 from app.reminders_tool import run_reminders_tool, parse_reminders_tool_args
@@ -634,12 +663,24 @@ async def handle_message(
     if "[gif:" in reply:
         match = re.search(r"\[gif:\s*(.+?)\]", reply, re.IGNORECASE)
         if match:
-             query = match.group(1).strip()
-             gif_markdown = await GiphyService.get_gif(query)
-             if gif_markdown:
-                 reply = reply.replace(match.group(0), "\n" + gif_markdown)
-             else:
-                 reply = reply.replace(match.group(0), "") # Remove tag if failed
+            from app.cooldowns import is_cooldown_ready, mark_cooldown_now
+
+            query = match.group(1).strip()
+            can_send_gif = await is_cooldown_ready(
+                db,
+                user_id,
+                "gif_reply",
+                _GIF_COOLDOWN_SECONDS,
+            )
+            if can_send_gif:
+                gif_markdown = await GiphyService.get_gif(query)
+                if gif_markdown:
+                    reply = reply.replace(match.group(0), "\n" + gif_markdown)
+                    await mark_cooldown_now(db, user_id, "gif_reply")
+                else:
+                    reply = reply.replace(match.group(0), "")
+            else:
+                reply = reply.replace(match.group(0), "")
 
     # Extract and apply memories from [SAVE: key: value] in reply
     from app.memories import parse_save_instructions, strip_save_instructions, add_memory
@@ -656,7 +697,7 @@ async def handle_message(
         # Prevents unrelated requests (e.g. reminders/lists) from accidentally running stale exec commands.
         if _is_exec_intent(text):
             from app.exec_tool import get_effective_exec_bins, run_allowlisted_command
-            effective_bins = await get_effective_exec_bins(db)
+            effective_bins = await get_effective_exec_bins(db, user_id)
             for m in exec_matches:
                 cmd = m.group(1).strip()
                 stdout, stderr, ok = await run_allowlisted_command(cmd, allowed_bins=effective_bins)
@@ -762,22 +803,6 @@ async def handle_message(
     # OpenClaw-style: single generic fallback when reply is empty (no skill-specific hints)
     if not reply or not reply.strip():
         reply = "I didn't get a reply back. Try again or rephrase."
-
-    # Reliability fallback for desktop requests on models that skip tool calls:
-    # do a real Desktop listing directly so reply is grounded in actual file system state.
-    if _is_desktop_request(text) and "files" in enabled and not ran_files_tool:
-        from app.files_tool import allow_path as allow_path_fn, list_directory as list_dir
-        # Try listing directly; if not allowed, request/allow Desktop then list.
-        desktop = "~/Desktop"
-        listing = await list_dir(desktop, user_id, db)
-        if "not in the allowed list" in listing.lower():
-            await allow_path_fn(desktop, user_id, db)
-            listing = await list_dir(desktop, user_id, db)
-        summarized = _summarize_directory_json(listing)
-        if summarized:
-            reply = summarized
-        elif listing.startswith("Error:"):
-            reply = f"I couldn't check your Desktop yet: {listing}"
 
     # Always persist assistant reply (including errors) so web UI matches what user saw on Telegram
     await db.add_message(cid, "assistant", reply, provider.name if not reply.strip().startswith("Error:") and not reply.strip().startswith("No AI provider") else None)

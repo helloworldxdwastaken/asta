@@ -4,8 +4,23 @@ import re
 from urllib.parse import urlparse
 
 import httpx
-from telegram import Update, constants, ReactionTypeEmoji
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, AIORateLimiter
+from telegram import (
+    Update,
+    constants,
+    ReactionTypeEmoji,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    BotCommand,
+)
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    filters,
+    ContextTypes,
+    AIORateLimiter,
+)
 import asyncio
 from collections import defaultdict
 import html
@@ -14,8 +29,10 @@ import html
 _chat_locks = defaultdict(asyncio.Lock)
 
 from app.handler import handle_message
+from app.config import get_settings, set_env_value
 
 logger = logging.getLogger(__name__)
+_EXEC_MODES = ("deny", "allowlist", "full")
 
 
 def to_telegram_format(text: str) -> str:
@@ -67,7 +84,7 @@ def _is_short_agreement(reply: str) -> bool:
     return False
 
 
-async def _set_reaction(chat_id: int, message_id: int, bot, emoji: str = "👍") -> None:
+async def _set_reaction(chat_id: int, message_id: int, bot, emoji: str = "👍") -> bool:
     """Set a reaction on a message (OpenClaw-style; Telegram supports 👍 👎 ❤️ etc.)."""
     try:
         await bot.set_message_reaction(
@@ -75,8 +92,10 @@ async def _set_reaction(chat_id: int, message_id: int, bot, emoji: str = "👍")
             message_id=message_id,
             reaction=[ReactionTypeEmoji(emoji)],
         )
+        return True
     except Exception as e:
         logger.debug("Could not set reaction on message: %s", e)
+        return False
 
 
 async def _reply_text_safe_html(message, text: str) -> None:
@@ -101,6 +120,7 @@ async def _reply_text_safe_html(message, text: str) -> None:
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 # Max size when fetching audio from a URL (same as web panel)
 MAX_AUDIO_URL_SIZE_MB = 50
+TELEGRAM_REACTION_COOLDOWN_SECONDS = 15 * 60
 
 # Extensions we accept for audio-from-URL
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".webm", ".flac", ".mp4", ".mpeg"}
@@ -162,7 +182,6 @@ async def _fetch_audio_from_url(url: str) -> tuple[bytes, str] | None:
 
 def _telegram_user_allowed(update: Update) -> bool:
     """OpenClaw-style allowlist: if ASTA_TELEGRAM_ALLOWED_IDS is set, only those user IDs can use the bot."""
-    from app.config import get_settings
     allowed = get_settings().telegram_allowed_ids
     if not allowed:
         return True
@@ -261,7 +280,21 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 logger.info("Telegram reply sent to %s", user_id)
             # React to user's message when reply is a short yes/no or agreement (OpenClaw-style)
             if _is_short_agreement(reply):
-                await _set_reaction(update.effective_chat.id, update.message.message_id, context.bot)
+                from app.cooldowns import is_cooldown_ready, mark_cooldown_now
+                from app.db import get_db
+
+                db = get_db()
+                await db.connect()
+                can_react = await is_cooldown_ready(
+                    db,
+                    user_id,
+                    "telegram_auto_reaction",
+                    TELEGRAM_REACTION_COOLDOWN_SECONDS,
+                )
+                if can_react:
+                    reacted = await _set_reaction(update.effective_chat.id, update.message.message_id, context.bot)
+                    if reacted:
+                        await mark_cooldown_now(db, user_id, "telegram_auto_reaction")
         except Exception as e:
             logger.exception("Telegram handler error")
             err_text = f"Error: {str(e)[:500]}"
@@ -361,6 +394,75 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
 
+def _exec_mode_markup(current: str) -> InlineKeyboardMarkup:
+    buttons = [
+        InlineKeyboardButton(("✅ " if mode == current else "") + mode, callback_data=f"exec_mode:{mode}")
+        for mode in _EXEC_MODES
+    ]
+    return InlineKeyboardMarkup([buttons])
+
+
+def _exec_mode_text(current: str) -> str:
+    return (
+        "Exec mode controls shell command safety.\n\n"
+        f"Current mode: {current}\n"
+        "- deny: exec disabled\n"
+        "- allowlist: only allowed bins run\n"
+        "- full: any command allowed"
+    )
+
+
+def _set_exec_mode(mode: str) -> str:
+    if mode not in _EXEC_MODES:
+        raise ValueError("invalid mode")
+    set_env_value("ASTA_EXEC_SECURITY", mode)
+    return get_settings().exec_security
+
+
+async def exec_mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    if not _telegram_user_allowed(update):
+        await update.message.reply_text("You're not authorized to use this bot.")
+        return
+    current = get_settings().exec_security
+    arg = ((context.args[0] if context.args else "") or "").strip().lower()
+    if arg:
+        if arg not in _EXEC_MODES:
+            await update.message.reply_text(
+                "Invalid mode. Use /exec_mode deny, /exec_mode allowlist, or /exec_mode full."
+            )
+            return
+        try:
+            current = _set_exec_mode(arg)
+            await update.message.reply_text(_exec_mode_text(current), reply_markup=_exec_mode_markup(current))
+        except Exception as e:
+            await update.message.reply_text(f"Could not change exec mode: {str(e)[:200]}")
+        return
+    await update.message.reply_text(_exec_mode_text(current), reply_markup=_exec_mode_markup(current))
+
+
+async def exec_mode_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    if not _telegram_user_allowed(update):
+        await query.answer("Unauthorized", show_alert=True)
+        return
+    data = (query.data or "").strip()
+    mode = data.split(":", 1)[1].strip().lower() if ":" in data else ""
+    if mode not in _EXEC_MODES:
+        await query.answer("Invalid mode", show_alert=True)
+        return
+    try:
+        current = _set_exec_mode(mode)
+        await query.answer(f"Exec mode: {current}")
+        await query.edit_message_text(_exec_mode_text(current), reply_markup=_exec_mode_markup(current))
+    except Exception as e:
+        await query.answer("Failed to update mode", show_alert=True)
+        logger.warning("Could not set exec mode from telegram callback: %s", e)
+
+
 def build_telegram_app(token: str) -> Application:
     """Build configured Application (handlers only). Caller must initialize/start in same event loop."""
     # Use AIORateLimiter to respect Telegram limits (30 msg/sec, etc.)
@@ -369,6 +471,8 @@ def build_telegram_app(token: str) -> Application:
     app = Application.builder().token(token.strip()).rate_limiter(rate_limiter).build()
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
+    app.add_handler(CommandHandler("exec_mode", exec_mode_cmd))
+    app.add_handler(CallbackQueryHandler(exec_mode_callback, pattern=r"^exec_mode:"))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice_or_audio))
     app.add_handler(MessageHandler(filters.Document.AUDIO, on_voice_or_audio))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
@@ -422,27 +526,79 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     """Handle /status command directly (bypass AI for deterministic response)."""
     if not update.message:
         return
-    
+
     from app.server_status import get_server_status
     ss = get_server_status()
-    
+
+    def _pct(v: float | int) -> str:
+        try:
+            f = float(v)
+        except Exception:
+            return "?"
+        if abs(f - round(f)) < 0.05:
+            return f"{int(round(f))}%"
+        return f"{f:.1f}%"
+
+    def _gb(v: float | int) -> str:
+        try:
+            return f"{float(v):.2f}".rstrip("0").rstrip(".")
+        except Exception:
+            return "?"
+
+    def _level(pct: float | int) -> tuple[str, str]:
+        try:
+            f = float(pct)
+        except Exception:
+            return ("⚪", "unknown")
+        if f >= 85:
+            return ("🔴", "busy")
+        if f >= 65:
+            return ("🟡", "a bit busy")
+        return ("🟢", "good")
+
     if ss.get("ok"):
+        cpu_pct = float(ss.get("cpu_percent", 0) or 0)
+        ram = ss.get("ram", {}) or {}
+        disk = ss.get("disk", {}) or {}
+        ram_pct = float(ram.get("percent", 0) or 0)
+        disk_pct = float(disk.get("percent", 0) or 0)
+        cpu_icon, cpu_level = _level(cpu_pct)
+        ram_icon, ram_level = _level(ram_pct)
+        disk_icon, disk_level = _level(disk_pct)
+        version = html.escape(str(ss.get("version", "?")))
+        uptime = html.escape(str(ss.get("uptime_str", "?")))
+        overall = "Good"
+        if cpu_pct >= 85 or ram_pct >= 85 or disk_pct >= 90:
+            overall = "Busy"
+        elif cpu_pct >= 65 or ram_pct >= 65 or disk_pct >= 80:
+            overall = "OK"
+
         text = (
-            f"<b>🖥️ Server Status</b> (v{ss.get('version', '?')})\n\n"
-            f"<b>CPU:</b> {ss['cpu_percent']}%\n"
-            f"<b>RAM:</b> {ss['ram']['percent']}% ({ss['ram']['used_gb']}GB / {ss['ram']['total_gb']}GB)\n"
-            f"<b>Disk:</b> {ss['disk']['percent']}% ({ss['disk']['used_gb']}GB / {ss['disk']['total_gb']}GB)\n"
-            f"<b>Uptime:</b> {ss['uptime_str']}"
+            f"<b>🖥️ Asta Server</b> <code>v{version}</code>\n"
+            f"<b>Status</b> ✅ Online ({overall})\n\n"
+            f"<b>System load</b> {cpu_icon} {_pct(cpu_pct)} ({cpu_level})\n"
+            f"<b>Memory used</b> {ram_icon} {_gb(ram.get('used_gb', 0))} / {_gb(ram.get('total_gb', 0))} GB ({ram_level})\n"
+            f"<b>Storage used</b> {disk_icon} {_gb(disk.get('used_gb', 0))} / {_gb(disk.get('total_gb', 0))} GB ({disk_level})\n\n"
+            f"<b>Running for</b> {uptime}"
         )
     else:
-        text = f"<b>⚠️ Status Check Failed</b>\n{ss.get('error')}"
-        
-    await update.message.reply_text(text, parse_mode=constants.ParseMode.HTML)
+        err = html.escape(str(ss.get("error", "Unknown error")))
+        text = f"<b>⚠️ Status Check Failed</b>\n<code>{err}</code>"
+
+    await update.message.reply_text(text, parse_mode=constants.ParseMode.HTML, disable_web_page_preview=True)
 
 
 async def start_telegram_bot_in_loop(app: Application) -> None:
     """Initialize and start polling + processor. Run inside FastAPI lifespan (same event loop)."""
     await app.initialize()
+    try:
+        await app.bot.set_my_commands([
+            BotCommand("start", "Start Asta"),
+            BotCommand("status", "Show server status"),
+            BotCommand("exec_mode", "Set exec security mode (deny/allowlist/full)"),
+        ])
+    except Exception as e:
+        logger.warning("Could not register Telegram bot commands: %s", e)
     await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
     await app.start()
     logger.info("Telegram bot polling started (same loop as FastAPI)")
