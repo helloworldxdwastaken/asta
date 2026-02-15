@@ -133,6 +133,8 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 
 - **Tools:** `agents_list`, `sessions_spawn`, `sessions_list`, `sessions_history`, `sessions_send`, `sessions_stop`.
 - **Spawn flow:** model calls `sessions_spawn(task, ...)` → handler immediately returns accepted (`runId`, `childSessionKey`) and starts background execution in an isolated child conversation.
+- **Command UX:** deterministic `/subagents` commands are handled in-core (`list/spawn/info/send/stop/help`) so orchestration control works even when model tool-calling is inconsistent.
+- **Auto-spawn policy:** explicit background requests (and clearly complex long multi-step prompts) can auto-spawn a subagent without waiting for model tool-calls; controlled by `ASTA_SUBAGENTS_AUTO_SPAWN`.
 - **Isolation:** child runs use channel `subagent` and a dedicated queue key (`subagent:<child_conversation_id>`) so they do not block inbound web/Telegram/WhatsApp turn handling.
 - **Lifecycle:** run metadata is persisted in `subagent_runs` (status/result/error/timestamps plus model/thinking overrides and archive state). On startup, unfinished runs are marked `interrupted`.
 - **Concurrency cap:** `ASTA_SUBAGENTS_MAX_CONCURRENT` limits active running subagents; over-cap `sessions_spawn` calls return `busy`.

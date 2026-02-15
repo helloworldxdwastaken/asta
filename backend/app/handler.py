@@ -71,6 +71,44 @@ _FILES_CHECK_QUESTION_HINTS = (
     "do i have",
     "any",
 )
+_AUTO_SUBAGENT_EXPLICIT_HINTS = (
+    "use subagent",
+    "spawn subagent",
+    "run this in background",
+    "do this in background",
+    "background task",
+    "in parallel",
+    "parallelize",
+)
+_AUTO_SUBAGENT_BLOCKLIST_HINTS = (
+    "what time",
+    "weather",
+    "remind me",
+    "set reminder",
+    "cron",
+    "lyrics",
+    "spotify",
+    "check my desktop",
+    "list files",
+    "apple notes",
+    "things app",
+    "server status",
+)
+_AUTO_SUBAGENT_COMPLEXITY_VERBS = (
+    "research",
+    "investigate",
+    "analyze",
+    "compare",
+    "implement",
+    "refactor",
+    "review",
+    "audit",
+    "migrate",
+    "plan",
+    "document",
+    "test",
+    "fix",
+)
 _STATUS_PREFIX = "[[ASTA_STATUS]]"
 
 _TOOL_TRACE_GROUP = {
@@ -763,6 +801,94 @@ def _subagents_help_text() -> str:
     )
 
 
+def _looks_like_auto_subagent_request(text: str) -> bool:
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    t = raw.lower()
+    if t.startswith("/"):
+        return False
+
+    if any(h in t for h in _AUTO_SUBAGENT_EXPLICIT_HINTS):
+        return True
+
+    # Avoid auto-delegation for short utility/assistant tasks.
+    if any(h in t for h in _AUTO_SUBAGENT_BLOCKLIST_HINTS):
+        return False
+
+    words = re.findall(r"\b\w+\b", t)
+    word_count = len(words)
+    if word_count < 45:
+        return False
+
+    verb_hits = sum(1 for v in _AUTO_SUBAGENT_COMPLEXITY_VERBS if v in t)
+    step_markers = sum(
+        1
+        for marker in (" then ", " and ", " also ", " plus ", " after ", " finally ", "\n- ", "\n1.")
+        if marker in t
+    )
+
+    if word_count >= 80:
+        return True
+    return verb_hits >= 2 and step_markers >= 2
+
+
+def _subagent_auto_label(text: str) -> str:
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]*", (text or "").strip())
+    if not words:
+        return "background task"
+    return " ".join(words[:6])[:80]
+
+
+async def _maybe_auto_spawn_subagent(
+    *,
+    user_id: str,
+    conversation_id: str,
+    text: str,
+    provider_name: str,
+    channel: str,
+    channel_target: str,
+) -> str | None:
+    if channel == "subagent":
+        return None
+    from app.config import get_settings
+    if not bool(get_settings().asta_subagents_auto_spawn):
+        return None
+    if not _looks_like_auto_subagent_request(text):
+        return None
+
+    from app.subagent_orchestrator import spawn_subagent_run
+
+    payload = await spawn_subagent_run(
+        user_id=user_id,
+        parent_conversation_id=conversation_id,
+        task=text.strip(),
+        label=_subagent_auto_label(text),
+        provider_name=provider_name,
+        channel=channel,
+        channel_target=channel_target,
+        cleanup="keep",
+    )
+    status = str(payload.get("status") or "").strip().lower()
+    if status == "accepted":
+        run_id = str(payload.get("runId") or "").strip()
+        return (
+            f"I started a background subagent for this task [{run_id}]. "
+            "I'll post the result here when it finishes."
+        )
+    if status == "busy":
+        running = payload.get("running")
+        max_c = payload.get("maxConcurrent")
+        return (
+            f"I couldn't start a background subagent right now "
+            f"(running {running}/{max_c}). Try again in a moment."
+        )
+    err = str(payload.get("error") or "").strip()
+    if err:
+        return f"I couldn't start a background subagent: {err}"
+    return None
+
+
 def _parse_subagents_command(text: str) -> tuple[str, list[str]] | None:
     raw = (text or "").strip()
     if not raw.lower().startswith("/subagents"):
@@ -1395,6 +1521,18 @@ async def handle_message(
     if subagents_cmd_reply is not None:
         await db.add_message(cid, "assistant", subagents_cmd_reply, "script")
         return subagents_cmd_reply
+
+    auto_subagent_reply = await _maybe_auto_spawn_subagent(
+        user_id=user_id,
+        conversation_id=cid,
+        text=text,
+        provider_name=provider_name,
+        channel=channel,
+        channel_target=channel_target,
+    )
+    if auto_subagent_reply is not None:
+        await db.add_message(cid, "assistant", auto_subagent_reply, "script")
+        return auto_subagent_reply
 
     # If user is setting their location (for time/weather skill), save it now
     # 1. Explicit syntax "I'm in Paris"

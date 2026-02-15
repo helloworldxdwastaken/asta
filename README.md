@@ -85,6 +85,7 @@ If the panel shows "API off", start the backend first or use **Settings -> Run t
 - **Chat**: provider routing + automatic skill execution.
 - **Reasoning controls**: per-user **Thinking level** (`off/low/medium/high`) and **Reasoning visibility** (`off/on/stream`) in Settings and Telegram commands.
 - **Tool-first execution**: structured tools for exec/files/reminders/cron, OpenClaw-style `process` background session management, and single-user subagent orchestration (`sessions_spawn/list/history/send/stop`).
+- **Subagent control UX**: deterministic `/subagents` command flow (`list/spawn/info/send/stop`) plus conservative auto-spawn for explicit long/background requests (toggle: `ASTA_SUBAGENTS_AUTO_SPAWN`).
 - **Files**: local knowledge files + allowed paths. User context (who you are) lives in **workspace/USER.md**.
 - **Learning**: "learn about X for Y minutes" with retrievable context.
 - **Cron**: list, add, update, and remove recurring jobs (e.g. daily auto-updater). Settings → Auto-updater for schedule.

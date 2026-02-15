@@ -115,6 +115,7 @@ From the repo root, **`./asta.sh`** starts/stops both backend and frontend:
 | `ASTA_ALLOWED_PATHS` | Comma-separated dirs for file access |
 | `ASTA_EXEC_ALLOWED_BINS` | Exec tool: binaries Asta can run (e.g. `memo`, `things`). Optional: skills like Apple Notes show install steps on the Skills page and can auto-add the bin when enabled. |
 | `ASTA_PROCESS_TTL_SECONDS` | Keep finished background process sessions in memory for process tool (`list/poll/log`) before cleanup (default: 1800). |
+| `ASTA_SUBAGENTS_AUTO_SPAWN` | Enable deterministic auto-spawn for explicit/complex long-task prompts (default: `true`). |
 | `ASTA_SUBAGENTS_MAX_CONCURRENT` | Max concurrent subagent runs from `sessions_spawn` (default: `3`). |
 | `ASTA_SUBAGENTS_ARCHIVE_AFTER_MINUTES` | Auto-archive keep-mode subagent child sessions after N minutes (default: `60`, set `0` to disable). |
 | `ASTA_CORS_ORIGINS` | Extra origins (e.g. LAN or Tailscale) |

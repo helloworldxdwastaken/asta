@@ -4,12 +4,14 @@ import asyncio
 import json
 import re
 import uuid
+from unittest.mock import patch
 from types import SimpleNamespace
 
 import pytest
 
 from app.db import get_db
 from app.handler import handle_message
+from app.providers.base import ProviderResponse
 from app.subagent_orchestrator import (
     recover_subagent_runs_on_startup,
     run_subagent_tool,
@@ -417,3 +419,71 @@ async def test_subagents_slash_spawn_list_and_stop(monkeypatch):
     )
     assert "Subagent" in stop_reply
     assert "stopped" in stop_reply or "already-ended" in stop_reply
+
+
+@pytest.mark.asyncio
+async def test_auto_subagent_spawn_for_explicit_background_request(monkeypatch):
+    db = get_db()
+    await db.connect()
+    user_id = f"test-subagent-auto-bg-{uuid.uuid4().hex[:8]}"
+    cid = await db.get_or_create_conversation(user_id, "web")
+
+    async def _fake_turn(
+        *,
+        user_id: str,
+        child_conversation_id: str,
+        task: str,
+        provider_name: str,
+        model_override: str | None = None,
+        thinking_override: str | None = None,
+    ) -> str:
+        await db.add_message(child_conversation_id, "assistant", "background completed")
+        return "background completed"
+
+    monkeypatch.setattr("app.subagent_orchestrator._run_subagent_turn", _fake_turn)
+
+    reply = await handle_message(
+        user_id=user_id,
+        channel="web",
+        text=(
+            "Please run this in background: research my competitor positioning, compare pricing pages, "
+            "and prepare a rollout plan with risks and mitigations."
+        ),
+        provider_name="openai",
+        conversation_id=cid,
+    )
+    assert "background subagent" in reply.lower()
+    m = re.search(r"\[([^\]]+)\]", reply)
+    assert m is not None
+    run_id = m.group(1).strip()
+    assert run_id
+    assert await wait_subagent_run(run_id, timeout_seconds=2.0) is True
+
+    rows = await db.list_subagent_runs(cid, limit=20)
+    assert any((r.get("run_id") or "") == run_id for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_auto_subagent_not_used_for_simple_short_request():
+    class _DummyProvider:
+        name = "openai"
+
+    async def _fake_compact(messages, provider, context=None, max_tokens=None):
+        return messages
+
+    async def _fake_chat_with_fallback(primary, messages, fallback_names, **kwargs):
+        return ProviderResponse(content="Short direct answer."), primary
+
+    with (
+        patch("app.handler.get_provider", return_value=_DummyProvider()),
+        patch("app.compaction.compact_history", side_effect=_fake_compact),
+        patch("app.providers.fallback.chat_with_fallback", side_effect=_fake_chat_with_fallback),
+    ):
+        reply = await handle_message(
+            user_id=f"test-subagent-auto-no-{uuid.uuid4().hex[:8]}",
+            channel="web",
+            text="check my desktop",
+            provider_name="openai",
+        )
+
+    assert "background subagent" not in reply.lower()

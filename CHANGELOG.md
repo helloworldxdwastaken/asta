@@ -15,6 +15,7 @@ All notable changes to Asta are documented here.
   - `/reasoning` (and `/reasoning <mode>`)
   Registered in Telegram bot menu.
 - **Subagent command UX (single-user)** — Added deterministic `/subagents` command handling (`list/spawn/info/send/stop/help`) in core handler, plus Telegram `/subagents` command registration/menu entry.
+- **Subagent auto-spawn policy (single-user)** — Added conservative deterministic auto-spawn for explicit background requests and clearly complex long multi-step prompts, with env toggle `ASTA_SUBAGENTS_AUTO_SPAWN`.
 
 ### Changed
 
