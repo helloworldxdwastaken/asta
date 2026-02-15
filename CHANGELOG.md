@@ -29,6 +29,16 @@ All notable changes to Asta are documented here.
 
 ---
 
+## [1.3.7] - 2026-02-15
+
+### Fixed
+
+- **Files fallback reliability across providers** — Tool-required file-check guardrails now treat `ollama` as tool-capable, so empty/non-tool replies no longer fall through to generic “didn't get a reply” behavior on desktop/file checks.
+- **Natural file-check phrasing support** — Deterministic files fallback now recognizes prompts like `any screenshots on my desktop?` and matches simple singular/plural variants (`screenshot`/`screenshots`) for more accurate results.
+- **Cross-provider behavior check** — Verified desktop file-check fallback behavior for `openrouter` and `claude` request paths so connection/tool-call misses still resolve to factual file-tool responses when intent is clear.
+
+---
+
 ## [1.3.6] - 2026-02-15
 
 ### Added
