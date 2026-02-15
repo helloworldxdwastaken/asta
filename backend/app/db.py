@@ -212,6 +212,24 @@ class Db:
                 value TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS exec_approvals (
+                approval_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                channel_target TEXT,
+                command TEXT NOT NULL,
+                binary TEXT NOT NULL,
+                timeout_sec INTEGER,
+                workdir TEXT,
+                background INTEGER NOT NULL DEFAULT 0,
+                pty INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'pending',
+                decision TEXT,
+                resolved_at TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_exec_approvals_pending_created
+                ON exec_approvals(status, created_at DESC);
             CREATE TABLE IF NOT EXISTS allowed_paths (
                 user_id TEXT NOT NULL,
                 path TEXT NOT NULL,
@@ -1349,6 +1367,95 @@ class Db:
             (key, value, value),
         )
         await self._conn.commit()
+
+    async def add_exec_approval(
+        self,
+        *,
+        approval_id: str,
+        user_id: str,
+        channel: str,
+        channel_target: str,
+        command: str,
+        binary: str,
+        timeout_sec: int | None = None,
+        workdir: str | None = None,
+        background: bool = False,
+        pty: bool = False,
+    ) -> None:
+        if not self._conn:
+            await self.connect()
+        await self._conn.execute(
+            """
+            INSERT INTO exec_approvals (
+                approval_id, user_id, channel, channel_target, command, binary,
+                timeout_sec, workdir, background, pty, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))
+            """,
+            (
+                approval_id,
+                user_id,
+                channel,
+                channel_target,
+                command,
+                binary,
+                timeout_sec if isinstance(timeout_sec, int) else None,
+                (workdir or "").strip() or None,
+                1 if background else 0,
+                1 if pty else 0,
+            ),
+        )
+        await self._conn.commit()
+
+    async def get_exec_approval(self, approval_id: str) -> dict[str, Any] | None:
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute(
+            "SELECT * FROM exec_approvals WHERE approval_id = ?",
+            ((approval_id or "").strip(),),
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def list_pending_exec_approvals(self, limit: int = 20) -> list[dict[str, Any]]:
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute(
+            """
+            SELECT approval_id, user_id, channel, channel_target, command, binary, timeout_sec, workdir,
+                   background, pty, status, decision, created_at, resolved_at
+            FROM exec_approvals
+            WHERE status = 'pending'
+            ORDER BY datetime(created_at) DESC
+            LIMIT ?
+            """,
+            (max(1, min(int(limit), 100)),),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def resolve_exec_approval(
+        self,
+        approval_id: str,
+        *,
+        status: str,
+        decision: str | None = None,
+    ) -> bool:
+        if not self._conn:
+            await self.connect()
+        status_norm = (status or "").strip().lower()
+        if status_norm not in ("approved", "denied", "executed", "expired"):
+            status_norm = "denied"
+        decision_norm = (decision or "").strip().lower() or None
+        cur = await self._conn.execute(
+            """
+            UPDATE exec_approvals
+            SET status = ?, decision = ?, resolved_at = datetime('now')
+            WHERE approval_id = ? AND status = 'pending'
+            """,
+            (status_norm, decision_norm, (approval_id or "").strip()),
+        )
+        await self._conn.commit()
+        return cur.rowcount > 0
 
     async def close(self) -> None:
         if self._conn:

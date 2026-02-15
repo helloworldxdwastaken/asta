@@ -39,6 +39,35 @@ All notable changes to Asta are documented here.
 
 ---
 
+## [1.3.8] - 2026-02-15
+
+### Added
+
+- **Exec approvals (lite, OpenClaw-style)** — Added pending approval workflow for disallowed exec binaries:
+  - New pending approval store (`exec_approvals`) with status/decision metadata.
+  - Tool loop now returns `approval-needed` and creates approval records instead of hard-failing allowlist misses.
+  - Telegram commands: `/approvals`, `/approve <id> once|always`, `/deny <id>`.
+- **Vision controls API + UI** — Added Settings controls and API endpoints for:
+  - `ASTA_VISION_PREPROCESS`
+  - `ASTA_VISION_PROVIDER_ORDER`
+  - `ASTA_VISION_OPENROUTER_MODEL`
+
+### Changed
+
+- **Telegram runtime command menu** — Added command entries for `/approvals`, `/approve`, and `/deny`.
+- **Exec guidance in context** — Updated tool guidance so the model explicitly asks for `/approve` or `/deny` when it receives `approval-needed`.
+
+### Fixed
+
+- **Exec precheck runtime import** — Fixed exec tool loop error by importing `prepare_allowlisted_command` in the main handler exec path.
+
+### Tests
+
+- Added regression test for pending exec-approval creation in handler tool flow.
+- Added API tests for vision settings read/validate/persist behavior.
+
+---
+
 ## [1.3.7] - 2026-02-15
 
 ### Fixed

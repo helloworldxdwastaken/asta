@@ -1973,6 +1973,7 @@ async def handle_message(
         get_effective_exec_bins,
         get_bash_tool_openai_def,
         get_exec_tool_openai_def,
+        prepare_allowlisted_command,
         run_allowlisted_command,
         parse_exec_arguments,
     )
@@ -2165,6 +2166,45 @@ async def handle_message(
                 pty = bool(params.get("pty"))
                 workdir = params.get("workdir") if isinstance(params.get("workdir"), str) else None
                 logger.info("Exec tool called: command=%r", cmd)
+                precheck_argv, precheck_err = prepare_allowlisted_command(
+                    cmd,
+                    allowed_bins=effective_bins,
+                )
+                if (
+                    precheck_err
+                    and exec_mode == "allowlist"
+                    and "not in allowlist" in precheck_err.lower()
+                ):
+                    from app.exec_approvals import create_pending_exec_approval
+
+                    approval_id, requested_bin = await create_pending_exec_approval(
+                        db=db,
+                        user_id=user_id,
+                        channel=channel,
+                        channel_target=channel_target,
+                        command=cmd,
+                        timeout_sec=timeout_sec if isinstance(timeout_sec, int) else None,
+                        workdir=workdir,
+                        background=background,
+                        pty=pty,
+                    )
+                    out = (
+                        f"approval-needed: id={approval_id} binary={requested_bin or 'unknown'} command={cmd}\n"
+                        f"User can approve with: /approve {approval_id} once  (or /approve {approval_id} always)\n"
+                        f"User can deny with: /deny {approval_id}"
+                    )
+                    ran_exec_tool = True
+                    used_tool_labels.append(_build_tool_trace_label(name))
+                    current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
+                    continue
+                if precheck_err and exec_mode != "allowlist":
+                    ran_exec_tool = True
+                    used_tool_labels.append(_build_tool_trace_label(name))
+                    out = f"error: {precheck_err}"
+                    current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
+                    continue
+                # precheck_argv is intentionally not reused; runtime functions re-validate for safety.
+                _ = precheck_argv
                 if background or isinstance(yield_ms, int) or pty:
                     from app.process_tool import run_exec_with_process_support
 
@@ -2560,10 +2600,40 @@ async def handle_message(
         # Safety: only honor legacy [ASTA_EXEC] fallback when current user message is clearly exec-intent.
         # Prevents unrelated requests (e.g. reminders/lists) from accidentally running stale exec commands.
         if _is_exec_intent(text):
-            from app.exec_tool import get_effective_exec_bins, run_allowlisted_command
+            from app.exec_tool import (
+                get_effective_exec_bins,
+                prepare_allowlisted_command,
+                run_allowlisted_command,
+            )
             effective_bins = await get_effective_exec_bins(db, user_id)
             for m in exec_matches:
                 cmd = m.group(1).strip()
+                precheck_argv, precheck_err = prepare_allowlisted_command(
+                    cmd,
+                    allowed_bins=effective_bins,
+                )
+                _ = precheck_argv
+                if (
+                    precheck_err
+                    and exec_mode == "allowlist"
+                    and "not in allowlist" in precheck_err.lower()
+                ):
+                    from app.exec_approvals import create_pending_exec_approval
+
+                    approval_id, requested_bin = await create_pending_exec_approval(
+                        db=db,
+                        user_id=user_id,
+                        channel=channel,
+                        channel_target=channel_target,
+                        command=cmd,
+                    )
+                    exec_outputs.append(
+                        f"Command: {cmd}\n"
+                        f"Approval required: /approve {approval_id} once (or /approve {approval_id} always)\n"
+                        f"Deny: /deny {approval_id}\n"
+                        f"Binary: {requested_bin or 'unknown'}"
+                    )
+                    continue
                 stdout, stderr, ok = await run_allowlisted_command(cmd, allowed_bins=effective_bins)
                 if ok or stdout or stderr:
                     exec_outputs.append(f"Command: {cmd}\nOutput:\n{stdout}\n" + (f"Stderr:\n{stderr}\n" if stderr else ""))

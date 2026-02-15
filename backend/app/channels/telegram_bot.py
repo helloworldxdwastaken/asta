@@ -70,6 +70,8 @@ _EXEC_MODES = ("deny", "allowlist", "full")
 _THINK_LEVELS = ("off", "low", "medium", "high")
 _REASONING_MODES = ("off", "on", "stream")
 _ALLOW_COMMAND_HELP = "Usage: /allow <binary> (example: /allow rg)"
+_APPROVE_COMMAND_HELP = "Usage: /approve <approval_id> [once|always]"
+_DENY_COMMAND_HELP = "Usage: /deny <approval_id>"
 _ALLOWLIST_BLOCKED_BINS = {
     "sh",
     "bash",
@@ -485,6 +487,19 @@ def _normalize_allow_bin(raw: str) -> str:
     return token
 
 
+async def _add_exec_allow_bin(db, bin_name: str) -> bool:
+    """Add bin to extra allowlist. Returns True if bin already existed."""
+    from app.exec_tool import SYSTEM_CONFIG_EXEC_BINS_KEY
+
+    current_extra = (await db.get_system_config(SYSTEM_CONFIG_EXEC_BINS_KEY)) or ""
+    bins = {b.strip().lower() for b in current_extra.split(",") if b.strip()}
+    already = bin_name in bins
+    if not already:
+        bins.add(bin_name)
+        await db.set_system_config(SYSTEM_CONFIG_EXEC_BINS_KEY, ",".join(sorted(bins)))
+    return already
+
+
 async def allow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:
         return
@@ -511,16 +526,11 @@ async def allow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     from app.db import get_db
-    from app.exec_tool import SYSTEM_CONFIG_EXEC_BINS_KEY, get_effective_exec_bins
+    from app.exec_tool import get_effective_exec_bins
 
     db = get_db()
     await db.connect()
-    current_extra = (await db.get_system_config(SYSTEM_CONFIG_EXEC_BINS_KEY)) or ""
-    bins = {b.strip().lower() for b in current_extra.split(",") if b.strip()}
-    already = bin_name in bins
-    if not already:
-        bins.add(bin_name)
-        await db.set_system_config(SYSTEM_CONFIG_EXEC_BINS_KEY, ",".join(sorted(bins)))
+    already = await _add_exec_allow_bin(db, bin_name)
 
     effective = sorted(await get_effective_exec_bins(db, "default"))
     mode = get_settings().exec_security
@@ -535,11 +545,138 @@ async def allow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         suffix = "\nExec is currently disabled. Use /exec_mode allowlist to run allowlisted commands."
     elif mode == "full":
         suffix = "\nExec is currently in full mode; allowlist is saved for when you switch back to allowlist."
-    if len(context.args or []) > 1:
-        suffix += "\nNote: one-time approvals are not implemented yet; /allow is persistent."
 
     bins_text = ", ".join(effective) if effective else "(empty)"
     await update.message.reply_text(f"{head}{suffix}\n\nAllowed bins now: {bins_text}")
+
+
+async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    if not _telegram_user_allowed(update):
+        await update.message.reply_text("You're not authorized to use this bot.")
+        return
+    approval_id = ((context.args[0] if context.args else "") or "").strip()
+    if not approval_id:
+        await update.message.reply_text(_APPROVE_COMMAND_HELP)
+        return
+    mode_raw = ((context.args[1] if len(context.args or []) > 1 else "once") or "").strip().lower()
+    if mode_raw in ("once", "allow-once"):
+        mode = "once"
+    elif mode_raw in ("always", "allow-always"):
+        mode = "always"
+    else:
+        await update.message.reply_text(_APPROVE_COMMAND_HELP)
+        return
+
+    from app.db import get_db
+    from app.exec_tool import get_effective_exec_bins, run_allowlisted_command
+
+    db = get_db()
+    await db.connect()
+    row = await db.get_exec_approval(approval_id)
+    if not row:
+        await update.message.reply_text(f"Approval id not found: {approval_id}")
+        return
+    if str(row.get("status") or "").strip().lower() != "pending":
+        await update.message.reply_text(f"Approval {approval_id} is already {row.get('status')}.")
+        return
+
+    command = str(row.get("command") or "").strip()
+    binary = _normalize_allow_bin(str(row.get("binary") or ""))
+    timeout_val = row.get("timeout_sec")
+    timeout_sec = int(timeout_val) if isinstance(timeout_val, int) else None
+    workdir_raw = row.get("workdir")
+    workdir = str(workdir_raw).strip() if isinstance(workdir_raw, str) else None
+
+    added = False
+    if mode == "always" and binary:
+        already = await _add_exec_allow_bin(db, binary)
+        added = not already
+        allowed_bins = await get_effective_exec_bins(db, "default")
+    else:
+        allowed_bins = {binary} if binary else set()
+
+    stdout, stderr, ok = await run_allowlisted_command(
+        command,
+        allowed_bins=allowed_bins,
+        timeout_seconds=timeout_sec,
+        workdir=workdir,
+    )
+    await db.resolve_exec_approval(
+        approval_id,
+        status="executed" if ok else "approved",
+        decision=mode,
+    )
+
+    head = (
+        f"Approved {approval_id} ({mode})."
+        + (f" Added '{binary}' to allowlist." if (mode == "always" and added and binary) else "")
+    )
+    if ok:
+        out = (stdout or "").strip()
+        if not out:
+            out = "(no stdout)"
+        msg = f"{head}\n\nCommand:\n`{command}`\n\nOutput:\n{out[:2500]}"
+    else:
+        err = (stderr or "Command failed.").strip()
+        msg = f"{head}\n\nCommand:\n`{command}`\n\nError:\n{err[:1200]}"
+    await _reply_text_safe_html(update.message, msg)
+
+
+async def deny_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    if not _telegram_user_allowed(update):
+        await update.message.reply_text("You're not authorized to use this bot.")
+        return
+    approval_id = ((context.args[0] if context.args else "") or "").strip()
+    if not approval_id:
+        await update.message.reply_text(_DENY_COMMAND_HELP)
+        return
+
+    from app.db import get_db
+
+    db = get_db()
+    await db.connect()
+    row = await db.get_exec_approval(approval_id)
+    if not row:
+        await update.message.reply_text(f"Approval id not found: {approval_id}")
+        return
+    if str(row.get("status") or "").strip().lower() != "pending":
+        await update.message.reply_text(f"Approval {approval_id} is already {row.get('status')}.")
+        return
+    await db.resolve_exec_approval(approval_id, status="denied", decision="deny")
+    await update.message.reply_text(f"Denied approval {approval_id}.")
+
+
+async def approvals_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    if not _telegram_user_allowed(update):
+        await update.message.reply_text("You're not authorized to use this bot.")
+        return
+
+    from app.db import get_db
+
+    db = get_db()
+    await db.connect()
+    rows = await db.list_pending_exec_approvals(limit=10)
+    if not rows:
+        await update.message.reply_text("No pending exec approvals.")
+        return
+
+    lines = ["Pending exec approvals:"]
+    for i, row in enumerate(rows, 1):
+        aid = str(row.get("approval_id") or "").strip()
+        binary = str(row.get("binary") or "").strip() or "unknown"
+        command = str(row.get("command") or "").strip()
+        short_cmd = command if len(command) <= 70 else command[:67] + "..."
+        lines.append(f"{i}. {aid} [{binary}] {short_cmd}")
+    lines.append("")
+    lines.append("Approve: /approve <id> once|always")
+    lines.append("Deny: /deny <id>")
+    await update.message.reply_text("\n".join(lines))
 
 
 async def allowlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -786,6 +923,9 @@ def build_telegram_app(token: str) -> Application:
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("exec_mode", exec_mode_cmd))
     app.add_handler(CommandHandler("allow", allow_cmd))
+    app.add_handler(CommandHandler("approve", approve_cmd))
+    app.add_handler(CommandHandler("deny", deny_cmd))
+    app.add_handler(CommandHandler("approvals", approvals_cmd))
     app.add_handler(CommandHandler("allowlist", allowlist_cmd))
     app.add_handler(CommandHandler("thinking", thinking_cmd))
     app.add_handler(CommandHandler("reasoning", reasoning_cmd))
@@ -952,6 +1092,9 @@ async def start_telegram_bot_in_loop(app: Application) -> None:
             BotCommand("status", "Show server status"),
             BotCommand("exec_mode", "Set exec security mode (deny/allowlist/full)"),
             BotCommand("allow", "Allow binary in exec allowlist"),
+            BotCommand("approve", "Approve pending exec command"),
+            BotCommand("deny", "Deny pending exec command"),
+            BotCommand("approvals", "List pending exec approvals"),
             BotCommand("allowlist", "Show allowed exec binaries"),
             BotCommand("thinking", "Set thinking level (off/low/medium/high)"),
             BotCommand("reasoning", "Set reasoning visibility (off/on/stream)"),

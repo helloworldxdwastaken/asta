@@ -54,6 +54,7 @@ async def build_context(
             "list Things (things inbox), or run another allowlisted CLI. Do not say you will check — call the exec tool with the command; you will get the real output and then answer. "
             "For long-running commands, exec supports background/yield (background=true or yield_ms). "
             "When exec returns status=running with session_id, use the process tool to manage it: list, poll, log, write, kill, clear, remove. "
+            "If exec tool output says 'approval-needed' with an id, ask the user to approve it with /approve <id> once or /approve <id> always (or /deny <id>) before retrying. "
             "Fallback: if the exec tool is not available, you can output [ASTA_EXEC: command][/ASTA_EXEC] (e.g. [ASTA_EXEC: memo notes][/ASTA_EXEC]) in your reply."
         )
         parts.append("")

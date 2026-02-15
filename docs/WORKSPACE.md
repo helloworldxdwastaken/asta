@@ -97,6 +97,11 @@ From Telegram chat, you can control core runtime behavior without opening the pa
 
 - `/status` — server health card
 - `/exec_mode` — exec security mode (`deny/allowlist/full`)
+- `/allow` — add an exec binary to allowlist persistently
+- `/allowlist` — show current effective exec allowlist
+- `/approvals` — list pending exec approval requests
+- `/approve` — approve pending exec request (`once|always`)
+- `/deny` — deny pending exec request
 - `/thinking` — thinking level (`off/low/medium/high`)
 - `/reasoning` — reasoning visibility (`off/on/stream`)
 

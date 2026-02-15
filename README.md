@@ -93,11 +93,12 @@ If the panel shows "API off", start the backend first or use **Settings -> Run t
 - **Audio Notes**: upload/voice transcription and summary (faster-whisper).
 - **Channels**: Telegram + WhatsApp (Beta) integrations in one place.
 - **Settings/Skills**: key management, default model, toggles, and backend controls.
+- **Vision controls in Settings**: configure screenshot preprocessing, vision provider order, and OpenRouter vision model without editing `.env`.
 
 ## Channel Setup
 
 - Telegram: set `TELEGRAM_BOT_TOKEN` in `backend/.env` or configure it in **Channels**.
-- Telegram bot commands: `/status`, `/exec_mode`, `/thinking`, `/reasoning`, `/subagents`.
+- Telegram bot commands: `/status`, `/exec_mode`, `/allow`, `/allowlist`, `/approvals`, `/approve`, `/deny`, `/thinking`, `/reasoning`, `/subagents`.
 - WhatsApp (Beta): run `services/whatsapp` (see `services/whatsapp/README.md`), scan QR in **Channels**, and set `ASTA_WHATSAPP_BRIDGE_URL`.
 - Vision input is currently supported on **Telegram photos** (web image upload is not implemented yet).
 - Optional debugging: set `ASTA_SHOW_TOOL_TRACE=true` and `ASTA_TOOL_TRACE_CHANNELS=web` to append `Tools used: ...` on replies (Telegram footer is suppressed because it already shows proactive skill-status pings).

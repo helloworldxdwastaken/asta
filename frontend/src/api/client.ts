@@ -96,6 +96,12 @@ export type WhatsAppPolicy = {
   owner_number: string;
 };
 
+export type VisionSettings = {
+  preprocess: boolean;
+  provider_order: string;
+  openrouter_model: string;
+};
+
 export const api = {
   health: () => req<{ status: string; app?: string }>("/health"),
   status: () => req<Status>("/status"),
@@ -213,6 +219,13 @@ export const api = {
     req<{ reasoning_mode: "off" | "on" | "stream" }>("/settings/reasoning", {
       method: "PUT",
       body: JSON.stringify({ reasoning_mode }),
+    }),
+  getVisionSettings: () =>
+    req<VisionSettings>("/settings/vision"),
+  setVisionSettings: (body: VisionSettings) =>
+    req<VisionSettings>("/settings/vision", {
+      method: "PUT",
+      body: JSON.stringify(body),
     }),
   getFallbackProviders: () =>
     req<{ providers: string }>("/settings/fallback"),

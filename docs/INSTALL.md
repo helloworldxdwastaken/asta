@@ -52,9 +52,9 @@ npm run dev
 
 ### 5. Optional
 
-In the panel: **Settings** → add API keys (Groq, Gemini, Claude, OpenAI, OpenRouter, Telegram, Spotify), set default AI (new installs default to OpenRouter), choose **Thinking level** (`off/low/medium/high`) and **Reasoning visibility** (`off/on/stream`), and toggle skills. Set your **location** in Chat (e.g. “Holon, Israel”) for time and weather.
+In the panel: **Settings** → add API keys (Groq, Gemini, Claude, OpenAI, OpenRouter, Telegram, Spotify), set default AI (new installs default to OpenRouter), choose **Thinking level** (`off/low/medium/high`) and **Reasoning visibility** (`off/on/stream`), adjust **Vision controls** (preprocess/order/model), and toggle skills. Set your **location** in Chat (e.g. “Holon, Israel”) for time and weather.
 
-**Telegram commands:** `/status`, `/exec_mode`, `/thinking`, `/reasoning`, `/subagents`.
+**Telegram commands:** `/status`, `/exec_mode`, `/allow`, `/allowlist`, `/approvals`, `/approve`, `/deny`, `/thinking`, `/reasoning`, `/subagents`.
 
 **Apple Notes (macOS):** See the **Apple Notes** skill on the **Skills** page: it shows the install command (`brew tap … && brew install …`) and automatically adds `memo` to the exec allowlist when you enable the skill (no need to edit `.env`). When you ask Asta to check your notes, the AI runs the command via the exec tool and replies from the output. **Permission is per process:** Run the **Asta backend from Terminal** (e.g. `./asta.sh start`). The first time you ask to check notes, a macOS dialog may appear — approve it so the **backend process** (not just Terminal) can run memo. If you only ran `memo notes` in Terminal before, that approved Terminal; the backend is a different process and needs its own approval.
 

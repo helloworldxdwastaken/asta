@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import type { CronJob } from "../api/client";
+import type { CronJob, VisionSettings } from "../api/client";
 import { api } from "../api/client";
 
 /** Logo URL or fallback initial for provider cards */
@@ -277,20 +277,39 @@ function DefaultAiSelect() {
   const [model, setModel] = useState("");
   const [thinkingLevel, setThinkingLevel] = useState<"off" | "low" | "medium" | "high">("off");
   const [reasoningMode, setReasoningMode] = useState<"off" | "on" | "stream">("off");
+  const [visionSettings, setVisionSettings] = useState<VisionSettings>({
+    preprocess: true,
+    provider_order: "openrouter,claude,openai",
+    openrouter_model: "nvidia/nemotron-nano-12b-v2-vl:free",
+  });
   const [availableModels, setAvailableModels] = useState<{ ollama: string[] }>({ ollama: [] });
   const [defaults, setDefaults] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [savingModel, setSavingModel] = useState(false);
   const [savingThinking, setSavingThinking] = useState(false);
   const [savingReasoning, setSavingReasoning] = useState(false);
+  const [savingVision, setSavingVision] = useState(false);
+  const [visionMsg, setVisionMsg] = useState<string | null>(null);
   const [connected, setConnected] = useState<Record<string, boolean>>({});
   useEffect(() => {
-    Promise.all([api.getDefaultAi(), api.status(), api.getModels(), api.getThinking(), api.getReasoning()]).then(([r, status, modelsResp, thinkingResp, reasoningResp]) => {
+    Promise.all([
+      api.getDefaultAi(),
+      api.status(),
+      api.getModels(),
+      api.getThinking(),
+      api.getReasoning(),
+      api.getVisionSettings(),
+    ]).then(([r, status, modelsResp, thinkingResp, reasoningResp, visionResp]) => {
       setConnected(status.apis ?? {});
       setDefaults(modelsResp.defaults ?? {});
       setModel((modelsResp.models ?? {})[r.provider] ?? "");
       setThinkingLevel(thinkingResp.thinking_level ?? "off");
       setReasoningMode(reasoningResp.reasoning_mode ?? "off");
+      setVisionSettings({
+        preprocess: !!visionResp.preprocess,
+        provider_order: visionResp.provider_order || "openrouter,claude,openai",
+        openrouter_model: visionResp.openrouter_model || "nvidia/nemotron-nano-12b-v2-vl:free",
+      });
       setLoading(false);
       setProvider(r.provider);
     });
@@ -332,6 +351,23 @@ function DefaultAiSelect() {
     setReasoningMode(mode);
     setSavingReasoning(true);
     api.setReasoning(mode).finally(() => setSavingReasoning(false));
+  };
+  const saveVision = async () => {
+    setSavingVision(true);
+    setVisionMsg(null);
+    try {
+      const saved = await api.setVisionSettings({
+        preprocess: !!visionSettings.preprocess,
+        provider_order: (visionSettings.provider_order || "").trim(),
+        openrouter_model: (visionSettings.openrouter_model || "").trim(),
+      });
+      setVisionSettings(saved);
+      setVisionMsg("Vision settings saved.");
+    } catch (e) {
+      setVisionMsg("Error: " + ((e as Error).message || "Failed to save"));
+    } finally {
+      setSavingVision(false);
+    }
   };
   const connectedProviders = PROVIDER_IDS.filter(
     (id) => connected[PROVIDER_STATUS_KEYS[id]]
@@ -500,6 +536,54 @@ function DefaultAiSelect() {
           {provider === "claude" ? " You can also pick a Claude preset above, then override with a custom model ID." : ""}
           {provider === "ollama" ? " You can pick from local models using the dropdown above, or type any Ollama model/tag manually." : ""}
         </p>
+      </div>
+      <div className="field">
+        <div className="field-row">
+          <label className="label" htmlFor="vision-preprocess-toggle">Vision controls</label>
+          <span className="help">Image analysis path</span>
+        </div>
+        <label style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.5rem" }}>
+          <input
+            id="vision-preprocess-toggle"
+            type="checkbox"
+            checked={!!visionSettings.preprocess}
+            onChange={(e) => setVisionSettings((v) => ({ ...v, preprocess: e.target.checked }))}
+          />
+          <span>Preprocess screenshots before vision analysis</span>
+        </label>
+        <div className="field" style={{ marginBottom: "0.5rem" }}>
+          <label className="label" htmlFor="vision-provider-order">Provider order</label>
+          <input
+            id="vision-provider-order"
+            type="text"
+            className="input"
+            value={visionSettings.provider_order}
+            onChange={(e) => setVisionSettings((v) => ({ ...v, provider_order: e.target.value }))}
+            placeholder="openrouter,claude,openai"
+            style={{ maxWidth: 420 }}
+          />
+          <p className="help" style={{ marginTop: "0.35rem" }}>
+            Comma-separated order: <code>openrouter</code>, <code>claude</code>, <code>openai</code>.
+          </p>
+        </div>
+        <div className="field" style={{ marginBottom: "0.5rem" }}>
+          <label className="label" htmlFor="vision-openrouter-model">OpenRouter vision model</label>
+          <input
+            id="vision-openrouter-model"
+            type="text"
+            className="input"
+            value={visionSettings.openrouter_model}
+            onChange={(e) => setVisionSettings((v) => ({ ...v, openrouter_model: e.target.value }))}
+            placeholder="nvidia/nemotron-nano-12b-v2-vl:free"
+            style={{ maxWidth: 420 }}
+          />
+        </div>
+        <div className="actions" style={{ gap: "0.5rem", alignItems: "center" }}>
+          <button type="button" onClick={saveVision} disabled={savingVision} className="btn btn-secondary">
+            {savingVision ? "Saving…" : "Save vision settings"}
+          </button>
+          {visionMsg && <span className={visionMsg.startsWith("Error:") ? "status-pending" : "status-ok"}>{visionMsg}</span>}
+        </div>
       </div>
     </div>
   );

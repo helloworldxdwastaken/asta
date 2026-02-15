@@ -108,6 +108,12 @@ class ReasoningIn(BaseModel):
     reasoning_mode: str  # off | on | stream
 
 
+class VisionSettingsIn(BaseModel):
+    preprocess: bool
+    provider_order: str
+    openrouter_model: str
+
+
 @router.get("/settings/default-ai")
 async def get_default_ai(user_id: str = "default"):
     db = get_db()
@@ -166,6 +172,46 @@ async def set_reasoning(body: ReasoningIn, user_id: str = "default"):
     await db.connect()
     await db.set_user_reasoning_mode(user_id, mode)
     return {"reasoning_mode": mode}
+
+
+@router.get("/settings/vision")
+@router.get("/api/settings/vision")
+async def get_vision_settings():
+    s = get_settings()
+    return {
+        "preprocess": bool(getattr(s, "asta_vision_preprocess", True)),
+        "provider_order": str(getattr(s, "asta_vision_provider_order", "openrouter,claude,openai") or ""),
+        "openrouter_model": str(
+            getattr(s, "asta_vision_openrouter_model", "nvidia/nemotron-nano-12b-v2-vl:free") or ""
+        ),
+    }
+
+
+@router.put("/settings/vision")
+@router.put("/api/settings/vision")
+async def set_vision_settings(body: VisionSettingsIn):
+    order_raw = (body.provider_order or "").strip().lower()
+    allowed = {"openrouter", "claude", "openai"}
+    parsed_order = [p.strip() for p in order_raw.split(",") if p.strip()]
+    if parsed_order and any(p not in allowed for p in parsed_order):
+        raise HTTPException(
+            status_code=400,
+            detail="provider_order must only include: openrouter, claude, openai",
+        )
+    provider_order = ",".join(parsed_order) if parsed_order else "openrouter,claude,openai"
+    openrouter_model = (
+        (body.openrouter_model or "").strip()
+        or "nvidia/nemotron-nano-12b-v2-vl:free"
+    )
+
+    set_env_value("ASTA_VISION_PREPROCESS", "true" if bool(body.preprocess) else "false")
+    set_env_value("ASTA_VISION_PROVIDER_ORDER", provider_order)
+    set_env_value("ASTA_VISION_OPENROUTER_MODEL", openrouter_model)
+    return {
+        "preprocess": bool(body.preprocess),
+        "provider_order": provider_order,
+        "openrouter_model": openrouter_model,
+    }
 
 
 class FallbackProvidersIn(BaseModel):
