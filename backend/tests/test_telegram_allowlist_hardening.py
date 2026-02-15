@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from app.channels.telegram_bot import _telegram_user_allowed
+from app.channels.telegram_bot import _normalize_allow_bin, _telegram_user_allowed
 from app.config import get_settings
 
 
@@ -30,3 +30,7 @@ def test_telegram_allowlist_allows_all_when_not_configured(monkeypatch):
     assert _telegram_user_allowed(_fake_update(123456)) is True
     get_settings.cache_clear()
 
+
+def test_normalize_allow_bin_handles_paths_and_case():
+    assert _normalize_allow_bin("/opt/homebrew/bin/RG") == "rg"
+    assert _normalize_allow_bin("memo,") == "memo"

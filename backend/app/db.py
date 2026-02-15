@@ -62,6 +62,34 @@ def decode_one_shot_reminder_id(reminder_id: int) -> int | None:
     return None
 
 
+def validate_cron_expression(expr: str, tz: str | None = None) -> tuple[bool, str]:
+    """Validate cron expression syntax.
+
+    Returns (True, "") if valid, or (False, error_message) if invalid.
+    """
+    try:
+        # Check if one-shot cron (@at format)
+        if is_one_shot_cron_expr(expr):
+            run_at = one_shot_cron_expr_to_run_at(expr)
+            if not run_at:
+                return False, "Invalid @at timestamp format"
+            return True, ""
+
+        # Validate 5-field cron
+        parts = expr.split()
+        if len(parts) != 5:
+            return False, f"Expected 5 fields, got {len(parts)}"
+
+        # Basic field validation (can be enhanced)
+        for i, part in enumerate(parts):
+            if not part or part.isspace():
+                return False, f"Field {i+1} is empty"
+
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+
 class Db:
     def __init__(self) -> None:
         self._conn: aiosqlite.Connection | None = None
@@ -805,6 +833,26 @@ class Db:
         rows = await cursor.fetchall()
         out.extend(dict(r) for r in rows)
         return out
+
+    async def get_pending_reminder_by_id(self, reminder_id: int) -> dict[str, Any] | None:
+        """Get a single pending reminder by ID for firing.
+
+        Returns dict with keys: id, user_id, channel, channel_target, message
+        Returns None if reminder doesn't exist or isn't pending.
+        """
+        if not self._conn:
+            await self.connect()
+
+        cursor = await self._conn.execute(
+            """
+            SELECT id, user_id, channel, channel_target, message
+            FROM reminders
+            WHERE id = ? AND status = 'pending'
+            """,
+            (reminder_id,)
+        )
+        row = await cursor.fetchone()
+        return dict(row) if row else None
 
     async def mark_reminder_sent(self, reminder_id: int) -> None:
         if not self._conn:

@@ -55,8 +55,8 @@ async def get_effective_exec_bins(db: Db | None, user_id: str | None = None) -> 
                     b = b.strip().lower()
                     if b:
                         allowed.add(b)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Failed to load exec_allowed_bins from DB (will use env only): %s", e)
     # Bins from enabled workspace skills only (OpenClaw autoAllowSkills behavior).
     from app.workspace import discover_workspace_skills, is_skill_runtime_eligible
     for skill in discover_workspace_skills():
@@ -67,8 +67,9 @@ async def get_effective_exec_bins(db: Db | None, user_id: str | None = None) -> 
             try:
                 if not await db.get_skill_enabled(user_id, skill.name):
                     continue
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to check if skill '%s' is enabled (treating as disabled): %s", skill.name, e)
+                # Continue - treat skill as disabled on error
         for b in (skill.required_bins or ()):
             if b:
                 allowed.add(b.strip().lower())
@@ -124,14 +125,21 @@ def prepare_allowlisted_command(
             return None, "Exec is disabled (ASTA_EXEC_ALLOWED_BINS not set; security=allowlist)."
         if binary not in allowed:
             logger.warning("Exec rejected: binary %r not in allowlist %s", binary, sorted(allowed))
-            return None, f"Command not allowed (binary '{binary}' not in allowlist)."
+            return None, (
+                f"Command not allowed (binary '{binary}' not in allowlist). "
+                f"Ask the user to run /allow {binary} in Telegram, or add it to ASTA_EXEC_ALLOWED_BINS."
+            )
     exe = parts[0]
     if os.path.sep not in exe and not Path(exe).is_absolute():
         resolved = resolve_executable(exe)
         if resolved:
             parts = [resolved] + list(parts[1:])
         else:
-            logger.warning("Exec: binary %r not found in PATH or fallback paths", exe)
+            logger.warning("Exec rejected: binary %r not found in PATH or fallback paths", binary)
+            return None, (
+                f"Command rejected: binary '{binary}' not found in PATH. "
+                "Install it first, then try again."
+            )
     return parts, None
 
 

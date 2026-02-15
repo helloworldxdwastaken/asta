@@ -235,13 +235,21 @@ async def _fire_reminder_async(reminder_id: int) -> None:
     from app.db import get_db
     db = get_db()
     await db.connect()
-    cursor = await db._conn.execute("SELECT id, user_id, channel, channel_target, message FROM reminders WHERE id = ? AND status = 'pending'", (reminder_id,))
-    row = await cursor.fetchone()
-    if not row:
+
+    reminder = await db.get_pending_reminder_by_id(reminder_id)
+    if not reminder:
+        logger.debug("Reminder %s no longer pending, skipping", reminder_id)
         return
-    r = dict(row)
-    text = _format_reminder_message(r["message"])
-    await send_notification(r["channel"], r["channel_target"], text)
+
+    # Format and send notification
+    text = _format_reminder_message(reminder["message"])
+    await send_notification(
+        reminder["channel"],
+        reminder["channel_target"],
+        text
+    )
+
+    # Mark as sent
     await db.mark_reminder_sent(reminder_id)
 
 
@@ -250,8 +258,9 @@ async def send_notification(channel: str, target: str, message: str) -> None:
     if channel == "telegram" and target:
         try:
             await send_telegram_message(target, message)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to send reminder notification (channel=%s, target=%s): %s", channel, target, e)
+            # Don't re-raise - continue with attempt marked
     elif channel == "whatsapp" and target:
         s = get_settings()
         url = getattr(s, "asta_whatsapp_bridge_url", None) or os.environ.get("ASTA_WHATSAPP_BRIDGE_URL")

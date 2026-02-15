@@ -199,6 +199,7 @@ class FinishedSession:
 
 _running_sessions: dict[str, ProcessSession] = {}
 _finished_sessions: dict[str, FinishedSession] = {}
+_sessions_lock = asyncio.Lock()  # Protect session access
 
 
 def _close_pty_master(s: ProcessSession) -> None:
@@ -372,14 +373,29 @@ async def _spawn_session(
         pty_master_fd=master_fd if pty else None,
     )
     _running_sessions[s.id] = s
-    if pty:
-        asyncio.create_task(_read_pty_master(s))
-    else:
-        asyncio.create_task(_read_stream(s, "stdout"))
-        asyncio.create_task(_read_stream(s, "stderr"))
-    asyncio.create_task(_watch_exit(s))
-    s.timeout_task = asyncio.create_task(_enforce_timeout(s, timeout_seconds))
-    return s
+
+    # Wrap task creation with error handling
+    try:
+        if pty:
+            asyncio.create_task(_read_pty_master(s))
+        else:
+            asyncio.create_task(_read_stream(s, "stdout"))
+            asyncio.create_task(_read_stream(s, "stderr"))
+        asyncio.create_task(_watch_exit(s))
+
+        if timeout_seconds:
+            s.timeout_task = asyncio.create_task(
+                _enforce_timeout(s, timeout_seconds)
+            )
+
+        return s
+
+    except Exception as e:
+        logger.error("Failed to spawn process tasks for session %s: %s", s.id, e)
+        # Cleanup on error
+        _close_pty_master(s)
+        _running_sessions.pop(s.id, None)
+        raise
 
 
 async def run_exec_with_process_support(
@@ -431,8 +447,17 @@ async def run_exec_with_process_support(
         await asyncio.wait_for(s.process.wait(), timeout=y_ms / 1000.0)
         await asyncio.sleep(0)
         stdout, stderr = _drain_pending(s)
-        if s.timeout_task:
+
+        # Safe timeout cancellation
+        if s.timeout_task and not s.timeout_task.done():
             s.timeout_task.cancel()
+            try:
+                await s.timeout_task
+            except asyncio.CancelledError:
+                pass  # Expected
+            except Exception as e:
+                logger.debug("Error awaiting timeout task cancellation: %s", e)
+
         _running_sessions.pop(s.id, None)
         ok = (s.exit_code or 0) == 0
         return {
@@ -548,52 +573,54 @@ async def run_process_tool(params: dict) -> str:
             params = dict(params)
             params["data"] = compat_write_data
 
-    if action == "list":
-        running = []
-        for s in list(_running_sessions.values()):
-            if s.backgrounded:
-                running.append(
-                    {
-                        "session_id": s.id,
-                        "sessionId": s.id,
-                        "status": "running",
-                        "pid": s.pid,
-                        "started_at": int(s.started_at),
-                        "runtime_sec": int(time.time() - s.started_at),
-                        "cwd": s.cwd,
-                        "command": s.command,
-                        "tail": s.tail,
-                        "truncated": s.truncated,
-                        "pty": s.pty,
-                    }
-                )
-        finished = [
-            {
-                "session_id": s.id,
-                "sessionId": s.id,
-                "status": s.status,
-                "started_at": int(s.started_at),
-                "ended_at": int(s.ended_at),
-                "runtime_sec": int(max(0, s.ended_at - s.started_at)),
-                "cwd": s.cwd,
-                "command": s.command,
-                "tail": s.tail,
-                "truncated": s.truncated,
-                "exit_code": s.exit_code,
-                "exit_signal": s.exit_signal,
-                "pty": s.pty,
-            }
-            for s in list(_finished_sessions.values())
-        ]
-        payload = {"running": running, "finished": finished}
-        return json.dumps(payload, indent=0)
+    # Protect session access with lock
+    async with _sessions_lock:
+        if action == "list":
+            running = []
+            for s in list(_running_sessions.values()):
+                if s.backgrounded:
+                    running.append(
+                        {
+                            "session_id": s.id,
+                            "sessionId": s.id,
+                            "status": "running",
+                            "pid": s.pid,
+                            "started_at": int(s.started_at),
+                            "runtime_sec": int(time.time() - s.started_at),
+                            "cwd": s.cwd,
+                            "command": s.command,
+                            "tail": s.tail,
+                            "truncated": s.truncated,
+                            "pty": s.pty,
+                        }
+                    )
+            finished = [
+                {
+                    "session_id": s.id,
+                    "sessionId": s.id,
+                    "status": s.status,
+                    "started_at": int(s.started_at),
+                    "ended_at": int(s.ended_at),
+                    "runtime_sec": int(max(0, s.ended_at - s.started_at)),
+                    "cwd": s.cwd,
+                    "command": s.command,
+                    "tail": s.tail,
+                    "truncated": s.truncated,
+                    "exit_code": s.exit_code,
+                    "exit_signal": s.exit_signal,
+                    "pty": s.pty,
+                }
+                for s in list(_finished_sessions.values())
+            ]
+            payload = {"running": running, "finished": finished}
+            return json.dumps(payload, indent=0)
 
-    sid = (params.get("session_id") or params.get("sessionId") or "").strip()
-    if not sid:
-        return "Error: session_id (or sessionId) is required for this action."
+        sid = (params.get("session_id") or params.get("sessionId") or "").strip()
+        if not sid:
+            return "Error: session_id (or sessionId) is required for this action."
 
-    s = _running_sessions.get(sid)
-    f = _finished_sessions.get(sid)
+        s = _running_sessions.get(sid)
+        f = _finished_sessions.get(sid)
 
     if action == "poll":
         if s:

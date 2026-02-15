@@ -389,11 +389,39 @@ def get_files_tools_openai_def() -> list[dict]:
 
 
 def parse_files_tool_args(arguments_str: str) -> dict:
-    """Parse tool call arguments JSON."""
+    """Parse tool call arguments JSON with validation."""
+
+    # If already a dict, validate it
     if isinstance(arguments_str, dict):
-        return arguments_str
+        # Validate expected keys exist and are correct types
+        validated = {}
+
+        # Path validation (common to all file operations)
+        if "path" in arguments_str:
+            path = arguments_str["path"]
+            validated["path"] = str(path) if path is not None else ""
+
+        # Content validation (for write operations)
+        if "content" in arguments_str:
+            content = arguments_str["content"]
+            validated["content"] = str(content) if content is not None else ""
+
+        # Action validation (if present)
+        if "action" in arguments_str:
+            validated["action"] = str(arguments_str["action"])
+
+        # Pattern validation (for delete_matching_files)
+        if "pattern" in arguments_str:
+            validated["pattern"] = str(arguments_str["pattern"])
+
+        return validated
+
+    # Parse JSON string
     try:
         data = json.loads(arguments_str)
-        return data if isinstance(data, dict) else {}
+        if isinstance(data, dict):
+            # Recursively validate the parsed dict
+            return parse_files_tool_args(data)
+        return {}
     except (json.JSONDecodeError, TypeError):
         return {}

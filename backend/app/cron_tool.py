@@ -94,6 +94,13 @@ async def run_cron_tool(
         tz = (params.get("tz") or "").strip() or None
         if not name or not cron_expr or not message:
             return "Error: add requires `name`, `cron_expr`, and `message`."
+
+        # Validate cron expression before adding
+        from app.db import validate_cron_expression
+        is_valid, error_msg = validate_cron_expression(cron_expr, tz)
+        if not is_valid:
+            return f"Error: Invalid cron expression: {error_msg}"
+
         job_id = await db.add_cron_job(
             user_id,
             name,

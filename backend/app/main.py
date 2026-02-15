@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.db import get_db
+from app.db import get_db, DB_PATH
 from app.whatsapp_bridge import get_whatsapp_bridge_status
 from app.routers import chat, files, drive, rag, providers, tasks, settings as settings_router, spotify as spotify_router, audio as audio_router, cron as cron_router
 
@@ -29,13 +29,36 @@ if not _app_log.handlers:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: DB + reload reminders + ensure User.md + Telegram bot. Shutdown: stop bot cleanly."""
-    await get_db().connect()
+    """Startup: validate DB, reload reminders, ensure User.md, start Telegram. Shutdown: cleanup."""
+
+    # 1. Validate database connection FIRST
+    try:
+        db = get_db()
+        await db.connect()
+        logger.info("✓ Database connected: %s", os.path.basename(DB_PATH))
+    except Exception as e:
+        logger.critical("✗ Failed to connect to database: %s", e)
+        raise RuntimeError("Database initialization failed") from e
+
+    # 2. Validate workspace path if configured
+    try:
+        ws = get_settings().workspace_path
+        if ws:
+            if not ws.exists():
+                logger.warning("⚠ Workspace path does not exist: %s", ws)
+            else:
+                logger.info("✓ Workspace path: %s", ws)
+    except Exception as e:
+        logger.warning("⚠ Could not validate workspace path: %s", e)
+
+    # 3. Recover interrupted subagent runs (non-fatal)
     try:
         from app.subagent_orchestrator import recover_subagent_runs_on_startup
-        await recover_subagent_runs_on_startup()
+        recovered = await recover_subagent_runs_on_startup()
+        if recovered:
+            logger.info("✓ Recovered %d interrupted subagent run(s)", recovered)
     except Exception as e:
-        logger.exception("Failed to recover subagent runs: %s", e)
+        logger.error("⚠ Subagent recovery failed (non-fatal): %s", e)
     try:
         from app.memories import ensure_user_md
         ensure_user_md("default")
