@@ -212,6 +212,9 @@ class Db:
                 task TEXT NOT NULL,
                 label TEXT,
                 provider_name TEXT,
+                model_override TEXT,
+                thinking_override TEXT,
+                run_timeout_seconds INTEGER NOT NULL DEFAULT 0,
                 channel TEXT NOT NULL,
                 channel_target TEXT,
                 cleanup TEXT NOT NULL DEFAULT 'keep',
@@ -220,7 +223,8 @@ class Db:
                 error_text TEXT,
                 created_at TEXT NOT NULL,
                 started_at TEXT,
-                ended_at TEXT
+                ended_at TEXT,
+                archived_at TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_subagent_parent_created ON subagent_runs(parent_conversation_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_subagent_status ON subagent_runs(status, created_at DESC);
@@ -271,6 +275,29 @@ class Db:
                 await self._conn.commit()
             except Exception as e:
                 self.logger.exception("Failed to add reasoning_mode column: %s", e)
+        # Subagent runs table migrations (for older installs).
+        try:
+            cursor = await self._conn.execute("PRAGMA table_info(subagent_runs)")
+            sub_cols = [row["name"] for row in await cursor.fetchall()]
+            migrations = [
+                ("model_override", "ALTER TABLE subagent_runs ADD COLUMN model_override TEXT"),
+                ("thinking_override", "ALTER TABLE subagent_runs ADD COLUMN thinking_override TEXT"),
+                (
+                    "run_timeout_seconds",
+                    "ALTER TABLE subagent_runs ADD COLUMN run_timeout_seconds INTEGER NOT NULL DEFAULT 0",
+                ),
+                ("archived_at", "ALTER TABLE subagent_runs ADD COLUMN archived_at TEXT"),
+            ]
+            for col, sql in migrations:
+                if col in sub_cols:
+                    continue
+                try:
+                    await self._conn.execute(sql)
+                    await self._conn.commit()
+                except Exception as e:
+                    self.logger.exception("Failed to add subagent_runs.%s column: %s", col, e)
+        except Exception as e:
+            self.logger.debug("subagent_runs table migration check skipped: %s", e)
 
     async def get_or_create_conversation(self, user_id: str, channel: str) -> str:
         if not self._conn:
@@ -337,14 +364,18 @@ class Db:
         channel_target: str,
         cleanup: str,
         status: str,
+        model_override: str | None = None,
+        thinking_override: str | None = None,
+        run_timeout_seconds: int = 0,
     ) -> None:
         if not self._conn:
             await self.connect()
         await self._conn.execute(
             """INSERT OR REPLACE INTO subagent_runs
                (run_id, user_id, parent_conversation_id, child_conversation_id, task, label, provider_name,
-                channel, channel_target, cleanup, status, created_at, started_at, ended_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), NULL)""",
+                model_override, thinking_override, run_timeout_seconds, channel, channel_target,
+                cleanup, status, created_at, started_at, ended_at, archived_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), NULL, NULL)""",
             (
                 run_id,
                 user_id,
@@ -353,6 +384,9 @@ class Db:
                 task,
                 (label or "").strip() or None,
                 (provider_name or "").strip() or None,
+                (model_override or "").strip() or None,
+                (thinking_override or "").strip().lower() or None,
+                max(0, int(run_timeout_seconds or 0)),
                 channel,
                 channel_target or "",
                 cleanup,
@@ -369,6 +403,7 @@ class Db:
         result_text: str | None = None,
         error_text: str | None = None,
         ended: bool = False,
+        archived: bool = False,
     ) -> None:
         if not self._conn:
             await self.connect()
@@ -385,6 +420,8 @@ class Db:
             params.append(error_text)
         if ended:
             fields.append("ended_at = datetime('now')")
+        if archived:
+            fields.append("archived_at = datetime('now')")
         if not fields:
             return
         params.append(run_id)

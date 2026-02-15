@@ -902,6 +902,9 @@ async def handle_message(
         mood = await db.get_user_mood(user_id)
     extra["mood"] = mood
     thinking_level = await db.get_user_thinking_level(user_id)
+    thinking_override = (extra.get("subagent_thinking_override") or "").strip().lower()
+    if thinking_override in ("off", "low", "medium", "high"):
+        thinking_level = thinking_override
     extra["thinking_level"] = thinking_level
     reasoning_mode = await db.get_user_reasoning_mode(user_id)
     extra["reasoning_mode"] = reasoning_mode
@@ -1106,6 +1109,9 @@ async def handle_message(
     if not provider:
         return f"No AI provider found for '{provider_name}'. Check your provider settings."
     user_model = await db.get_user_provider_model(user_id, provider.name)
+    model_override = (extra.get("subagent_model_override") or "").strip()
+    if model_override:
+        user_model = model_override
 
     # Exec tool (Claw-style): expose based on exec security policy.
     from app.exec_tool import (

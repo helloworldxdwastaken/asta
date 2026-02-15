@@ -190,6 +190,9 @@ class Settings(BaseSettings):
     # Debug UX: show tool usage trace in assistant replies for selected channels.
     asta_show_tool_trace: bool = False
     asta_tool_trace_channels: str = "web"
+    # Subagent orchestration (single-user OpenClaw-style)
+    asta_subagents_max_concurrent: int = 3
+    asta_subagents_archive_after_minutes: int = 60
 
     @property
     def tool_trace_channels(self) -> set[str]:

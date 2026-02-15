@@ -4,9 +4,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from app.config import get_settings
 from app.db import get_db
 from app.message_queue import queue_key
 from app.reminders import send_notification
@@ -14,7 +16,9 @@ from app.reminders import send_notification
 logger = logging.getLogger(__name__)
 
 _RUN_TASKS: dict[str, asyncio.Task] = {}
+_ARCHIVE_TASKS: dict[str, asyncio.Task] = {}
 _ALLOWED_CLEANUP = {"keep", "delete"}
+_ALLOWED_THINKING = {"off", "low", "medium", "high"}
 
 
 def get_subagent_tools_openai_def() -> list[dict]:
@@ -39,6 +43,12 @@ def get_subagent_tools_openai_def() -> list[dict]:
                     "properties": {
                         "task": {"type": "string"},
                         "label": {"type": "string"},
+                        "model": {"type": "string", "description": "Optional model override for this subagent run."},
+                        "thinking": {
+                            "type": "string",
+                            "enum": ["off", "low", "medium", "high"],
+                            "description": "Optional thinking override for this subagent run.",
+                        },
                         "runTimeoutSeconds": {"type": "integer", "minimum": 0},
                         "timeoutSeconds": {"type": "integer", "minimum": 0},
                         "cleanup": {"type": "string", "enum": ["keep", "delete"]},
@@ -151,6 +161,33 @@ def _normalize_timeout(raw: object) -> int:
     return 0
 
 
+def _normalize_thinking(raw: object) -> str | None:
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip().lower()
+    if not value:
+        return None
+    if value not in _ALLOWED_THINKING:
+        return "__invalid__"
+    return value
+
+
+def _active_in_memory_count() -> int:
+    return sum(1 for t in _RUN_TASKS.values() if not t.done())
+
+
+def _archive_after_seconds() -> int | None:
+    # Testing override: allow short timers without changing minutes config.
+    raw_seconds = (os.environ.get("ASTA_SUBAGENTS_ARCHIVE_AFTER_SECONDS") or "").strip()
+    if raw_seconds.isdigit():
+        sec = int(raw_seconds)
+        return sec if sec > 0 else None
+    minutes = int(getattr(get_settings(), "asta_subagents_archive_after_minutes", 60) or 0)
+    if minutes <= 0:
+        return None
+    return minutes * 60
+
+
 def _render_announce_message(run: dict) -> str:
     label = (run.get("label") or "").strip() or (run.get("task") or "").strip() or "subagent task"
     status = (run.get("status") or "").strip().lower()
@@ -159,20 +196,20 @@ def _render_announce_message(run: dict) -> str:
 
     if status == "completed":
         if result:
-            snippet = result[:1800] + ("…" if len(result) > 1800 else "")
-            return f"Subagent \"{label}\" finished.\n\n{snippet}"
-        return f"Subagent \"{label}\" finished."
+            snippet = result[:1800] + ("..." if len(result) > 1800 else "")
+            return f'Subagent "{label}" finished.\n\n{snippet}'
+        return f'Subagent "{label}" finished.'
     if status == "timeout":
-        return f"Subagent \"{label}\" timed out."
+        return f'Subagent "{label}" timed out.'
     if status == "stopped":
-        return f"Subagent \"{label}\" was stopped."
+        return f'Subagent "{label}" was stopped.'
     if status == "error":
         if error:
-            return f"Subagent \"{label}\" failed: {error[:500]}"
-        return f"Subagent \"{label}\" failed."
+            return f'Subagent "{label}" failed: {error[:500]}'
+        return f'Subagent "{label}" failed.'
     if status == "interrupted":
-        return f"Subagent \"{label}\" was interrupted by restart."
-    return f"Subagent \"{label}\" ended with status: {status or 'unknown'}."
+        return f'Subagent "{label}" was interrupted by restart.'
+    return f'Subagent "{label}" ended with status: {status or "unknown"}.'
 
 
 async def _run_subagent_turn(
@@ -181,8 +218,16 @@ async def _run_subagent_turn(
     child_conversation_id: str,
     task: str,
     provider_name: str,
+    model_override: str | None = None,
+    thinking_override: str | None = None,
 ) -> str:
     from app.handler import handle_message
+
+    extra = {"subagent_mode": True}
+    if model_override:
+        extra["subagent_model_override"] = model_override
+    if thinking_override:
+        extra["subagent_thinking_override"] = thinking_override
 
     async with queue_key(f"subagent:{child_conversation_id}"):
         return await handle_message(
@@ -192,7 +237,7 @@ async def _run_subagent_turn(
             provider_name=provider_name,
             conversation_id=child_conversation_id,
             channel_target="",
-            extra_context={"subagent_mode": True},
+            extra_context=extra,
         )
 
 
@@ -216,14 +261,51 @@ async def _announce_subagent_run(run_id: str) -> None:
             logger.debug("Subagent announce failed channel=%s target=%s: %s", channel, target, e)
 
 
+async def _archive_child_session_after_delay(run_id: str, child_conversation_id: str, delay_seconds: int) -> None:
+    try:
+        await asyncio.sleep(max(1, int(delay_seconds)))
+        db = get_db()
+        await db.connect()
+        run = await db.get_subagent_run(run_id)
+        if not run:
+            return
+        status = (run.get("status") or "").strip().lower()
+        if status == "running":
+            return
+        if run.get("archived_at"):
+            return
+        await db.delete_conversation(child_conversation_id)
+        await db.update_subagent_run(run_id, archived=True)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.debug("Subagent archive timer failed run=%s: %s", run_id, e)
+    finally:
+        _ARCHIVE_TASKS.pop(run_id, None)
+
+
+def _schedule_archive_timer(run_id: str, child_conversation_id: str) -> None:
+    delay = _archive_after_seconds()
+    if delay is None:
+        return
+    existing = _ARCHIVE_TASKS.get(run_id)
+    if existing and not existing.done():
+        existing.cancel()
+    _ARCHIVE_TASKS[run_id] = asyncio.create_task(
+        _archive_child_session_after_delay(run_id, child_conversation_id, delay),
+        name=f"subagent-archive:{run_id}",
+    )
+
+
 async def _run_subagent_background(
     *,
     run_id: str,
     user_id: str,
-    parent_conversation_id: str,
     child_conversation_id: str,
     task: str,
     provider_name: str,
+    model_override: str | None,
+    thinking_override: str | None,
     run_timeout_seconds: int,
     cleanup: str,
 ) -> None:
@@ -237,6 +319,8 @@ async def _run_subagent_background(
                     child_conversation_id=child_conversation_id,
                     task=task,
                     provider_name=provider_name,
+                    model_override=model_override,
+                    thinking_override=thinking_override,
                 ),
                 timeout=run_timeout_seconds,
             )
@@ -246,6 +330,8 @@ async def _run_subagent_background(
                 child_conversation_id=child_conversation_id,
                 task=task,
                 provider_name=provider_name,
+                model_override=model_override,
+                thinking_override=thinking_override,
             )
         await db.update_subagent_run(
             run_id,
@@ -280,8 +366,11 @@ async def _run_subagent_background(
         if cleanup == "delete":
             try:
                 await db.delete_conversation(child_conversation_id)
+                await db.update_subagent_run(run_id, archived=True)
             except Exception:
                 pass
+        else:
+            _schedule_archive_timer(run_id, child_conversation_id)
         _RUN_TASKS.pop(run_id, None)
 
 
@@ -294,6 +383,8 @@ async def spawn_subagent_run(
     provider_name: str,
     channel: str,
     channel_target: str,
+    model_override: str | None = None,
+    thinking_override: str | None = None,
     cleanup: str = "keep",
     run_timeout_seconds: int = 0,
 ) -> dict:
@@ -302,11 +393,26 @@ async def spawn_subagent_run(
         return {"status": "error", "error": "task is required"}
     if cleanup not in _ALLOWED_CLEANUP:
         cleanup = "keep"
+    thinking_norm = _normalize_thinking(thinking_override)
+    if thinking_norm == "__invalid__":
+        return {"status": "error", "error": "thinking must be one of: off, low, medium, high"}
+    thinking_override = thinking_norm or None
+
+    db = get_db()
+    await db.connect()
+    max_concurrent = max(1, int(getattr(get_settings(), "asta_subagents_max_concurrent", 3) or 3))
+    running_rows = await db.get_subagent_runs_by_status(["running"], limit=5000)
+    running_count = max(len(running_rows), _active_in_memory_count())
+    if running_count >= max_concurrent:
+        return {
+            "status": "busy",
+            "error": f"Max concurrent subagents reached ({max_concurrent}).",
+            "maxConcurrent": max_concurrent,
+            "running": running_count,
+        }
 
     run_id = f"sub_{uuid4().hex[:10]}"
     child_cid = f"{parent_conversation_id}:subagent:{run_id}"
-    db = get_db()
-    await db.connect()
     await db.add_subagent_run(
         run_id=run_id,
         user_id=user_id,
@@ -315,6 +421,9 @@ async def spawn_subagent_run(
         task=cleaned_task,
         label=(label or "").strip() or None,
         provider_name=provider_name,
+        model_override=(model_override or "").strip() or None,
+        thinking_override=thinking_override,
+        run_timeout_seconds=run_timeout_seconds,
         channel=channel,
         channel_target=channel_target,
         cleanup=cleanup,
@@ -324,10 +433,11 @@ async def spawn_subagent_run(
         _run_subagent_background(
             run_id=run_id,
             user_id=user_id,
-            parent_conversation_id=parent_conversation_id,
             child_conversation_id=child_cid,
             task=cleaned_task,
             provider_name=provider_name,
+            model_override=(model_override or "").strip() or None,
+            thinking_override=thinking_override,
             run_timeout_seconds=run_timeout_seconds,
             cleanup=cleanup,
         ),
@@ -340,6 +450,9 @@ async def spawn_subagent_run(
         "childSessionKey": child_cid,
         "cleanup": cleanup,
         "runTimeoutSeconds": run_timeout_seconds,
+        "maxConcurrent": max_concurrent,
+        "model": (model_override or "").strip() or None,
+        "thinking": thinking_override,
         "createdAt": _now_iso(),
     }
 
@@ -389,6 +502,23 @@ async def recover_subagent_runs_on_startup() -> int:
     db = get_db()
     await db.connect()
     fixed = await db.mark_running_subagent_runs_interrupted()
+    # Best effort: schedule archive timers for completed non-archived runs.
+    try:
+        done_rows = await db.get_subagent_runs_by_status(
+            ["completed", "timeout", "error", "stopped", "interrupted"],
+            limit=1000,
+        )
+        for row in done_rows:
+            if row.get("archived_at"):
+                continue
+            if (row.get("cleanup") or "").strip().lower() == "delete":
+                continue
+            child_key = (row.get("child_conversation_id") or "").strip()
+            run_id = (row.get("run_id") or "").strip()
+            if run_id and child_key:
+                _schedule_archive_timer(run_id, child_key)
+    except Exception as e:
+        logger.debug("Subagent archive timer restore skipped: %s", e)
     if fixed:
         logger.info("Marked %d running subagent run(s) as interrupted after restart.", fixed)
     return fixed
@@ -408,7 +538,14 @@ async def run_subagent_tool(
     await db.connect()
     name = (tool_name or "").strip()
     if name == "agents_list":
-        return _json({"agents": [{"id": "main", "label": "Asta (single-user)"}], "count": 1})
+        max_concurrent = max(1, int(getattr(get_settings(), "asta_subagents_max_concurrent", 3) or 3))
+        return _json(
+            {
+                "agents": [{"id": "main", "label": "Asta (single-user)"}],
+                "count": 1,
+                "maxConcurrent": max_concurrent,
+            }
+        )
 
     if name == "sessions_spawn":
         payload = await spawn_subagent_run(
@@ -419,6 +556,8 @@ async def run_subagent_tool(
             provider_name=provider_name,
             channel=channel,
             channel_target=channel_target,
+            model_override=(params.get("model") or "").strip() or None,
+            thinking_override=params.get("thinking"),
             cleanup=(params.get("cleanup") or "keep").strip().lower(),
             run_timeout_seconds=_normalize_timeout(params.get("runTimeoutSeconds")),
         )
@@ -438,6 +577,9 @@ async def run_subagent_tool(
                     "createdAt": row.get("created_at"),
                     "startedAt": row.get("started_at"),
                     "endedAt": row.get("ended_at"),
+                    "archivedAt": row.get("archived_at"),
+                    "model": row.get("model_override"),
+                    "thinking": row.get("thinking_override"),
                 }
             )
         return _json({"runs": runs, "count": len(runs)})
@@ -456,6 +598,7 @@ async def run_subagent_tool(
                 "runId": row.get("run_id"),
                 "status": row.get("status"),
                 "childSessionKey": row.get("child_conversation_id"),
+                "archivedAt": row.get("archived_at"),
                 "messages": messages,
             }
         )
@@ -479,6 +622,8 @@ async def run_subagent_tool(
                 child_conversation_id=row["child_conversation_id"],
                 task=message,
                 provider_name=(row.get("provider_name") or provider_name or "default"),
+                model_override=(row.get("model_override") or "").strip() or None,
+                thinking_override=(row.get("thinking_override") or "").strip() or None,
             )
 
         asyncio.create_task(_send(), name=f"subagent-send:{row['run_id']}")

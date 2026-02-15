@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,7 +23,15 @@ async def test_subagent_spawn_completes_and_announces(monkeypatch):
     user_id = f"test-subagent-{uuid.uuid4().hex[:8]}"
     cid = await db.get_or_create_conversation(user_id, "web")
 
-    async def _fake_turn(*, user_id: str, child_conversation_id: str, task: str, provider_name: str) -> str:
+    async def _fake_turn(
+        *,
+        user_id: str,
+        child_conversation_id: str,
+        task: str,
+        provider_name: str,
+        model_override: str | None = None,
+        thinking_override: str | None = None,
+    ) -> str:
         return f"done: {task}"
 
     monkeypatch.setattr("app.subagent_orchestrator._run_subagent_turn", _fake_turn)
@@ -110,7 +119,15 @@ async def test_sessions_stop_cancels_running_subagent(monkeypatch):
     user_id = f"test-subagent-stop-{uuid.uuid4().hex[:8]}"
     cid = await db.get_or_create_conversation(user_id, "web")
 
-    async def _slow_turn(*, user_id: str, child_conversation_id: str, task: str, provider_name: str) -> str:
+    async def _slow_turn(
+        *,
+        user_id: str,
+        child_conversation_id: str,
+        task: str,
+        provider_name: str,
+        model_override: str | None = None,
+        thinking_override: str | None = None,
+    ) -> str:
         await asyncio.sleep(10)
         return "late"
 
@@ -172,3 +189,148 @@ async def test_recovery_marks_running_subagents_interrupted():
     row = await db.get_subagent_run(run_id)
     assert row is not None
     assert (row.get("status") or "").lower() == "interrupted"
+
+
+@pytest.mark.asyncio
+async def test_sessions_spawn_respects_max_concurrency(monkeypatch):
+    db = get_db()
+    await db.connect()
+    user_id = f"test-subagent-cap-{uuid.uuid4().hex[:8]}"
+    cid = await db.get_or_create_conversation(user_id, "web")
+
+    async def _slow_turn(
+        *,
+        user_id: str,
+        child_conversation_id: str,
+        task: str,
+        provider_name: str,
+        model_override: str | None = None,
+        thinking_override: str | None = None,
+    ) -> str:
+        await asyncio.sleep(2.0)
+        return "ok"
+
+    monkeypatch.setattr("app.subagent_orchestrator._run_subagent_turn", _slow_turn)
+    monkeypatch.setattr(
+        "app.subagent_orchestrator.get_settings",
+        lambda: SimpleNamespace(asta_subagents_max_concurrent=1, asta_subagents_archive_after_minutes=60),
+    )
+
+    first = await spawn_subagent_run(
+        user_id=user_id,
+        parent_conversation_id=cid,
+        task="one",
+        label="one",
+        provider_name="openai",
+        channel="web",
+        channel_target="web",
+        cleanup="keep",
+    )
+    assert first["status"] == "accepted"
+
+    second = await spawn_subagent_run(
+        user_id=user_id,
+        parent_conversation_id=cid,
+        task="two",
+        label="two",
+        provider_name="openai",
+        channel="web",
+        channel_target="web",
+        cleanup="keep",
+    )
+    assert second["status"] == "busy"
+    assert second["maxConcurrent"] == 1
+
+    await wait_subagent_run(first["runId"], timeout_seconds=4.0)
+
+
+@pytest.mark.asyncio
+async def test_sessions_spawn_passes_model_and_thinking_overrides(monkeypatch):
+    db = get_db()
+    await db.connect()
+    user_id = f"test-subagent-overrides-{uuid.uuid4().hex[:8]}"
+    cid = await db.get_or_create_conversation(user_id, "web")
+    observed: dict[str, str | None] = {"model": None, "thinking": None}
+
+    async def _fake_turn(
+        *,
+        user_id: str,
+        child_conversation_id: str,
+        task: str,
+        provider_name: str,
+        model_override: str | None = None,
+        thinking_override: str | None = None,
+    ) -> str:
+        observed["model"] = model_override
+        observed["thinking"] = thinking_override
+        return "ok"
+
+    monkeypatch.setattr("app.subagent_orchestrator._run_subagent_turn", _fake_turn)
+
+    accepted = await spawn_subagent_run(
+        user_id=user_id,
+        parent_conversation_id=cid,
+        task="check",
+        label="check",
+        provider_name="openai",
+        channel="web",
+        channel_target="web",
+        model_override="gpt-4.1-mini",
+        thinking_override="low",
+        cleanup="keep",
+    )
+    assert accepted["status"] == "accepted"
+    await wait_subagent_run(accepted["runId"], timeout_seconds=2.0)
+    assert observed["model"] == "gpt-4.1-mini"
+    assert observed["thinking"] == "low"
+
+    row = await db.get_subagent_run(accepted["runId"])
+    assert row is not None
+    assert (row.get("model_override") or "") == "gpt-4.1-mini"
+    assert (row.get("thinking_override") or "") == "low"
+
+
+@pytest.mark.asyncio
+async def test_subagent_auto_archive_removes_child_conversation(monkeypatch):
+    db = get_db()
+    await db.connect()
+    user_id = f"test-subagent-archive-{uuid.uuid4().hex[:8]}"
+    cid = await db.get_or_create_conversation(user_id, "web")
+    monkeypatch.setenv("ASTA_SUBAGENTS_ARCHIVE_AFTER_SECONDS", "1")
+
+    async def _fake_turn(
+        *,
+        user_id: str,
+        child_conversation_id: str,
+        task: str,
+        provider_name: str,
+        model_override: str | None = None,
+        thinking_override: str | None = None,
+    ) -> str:
+        # Ensure child conversation exists so archive has something to delete.
+        await db.add_message(child_conversation_id, "assistant", f"child:{task}")
+        return "done"
+
+    monkeypatch.setattr("app.subagent_orchestrator._run_subagent_turn", _fake_turn)
+
+    accepted = await spawn_subagent_run(
+        user_id=user_id,
+        parent_conversation_id=cid,
+        task="archive me",
+        label="archive",
+        provider_name="openai",
+        channel="web",
+        channel_target="web",
+        cleanup="keep",
+    )
+    assert accepted["status"] == "accepted"
+    run_id = accepted["runId"]
+    child_key = accepted["childSessionKey"]
+    await wait_subagent_run(run_id, timeout_seconds=2.0)
+    await asyncio.sleep(1.4)
+
+    child_messages = await db.get_recent_messages(child_key, limit=5)
+    assert child_messages == []
+    row = await db.get_subagent_run(run_id)
+    assert row is not None
+    assert row.get("archived_at")

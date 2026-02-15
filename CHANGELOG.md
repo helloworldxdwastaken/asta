@@ -29,6 +29,29 @@ All notable changes to Asta are documented here.
 
 ---
 
+## [1.3.6] - 2026-02-15
+
+### Added
+
+- **Subagent concurrency control** — Added `ASTA_SUBAGENTS_MAX_CONCURRENT` (default `3`) and enforced spawn guard so `sessions_spawn` returns `busy` when the cap is reached.
+- **Per-spawn model/thinking overrides** — `sessions_spawn` now accepts:
+  - `model` (provider model override for that child run)
+  - `thinking` (`off|low|medium|high`) override for that child run
+  Overrides are persisted on the run and reused by `sessions_send`.
+- **Auto-archive timer for keep-mode runs** — Added timed cleanup of child sessions for `cleanup=keep` runs. Archive marks `archived_at` and removes child conversation messages while preserving run metadata.
+- **Subagent metadata persistence** — `subagent_runs` now stores `model_override`, `thinking_override`, `run_timeout_seconds`, and `archived_at`.
+- **Recovery enhancement** — Startup recovery now also restores archive timers for completed non-archived keep-mode runs.
+
+### Fixed
+
+- **Subagent runtime stability** — Corrected orchestration runtime edge cases and validated with expanded tests.
+
+### Changed
+
+- **Orchestration tests expanded** — Added tests for concurrency cap, per-spawn overrides, and auto-archive behavior.
+
+---
+
 ## [1.3.5] - 2026-02-14
 
 ### Added
