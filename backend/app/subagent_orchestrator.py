@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 _RUN_TASKS: dict[str, asyncio.Task] = {}
 _ARCHIVE_TASKS: dict[str, asyncio.Task] = {}
+_TASKS_LOCK = asyncio.Lock()  # Guards _RUN_TASKS and _ARCHIVE_TASKS access
 _ALLOWED_CLEANUP = {"keep", "delete"}
 _ALLOWED_THINKING = {"off", "low", "medium", "high"}
 
@@ -89,7 +90,7 @@ def get_subagent_tools_openai_def() -> list[dict]:
             "type": "function",
             "function": {
                 "name": "sessions_send",
-                "description": "Send a follow-up message into a running subagent session.",
+                "description": "Send a follow-up message into a running subagent session. Optional timeoutSeconds waits for a reply.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -97,6 +98,11 @@ def get_subagent_tools_openai_def() -> list[dict]:
                         "sessionKey": {"type": "string"},
                         "message": {"type": "string"},
                         "text": {"type": "string"},
+                        "timeoutSeconds": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Optional wait timeout. If >0, wait for subagent reply up to N seconds.",
+                        },
                     },
                 },
             },
@@ -140,6 +146,8 @@ def parse_subagent_tool_args(arguments_str: str | dict) -> dict:
         out["message"] = out["text"]
     if "runTimeoutSeconds" not in out and "timeoutSeconds" in out:
         out["runTimeoutSeconds"] = out.get("timeoutSeconds")
+    if "timeoutSeconds" not in out and "waitSeconds" in out:
+        out["timeoutSeconds"] = out.get("waitSeconds")
     return out
 
 
@@ -172,7 +180,13 @@ def _normalize_thinking(raw: object) -> str | None:
     return value
 
 
-def _active_in_memory_count() -> int:
+async def _active_in_memory_count() -> int:
+    """Count active tasks - MUST be called under _TASKS_LOCK.
+
+    This function does NOT acquire the lock itself because it's only
+    called from sections that already hold _TASKS_LOCK. Acquiring the
+    lock here would cause a deadlock.
+    """
     return sum(1 for t in _RUN_TASKS.values() if not t.done())
 
 
@@ -281,19 +295,23 @@ async def _archive_child_session_after_delay(run_id: str, child_conversation_id:
     except Exception as e:
         logger.debug("Subagent archive timer failed run=%s: %s", run_id, e)
     finally:
-        _ARCHIVE_TASKS.pop(run_id, None)
+        # Clean up task reference under lock
+        async with _TASKS_LOCK:
+            _ARCHIVE_TASKS.pop(run_id, None)
 
 
-def _schedule_archive_timer(run_id: str, child_conversation_id: str) -> None:
+async def _schedule_archive_timer(run_id: str, child_conversation_id: str) -> None:
+    """Schedule archive with proper lock protection."""
     delay = _archive_after_seconds()
     if delay is None:
         return
-    existing = _ARCHIVE_TASKS.get(run_id)
-    if existing and not existing.done():
-        existing.cancel()
-    _ARCHIVE_TASKS[run_id] = asyncio.create_task(
-        _archive_child_session_after_delay(run_id, child_conversation_id, delay),
-        name=f"subagent-archive:{run_id}",
+    async with _TASKS_LOCK:
+        existing = _ARCHIVE_TASKS.get(run_id)
+        if existing and not existing.done():
+            existing.cancel()
+        _ARCHIVE_TASKS[run_id] = asyncio.create_task(
+            _archive_child_session_after_delay(run_id, child_conversation_id, delay),
+            name=f"subagent-archive:{run_id}",
     )
 
 
@@ -363,15 +381,27 @@ async def _run_subagent_background(
         )
     finally:
         await _announce_subagent_run(run_id)
-        if cleanup == "delete":
-            try:
-                await db.delete_conversation(child_conversation_id)
-                await db.update_subagent_run(run_id, archived=True)
-            except Exception:
-                pass
-        else:
-            _schedule_archive_timer(run_id, child_conversation_id)
-        _RUN_TASKS.pop(run_id, None)
+
+        # Determine cleanup action under lock, execute outside lock to avoid deadlock
+        should_archive = False
+        async with _TASKS_LOCK:
+            if cleanup == "delete":
+                try:
+                    # Update DB state first (safer order)
+                    await db.update_subagent_run(run_id, archived=True)
+                    # Then delete conversation
+                    await db.delete_conversation(child_conversation_id)
+                except Exception as e:
+                    logger.warning("Failed to cleanup subagent %s: %s", run_id, e)
+            else:
+                should_archive = True
+
+            # Clean up task reference
+            _RUN_TASKS.pop(run_id, None)
+
+        # Schedule archive timer outside lock to avoid deadlock
+        if should_archive:
+            await _schedule_archive_timer(run_id, child_conversation_id)
 
 
 async def spawn_subagent_run(
@@ -401,49 +431,70 @@ async def spawn_subagent_run(
     db = get_db()
     await db.connect()
     max_concurrent = max(1, int(getattr(get_settings(), "asta_subagents_max_concurrent", 3) or 3))
-    running_rows = await db.get_subagent_runs_by_status(["running"], limit=5000)
-    running_count = max(len(running_rows), _active_in_memory_count())
-    if running_count >= max_concurrent:
-        return {
-            "status": "busy",
-            "error": f"Max concurrent subagents reached ({max_concurrent}).",
-            "maxConcurrent": max_concurrent,
-            "running": running_count,
-        }
 
-    run_id = f"sub_{uuid4().hex[:10]}"
-    child_cid = f"{parent_conversation_id}:subagent:{run_id}"
-    await db.add_subagent_run(
-        run_id=run_id,
-        user_id=user_id,
-        parent_conversation_id=parent_conversation_id,
-        child_conversation_id=child_cid,
-        task=cleaned_task,
-        label=(label or "").strip() or None,
-        provider_name=provider_name,
-        model_override=(model_override or "").strip() or None,
-        thinking_override=thinking_override,
-        run_timeout_seconds=run_timeout_seconds,
-        channel=channel,
-        channel_target=channel_target,
-        cleanup=cleanup,
-        status="running",
-    )
-    task_obj = asyncio.create_task(
-        _run_subagent_background(
+    # Protect concurrency check and task creation with lock.
+    # Single-user runtime truth is in-memory tasks; DB "running" rows can become stale
+    # after crashes/restarts or test interruptions.
+    async with _TASKS_LOCK:
+        running_rows = await db.get_subagent_runs_by_status(["running"], limit=5000)
+        active_run_ids = {
+            rid for rid, task in _RUN_TASKS.items() if rid and task is not None and not task.done()
+        }
+        stale_running_ids: list[str] = []
+        for row in running_rows:
+            rid = str(row.get("run_id") or "").strip()
+            if rid and rid not in active_run_ids:
+                stale_running_ids.append(rid)
+        for rid in stale_running_ids:
+            await db.update_subagent_run(
+                rid,
+                status="interrupted",
+                error_text="Recovered stale running state.",
+                ended=True,
+            )
+
+        running_count = len(active_run_ids)
+        if running_count >= max_concurrent:
+            return {
+                "status": "busy",
+                "error": f"Max concurrent subagents reached ({max_concurrent}).",
+                "maxConcurrent": max_concurrent,
+                "running": running_count,
+            }
+
+        run_id = f"sub_{uuid4().hex[:10]}"
+        child_cid = f"{parent_conversation_id}:subagent:{run_id}"
+        await db.add_subagent_run(
             run_id=run_id,
             user_id=user_id,
+            parent_conversation_id=parent_conversation_id,
             child_conversation_id=child_cid,
             task=cleaned_task,
+            label=(label or "").strip() or None,
             provider_name=provider_name,
             model_override=(model_override or "").strip() or None,
             thinking_override=thinking_override,
             run_timeout_seconds=run_timeout_seconds,
+            channel=channel,
+            channel_target=channel_target,
             cleanup=cleanup,
-        ),
-        name=f"subagent:{run_id}",
-    )
-    _RUN_TASKS[run_id] = task_obj
+            status="running",
+        )
+        task_obj = asyncio.create_task(
+            _run_subagent_background(
+                run_id=run_id,
+                user_id=user_id,
+                child_conversation_id=child_cid,
+                task=cleaned_task,
+                provider_name=provider_name,
+                model_override=(model_override or "").strip() or None,
+                thinking_override=thinking_override,
+                run_timeout_seconds=run_timeout_seconds,
+                cleanup=cleanup,
+            ),
+            name=f"subagent:{run_id}",
+        )
+        _RUN_TASKS[run_id] = task_obj
     return {
         "status": "accepted",
         "runId": run_id,
@@ -472,10 +523,19 @@ def _match_run(rows: list[dict], run_id: str | None, session_key: str | None) ->
 
 
 async def stop_subagent_run(run_id: str) -> bool:
+    """Stop a running subagent by canceling its task.
+
+    Returns True if task was canceled, False if not found or already done.
+    """
     rid = (run_id or "").strip()
     if not rid:
         return False
-    task = _RUN_TASKS.get(rid)
+
+    # Get task reference under lock
+    async with _TASKS_LOCK:
+        task = _RUN_TASKS.get(rid)
+
+    # Cancel task if running (outside lock to avoid blocking)
     if task and not task.done():
         task.cancel()
         return True
@@ -483,12 +543,23 @@ async def stop_subagent_run(run_id: str) -> bool:
 
 
 async def wait_subagent_run(run_id: str, timeout_seconds: float = 20.0) -> bool:
+    """Wait for a subagent run to complete.
+
+    Returns True if completed or not found, False on timeout.
+    """
     rid = (run_id or "").strip()
     if not rid:
         return False
-    task = _RUN_TASKS.get(rid)
+
+    # Get task reference under lock to avoid race condition
+    async with _TASKS_LOCK:
+        task = _RUN_TASKS.get(rid)
+
+    # If no task found, assume already completed
     if not task:
         return True
+
+    # Wait for task to complete (outside lock to avoid blocking other operations)
     try:
         await asyncio.wait_for(asyncio.shield(task), timeout=max(0.1, timeout_seconds))
         return True
@@ -516,7 +587,7 @@ async def recover_subagent_runs_on_startup() -> int:
             child_key = (row.get("child_conversation_id") or "").strip()
             run_id = (row.get("run_id") or "").strip()
             if run_id and child_key:
-                _schedule_archive_timer(run_id, child_key)
+                await _schedule_archive_timer(run_id, child_key)
     except Exception as e:
         logger.debug("Subagent archive timer restore skipped: %s", e)
     if fixed:
@@ -597,7 +668,13 @@ async def run_subagent_tool(
             {
                 "runId": row.get("run_id"),
                 "status": row.get("status"),
+                "label": row.get("label") or row.get("task") or "",
+                "model": row.get("model_override"),
+                "thinking": row.get("thinking_override"),
                 "childSessionKey": row.get("child_conversation_id"),
+                "createdAt": row.get("created_at"),
+                "startedAt": row.get("started_at"),
+                "endedAt": row.get("ended_at"),
                 "archivedAt": row.get("archived_at"),
                 "messages": messages,
             }
@@ -607,6 +684,7 @@ async def run_subagent_tool(
         run_id = (params.get("runId") or "").strip()
         session_key = (params.get("sessionKey") or "").strip()
         message = (params.get("message") or "").strip()
+        timeout_seconds = _normalize_timeout(params.get("timeoutSeconds"))
         if not message:
             return _json({"error": "message is required"})
         rows = await db.list_subagent_runs(parent_conversation_id, limit=200)
@@ -626,7 +704,48 @@ async def run_subagent_tool(
                 thinking_override=(row.get("thinking_override") or "").strip() or None,
             )
 
-        asyncio.create_task(_send(), name=f"subagent-send:{row['run_id']}")
+        send_task = asyncio.create_task(_send(), name=f"subagent-send:{row['run_id']}")
+        if timeout_seconds > 0:
+            try:
+                await asyncio.wait_for(asyncio.shield(send_task), timeout=timeout_seconds)
+                # Best-effort: return the latest assistant content from child session.
+                messages = await db.get_recent_messages(row["child_conversation_id"], limit=20)
+                reply = ""
+                for m in reversed(messages):
+                    if (m.get("role") or "").strip().lower() != "assistant":
+                        continue
+                    content = (m.get("content") or "").strip()
+                    if content:
+                        reply = content
+                        break
+                return _json(
+                    {
+                        "status": "completed",
+                        "runId": row.get("run_id"),
+                        "childSessionKey": row.get("child_conversation_id"),
+                        "reply": reply,
+                        "waitedSeconds": timeout_seconds,
+                    }
+                )
+            except asyncio.TimeoutError:
+                return _json(
+                    {
+                        "status": "timeout",
+                        "runId": row.get("run_id"),
+                        "childSessionKey": row.get("child_conversation_id"),
+                        "waitedSeconds": timeout_seconds,
+                    }
+                )
+            except Exception as e:
+                return _json(
+                    {
+                        "status": "error",
+                        "runId": row.get("run_id"),
+                        "childSessionKey": row.get("child_conversation_id"),
+                        "error": str(e)[:500],
+                    }
+                )
+
         return _json(
             {
                 "status": "accepted",

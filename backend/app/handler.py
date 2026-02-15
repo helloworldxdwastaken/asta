@@ -795,7 +795,7 @@ def _subagents_help_text() -> str:
         "- /subagents list [limit]\n"
         "- /subagents spawn <task>\n"
         "- /subagents info <runId> [limit]\n"
-        "- /subagents send <runId> <message>\n"
+        "- /subagents send <runId> <message> [--wait <seconds>]\n"
         "- /subagents stop <runId>\n"
         "- /subagents help"
     )
@@ -910,20 +910,47 @@ def _format_subagents_list(payload: dict) -> str:
     runs = payload.get("runs") if isinstance(payload, dict) else None
     if not isinstance(runs, list) or not runs:
         return "No subagent runs yet. Use /subagents spawn <task>."
-    lines = [f"Subagents ({len(runs)}):"]
-    for i, row in enumerate(runs, 1):
+
+    def _status_rank(value: str) -> int:
+        s = (value or "").strip().lower()
+        if s == "running":
+            return 0
+        if s in ("timeout", "error", "interrupted"):
+            return 1
+        if s in ("completed", "stopped"):
+            return 2
+        return 3
+
+    valid_rows = [r for r in runs if isinstance(r, dict)]
+    ordered = sorted(
+        valid_rows,
+        key=lambda row: (
+            _status_rank(str(row.get("status") or "")),
+            str(row.get("createdAt") or ""),
+        ),
+        reverse=False,
+    )
+    running_count = sum(
+        1 for row in ordered if str(row.get("status") or "").strip().lower() == "running"
+    )
+
+    lines = [f"Subagents: {len(ordered)} total ({running_count} running)"]
+    for i, row in enumerate(ordered, 1):
         if not isinstance(row, dict):
             continue
         run_id = str(row.get("runId") or "").strip() or "unknown"
-        status = str(row.get("status") or "unknown").strip()
+        status = str(row.get("status") or "unknown").strip().lower()
         label = str(row.get("label") or "").strip() or "task"
         model = str(row.get("model") or "").strip()
         thinking = str(row.get("thinking") or "").strip()
+        created = str(row.get("createdAt") or "").strip()
         suffix = []
         if model:
             suffix.append(f"model={model}")
         if thinking:
             suffix.append(f"thinking={thinking}")
+        if created:
+            suffix.append(f"created={created}")
         extra = f" ({', '.join(suffix)})" if suffix else ""
         lines.append(f"{i}. [{run_id}] {status} - {label}{extra}")
     return "\n".join(lines)
@@ -936,8 +963,29 @@ def _format_subagents_history(payload: dict, limit: int) -> str:
         return str(payload.get("error"))
     run_id = str(payload.get("runId") or "unknown")
     status = str(payload.get("status") or "unknown")
+    label = str(payload.get("label") or "").strip()
+    model = str(payload.get("model") or "").strip()
+    thinking = str(payload.get("thinking") or "").strip()
+    created = str(payload.get("createdAt") or "").strip()
+    ended = str(payload.get("endedAt") or "").strip()
+    archived = str(payload.get("archivedAt") or "").strip()
     msgs = payload.get("messages") if isinstance(payload.get("messages"), list) else []
     lines = [f"Subagent [{run_id}] status: {status}"]
+    meta: list[str] = []
+    if label:
+        meta.append(f"label={label}")
+    if model:
+        meta.append(f"model={model}")
+    if thinking:
+        meta.append(f"thinking={thinking}")
+    if created:
+        meta.append(f"created={created}")
+    if ended:
+        meta.append(f"ended={ended}")
+    if archived:
+        meta.append(f"archived={archived}")
+    if meta:
+        lines.append("Meta: " + ", ".join(meta))
     if not msgs:
         lines.append("No history messages.")
         return "\n".join(lines)
@@ -959,6 +1007,33 @@ def _format_subagents_history(payload: dict, limit: int) -> str:
     if shown == 0:
         lines.append("No readable user/assistant messages.")
     return "\n".join(lines)
+
+
+def _extract_wait_timeout_from_args(args: list[str]) -> tuple[int, list[str]]:
+    wait_seconds = 0
+    out: list[str] = []
+    i = 0
+    while i < len(args):
+        tok = str(args[i] or "").strip()
+        low = tok.lower()
+        if low == "--wait":
+            if i + 1 < len(args):
+                nxt = str(args[i + 1] or "").strip()
+                if nxt.isdigit():
+                    wait_seconds = max(0, min(int(nxt), 300))
+                    i += 2
+                    continue
+            i += 1
+            continue
+        if low.startswith("--wait="):
+            val = low.split("=", 1)[1].strip()
+            if val.isdigit():
+                wait_seconds = max(0, min(int(val), 300))
+            i += 1
+            continue
+        out.append(tok)
+        i += 1
+    return wait_seconds, out
 
 
 async def _handle_subagents_command(
@@ -1043,13 +1118,18 @@ async def _handle_subagents_command(
         return _format_subagents_history(payload, limit)
 
     if action in ("send", "steer", "tell"):
-        if len(args) < 2:
-            return "Usage: /subagents send <runId> <message>"
-        run_id = args[0].strip()
-        message = " ".join(args[1:]).strip()
+        wait_seconds, clean_args = _extract_wait_timeout_from_args(args)
+        if len(clean_args) < 2:
+            return "Usage: /subagents send <runId> <message> [--wait <seconds>]"
+        run_id = clean_args[0].strip()
+        message = " ".join(clean_args[1:]).strip()
         raw = await run_subagent_tool(
             tool_name="sessions_send",
-            params={"runId": run_id, "message": message},
+            params={
+                "runId": run_id,
+                "message": message,
+                "timeoutSeconds": wait_seconds,
+            },
             user_id=user_id,
             parent_conversation_id=conversation_id,
             provider_name=provider_name,
@@ -1062,6 +1142,18 @@ async def _handle_subagents_command(
             return "Could not send to subagent right now."
         if payload.get("status") == "accepted":
             return f"Sent to subagent [{run_id}]."
+        if payload.get("status") == "completed":
+            reply = str(payload.get("reply") or "").strip()
+            if reply:
+                excerpt = reply[:800] + ("..." if len(reply) > 800 else "")
+                return f"Subagent [{run_id}] replied:\n{excerpt}"
+            return f"Subagent [{run_id}] completed."
+        if payload.get("status") == "timeout":
+            waited = int(payload.get("waitedSeconds") or 0)
+            return (
+                f"Sent to subagent [{run_id}] and waited {waited}s, "
+                "but it is still running."
+            )
         return str(payload.get("error") or "Could not send to subagent.")
 
     if action in ("stop", "kill"):

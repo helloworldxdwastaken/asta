@@ -487,3 +487,103 @@ async def test_auto_subagent_not_used_for_simple_short_request():
         )
 
     assert "background subagent" not in reply.lower()
+
+
+@pytest.mark.asyncio
+async def test_sessions_send_with_timeout_wait_returns_completed_payload(monkeypatch):
+    db = get_db()
+    await db.connect()
+    user_id = f"test-subagent-send-wait-{uuid.uuid4().hex[:8]}"
+    cid = await db.get_or_create_conversation(user_id, "web")
+    run_id = f"sub_wait_{uuid.uuid4().hex[:8]}"
+    child_cid = f"{cid}:subagent:wait"
+
+    await db.add_subagent_run(
+        run_id=run_id,
+        user_id=user_id,
+        parent_conversation_id=cid,
+        child_conversation_id=child_cid,
+        task="initial long task",
+        label="wait-test",
+        provider_name="openai",
+        channel="web",
+        channel_target="web",
+        cleanup="keep",
+        status="running",
+    )
+
+    async def _fake_turn(
+        *,
+        user_id: str,
+        child_conversation_id: str,
+        task: str,
+        provider_name: str,
+        model_override: str | None = None,
+        thinking_override: str | None = None,
+    ) -> str:
+        await db.add_message(child_conversation_id, "assistant", f"done wait: {task}")
+        return f"done wait: {task}"
+
+    monkeypatch.setattr("app.subagent_orchestrator._run_subagent_turn", _fake_turn)
+
+    raw = await run_subagent_tool(
+        tool_name="sessions_send",
+        params={"runId": run_id, "message": "quick update", "timeoutSeconds": 2},
+        user_id=user_id,
+        parent_conversation_id=cid,
+        provider_name="openai",
+        channel="web",
+        channel_target="web",
+    )
+    payload = json.loads(raw)
+    assert payload.get("status") == "completed"
+    assert payload.get("runId") == run_id
+    assert "done wait: quick update" in (payload.get("reply") or "")
+
+
+@pytest.mark.asyncio
+async def test_subagents_slash_send_wait_returns_reply(monkeypatch):
+    db = get_db()
+    await db.connect()
+    user_id = f"test-subagent-slash-send-wait-{uuid.uuid4().hex[:8]}"
+    cid = await db.get_or_create_conversation(user_id, "web")
+    run_id = f"sub_slash_wait_{uuid.uuid4().hex[:8]}"
+    child_cid = f"{cid}:subagent:slash-wait"
+
+    await db.add_subagent_run(
+        run_id=run_id,
+        user_id=user_id,
+        parent_conversation_id=cid,
+        child_conversation_id=child_cid,
+        task="running task",
+        label="slash-wait",
+        provider_name="openai",
+        channel="web",
+        channel_target="web",
+        cleanup="keep",
+        status="running",
+    )
+
+    async def _fake_turn(
+        *,
+        user_id: str,
+        child_conversation_id: str,
+        task: str,
+        provider_name: str,
+        model_override: str | None = None,
+        thinking_override: str | None = None,
+    ) -> str:
+        await db.add_message(child_conversation_id, "assistant", f"waited reply: {task}")
+        return f"waited reply: {task}"
+
+    monkeypatch.setattr("app.subagent_orchestrator._run_subagent_turn", _fake_turn)
+
+    reply = await handle_message(
+        user_id=user_id,
+        channel="web",
+        text=f"/subagents send {run_id} please summarize status --wait 2",
+        provider_name="openai",
+        conversation_id=cid,
+    )
+    assert f"Subagent [{run_id}] replied:" in reply
+    assert "waited reply: please summarize status" in reply

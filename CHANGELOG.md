@@ -16,6 +16,7 @@ All notable changes to Asta are documented here.
   Registered in Telegram bot menu.
 - **Subagent command UX (single-user)** — Added deterministic `/subagents` command handling (`list/spawn/info/send/stop/help`) in core handler, plus Telegram `/subagents` command registration/menu entry.
 - **Subagent auto-spawn policy (single-user)** — Added conservative deterministic auto-spawn for explicit background requests and clearly complex long multi-step prompts, with env toggle `ASTA_SUBAGENTS_AUTO_SPAWN`.
+- **Subagent send wait mode** — Added wait support for follow-up messages (`sessions_send.timeoutSeconds` and `/subagents send ... --wait <seconds>`), returning immediate reply/timeout status when requested.
 
 ### Changed
 
@@ -23,6 +24,7 @@ All notable changes to Asta are documented here.
 - **Tool-trace defaults** — Default trace channels now target web (`ASTA_TOOL_TRACE_CHANNELS=web`).
 - **Docs alignment pass** — Updated README + INSTALL + SPEC + WORKSPACE to reflect implemented behavior and new commands/settings.
 - **Reminder scheduling internals aligned to cron path** — One-shot reminders now use the cron scheduler path (`@at <ISO-UTC>` entries) for execution, with startup migration of legacy pending reminder rows.
+- **Subagent run summaries** — Improved `/subagents list` and `/subagents info` output with richer status/meta fields (model/thinking/timestamps).
 
 ### Fixed
 
