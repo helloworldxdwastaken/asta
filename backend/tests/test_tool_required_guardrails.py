@@ -14,6 +14,20 @@ class _DummyProvider:
         return ProviderResponse(content="ok")
 
 
+class _DummyOllamaProvider:
+    name = "ollama"
+
+    async def chat(self, messages, **kwargs):
+        return ProviderResponse(content="")
+
+
+class _DummyOpenRouterProvider:
+    name = "openrouter"
+
+    async def chat(self, messages, **kwargs):
+        return ProviderResponse(content="")
+
+
 async def _fake_compact_history(messages, provider, context=None, max_tokens=None):
     return messages
 
@@ -51,6 +65,75 @@ async def test_files_check_uses_deterministic_fallback_when_model_skips_tools(mo
 
     assert 'I checked /Users/test/Desktop and found 1 match(es) for "TattooStudioWebsite"' in reply
     assert "TattooStudioWebsite" in reply
+
+
+@pytest.mark.asyncio
+async def test_files_check_fallback_runs_for_ollama_when_reply_is_empty(monkeypatch):
+    async def _fake_list_directory(path: str, user_id: str, db):
+        return json.dumps(
+            {
+                "path": "/Users/test/Desktop",
+                "entries": [
+                    {"name": "Screenshot 1.png", "kind": "file", "size": 1200},
+                    {"name": "Project", "kind": "dir", "size": None},
+                ],
+            }
+        )
+
+    monkeypatch.setattr("app.files_tool.list_directory", _fake_list_directory)
+
+    async def _fake_chat_with_empty(primary, messages, fallback_names, **kwargs):
+        return ProviderResponse(content=""), primary
+
+    with (
+        patch("app.handler.get_provider", return_value=_DummyOllamaProvider()),
+        patch("app.compaction.compact_history", side_effect=_fake_compact_history),
+        patch("app.providers.fallback.chat_with_fallback", side_effect=_fake_chat_with_empty),
+    ):
+        reply = await handle_message(
+            user_id="test-files-fallback-ollama",
+            channel="web",
+            text="check my desktop and tell me what files are in there",
+            provider_name="ollama",
+        )
+
+    assert "I checked /Users/test/Desktop" in reply
+    assert "Screenshot 1.png" in reply
+
+
+@pytest.mark.asyncio
+async def test_files_check_fallback_handles_any_screenshots_wording_for_openrouter(monkeypatch):
+    async def _fake_list_directory(path: str, user_id: str, db):
+        return json.dumps(
+            {
+                "path": "/Users/test/Desktop",
+                "entries": [
+                    {"name": "Screenshot 1.png", "kind": "file", "size": 1200},
+                    {"name": "Screenshot 2.png", "kind": "file", "size": 1600},
+                    {"name": "Notes.md", "kind": "file", "size": 320},
+                ],
+            }
+        )
+
+    monkeypatch.setattr("app.files_tool.list_directory", _fake_list_directory)
+
+    async def _fake_chat_with_empty(primary, messages, fallback_names, **kwargs):
+        return ProviderResponse(content=""), primary
+
+    with (
+        patch("app.handler.get_provider", return_value=_DummyOpenRouterProvider()),
+        patch("app.compaction.compact_history", side_effect=_fake_compact_history),
+        patch("app.providers.fallback.chat_with_fallback", side_effect=_fake_chat_with_empty),
+    ):
+        reply = await handle_message(
+            user_id="test-files-fallback-openrouter-screenshots",
+            channel="web",
+            text="any screenshots on my desktop?",
+            provider_name="openrouter",
+        )
+
+    assert 'found 2 match(es) for "screenshots"' in reply
+    assert "Screenshot 1.png" in reply
 
 
 @pytest.mark.asyncio

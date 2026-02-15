@@ -22,11 +22,45 @@ from telegram.ext import (
     AIORateLimiter,
 )
 import asyncio
-from collections import defaultdict
 import html
 
 # Locks to ensure sequential processing per chat
-_chat_locks = defaultdict(asyncio.Lock)
+_chat_locks: dict[int, asyncio.Lock] = {}
+_chat_locks_lock = asyncio.Lock()
+MAX_CHAT_LOCKS = 1000  # Configurable threshold
+
+
+def _cleanup_stale_locks() -> None:
+    """Remove unlocked locks when dict grows too large (LRU-style).
+
+    Called opportunistically on lock acquisition.
+    """
+    if len(_chat_locks) <= MAX_CHAT_LOCKS:
+        return
+
+    # Remove half the unlocked entries
+    to_remove = []
+    for chat_id, lock in list(_chat_locks.items()):
+        if not lock.locked():
+            to_remove.append(chat_id)
+        if len(to_remove) >= MAX_CHAT_LOCKS // 2:
+            break
+
+    for chat_id in to_remove:
+        _chat_locks.pop(chat_id, None)
+
+    if to_remove:
+        logger.debug("Cleaned up %d stale chat locks", len(to_remove))
+
+
+async def _get_chat_lock(chat_id: int) -> asyncio.Lock:
+    """Thread-safe chat lock factory with cleanup."""
+    async with _chat_locks_lock:
+        _cleanup_stale_locks()  # Opportunistic cleanup
+
+        if chat_id not in _chat_locks:
+            _chat_locks[chat_id] = asyncio.Lock()
+        return _chat_locks[chat_id]
 
 from app.handler import handle_message
 from app.config import get_settings, set_env_value
@@ -35,6 +69,18 @@ logger = logging.getLogger(__name__)
 _EXEC_MODES = ("deny", "allowlist", "full")
 _THINK_LEVELS = ("off", "low", "medium", "high")
 _REASONING_MODES = ("off", "on", "stream")
+_ALLOW_COMMAND_HELP = "Usage: /allow <binary> (example: /allow rg)"
+_ALLOWLIST_BLOCKED_BINS = {
+    "sh",
+    "bash",
+    "zsh",
+    "fish",
+    "cmd",
+    "cmd.exe",
+    "powershell",
+    "pwsh",
+}
+_ALLOWLIST_BIN_RE = re.compile(r"^[a-z0-9._+-]+$")
 
 
 def to_telegram_format(text: str) -> str:
@@ -209,7 +255,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     
     # Acquire lock for this chat to prevent race conditions (sequential processing)
     # This matches OpenClaw's "sequentialize" behavior.
-    async with _chat_locks[chat_id]:
+    lock = await _get_chat_lock(chat_id)
+    async with lock:
         chat_id_str = str(chat_id)
         text = update.message.text
 
@@ -331,8 +378,9 @@ async def on_voice_or_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # Same user as web panel (personal assistant: one user for all channels)
     user_id = "default"
     chat_id = update.effective_chat.id if update.effective_chat else 0
-    
-    async with _chat_locks[chat_id]:
+
+    lock = await _get_chat_lock(chat_id)
+    async with lock:
         chat_id_str = str(chat_id)
         # Caption as instruction (e.g. "meeting notes" or "action items")
         instruction = (update.message.caption or "").strip()
@@ -426,6 +474,99 @@ def _set_exec_mode(mode: str) -> str:
         raise ValueError("invalid mode")
     set_env_value("ASTA_EXEC_SECURITY", mode)
     return get_settings().exec_security
+
+
+def _normalize_allow_bin(raw: str) -> str:
+    token = (raw or "").strip().lower()
+    if not token:
+        return ""
+    token = token.rstrip(",")
+    token = token.rsplit("/", 1)[-1]
+    return token
+
+
+async def allow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    if not _telegram_user_allowed(update):
+        await update.message.reply_text("You're not authorized to use this bot.")
+        return
+
+    arg = (context.args[0] if context.args else "") or ""
+    bin_name = _normalize_allow_bin(arg)
+    if not bin_name:
+        await update.message.reply_text(_ALLOW_COMMAND_HELP)
+        return
+    if not _ALLOWLIST_BIN_RE.fullmatch(bin_name):
+        await update.message.reply_text(
+            "Invalid binary name. Use only letters, numbers, dot, underscore, plus, or dash.\n"
+            + _ALLOW_COMMAND_HELP
+        )
+        return
+    if bin_name in _ALLOWLIST_BLOCKED_BINS:
+        await update.message.reply_text(
+            f"Refusing to allow '{bin_name}' for safety. "
+            "Shell launchers are blocked in Telegram allowlist command."
+        )
+        return
+
+    from app.db import get_db
+    from app.exec_tool import SYSTEM_CONFIG_EXEC_BINS_KEY, get_effective_exec_bins
+
+    db = get_db()
+    await db.connect()
+    current_extra = (await db.get_system_config(SYSTEM_CONFIG_EXEC_BINS_KEY)) or ""
+    bins = {b.strip().lower() for b in current_extra.split(",") if b.strip()}
+    already = bin_name in bins
+    if not already:
+        bins.add(bin_name)
+        await db.set_system_config(SYSTEM_CONFIG_EXEC_BINS_KEY, ",".join(sorted(bins)))
+
+    effective = sorted(await get_effective_exec_bins(db, "default"))
+    mode = get_settings().exec_security
+
+    if already:
+        head = f"'{bin_name}' was already in the allowlist."
+    else:
+        head = f"Added '{bin_name}' to allowlist."
+
+    suffix = ""
+    if mode == "deny":
+        suffix = "\nExec is currently disabled. Use /exec_mode allowlist to run allowlisted commands."
+    elif mode == "full":
+        suffix = "\nExec is currently in full mode; allowlist is saved for when you switch back to allowlist."
+    if len(context.args or []) > 1:
+        suffix += "\nNote: one-time approvals are not implemented yet; /allow is persistent."
+
+    bins_text = ", ".join(effective) if effective else "(empty)"
+    await update.message.reply_text(f"{head}{suffix}\n\nAllowed bins now: {bins_text}")
+
+
+async def allowlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+    if not _telegram_user_allowed(update):
+        await update.message.reply_text("You're not authorized to use this bot.")
+        return
+
+    from app.db import get_db
+    from app.exec_tool import SYSTEM_CONFIG_EXEC_BINS_KEY, get_effective_exec_bins
+
+    db = get_db()
+    await db.connect()
+    mode = get_settings().exec_security
+    env_bins = sorted(get_settings().exec_allowed_bins)
+    extra_csv = (await db.get_system_config(SYSTEM_CONFIG_EXEC_BINS_KEY)) or ""
+    extra_bins = sorted({b.strip().lower() for b in extra_csv.split(",") if b.strip()})
+    effective_bins = sorted(await get_effective_exec_bins(db, "default"))
+
+    text = (
+        f"Exec mode: {mode}\n\n"
+        f"Env bins (ASTA_EXEC_ALLOWED_BINS): {', '.join(env_bins) if env_bins else '(empty)'}\n"
+        f"Extra bins (/allow): {', '.join(extra_bins) if extra_bins else '(empty)'}\n"
+        f"Effective bins: {', '.join(effective_bins) if effective_bins else '(empty)'}"
+    )
+    await update.message.reply_text(text)
 
 
 async def exec_mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -644,8 +785,11 @@ def build_telegram_app(token: str) -> Application:
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("exec_mode", exec_mode_cmd))
+    app.add_handler(CommandHandler("allow", allow_cmd))
+    app.add_handler(CommandHandler("allowlist", allowlist_cmd))
     app.add_handler(CommandHandler("thinking", thinking_cmd))
     app.add_handler(CommandHandler("reasoning", reasoning_cmd))
+    app.add_handler(CommandHandler("subagents", subagents_cmd))
     app.add_handler(CallbackQueryHandler(exec_mode_callback, pattern=r"^exec_mode:"))
     app.add_handler(CallbackQueryHandler(thinking_callback, pattern=r"^thinking:"))
     app.add_handler(CallbackQueryHandler(reasoning_callback, pattern=r"^reasoning:"))
@@ -666,7 +810,8 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = "default"
     chat_id = update.effective_chat.id if update.effective_chat else 0
 
-    async with _chat_locks[chat_id]:
+    lock = await _get_chat_lock(chat_id)
+    async with lock:
         chat_id_str = str(chat_id)
         # Fetch the largest available photo version
         photo = update.message.photo[-1]
@@ -767,6 +912,37 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await update.message.reply_text(text, parse_mode=constants.ParseMode.HTML, disable_web_page_preview=True)
 
 
+async def subagents_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /subagents command by delegating to handler's deterministic subagent command path."""
+    if not update.message:
+        return
+    if not _telegram_user_allowed(update):
+        await update.message.reply_text("You're not authorized to use this bot.")
+        return
+
+    user_id = "default"
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    lock = await _get_chat_lock(chat_id)
+    async with lock:
+        chat_id_str = str(chat_id)
+        suffix = " ".join(context.args or []).strip()
+        text = "/subagents" + (f" {suffix}" if suffix else "")
+        try:
+            await update.message.chat.send_action("typing")
+            reply = await handle_message(
+                user_id,
+                "telegram",
+                text,
+                provider_name="default",
+                channel_target=chat_id_str,
+            )
+            out = (reply or "").strip()[:TELEGRAM_MAX_MESSAGE_LENGTH] or "No response."
+            await _reply_text_safe_html(update.message, out)
+        except Exception as e:
+            logger.exception("Telegram /subagents handler error")
+            await update.message.reply_text(f"Error: {str(e)[:500]}")
+
+
 async def start_telegram_bot_in_loop(app: Application) -> None:
     """Initialize and start polling + processor. Run inside FastAPI lifespan (same event loop)."""
     await app.initialize()
@@ -775,8 +951,11 @@ async def start_telegram_bot_in_loop(app: Application) -> None:
             BotCommand("start", "Start Asta"),
             BotCommand("status", "Show server status"),
             BotCommand("exec_mode", "Set exec security mode (deny/allowlist/full)"),
+            BotCommand("allow", "Allow binary in exec allowlist"),
+            BotCommand("allowlist", "Show allowed exec binaries"),
             BotCommand("thinking", "Set thinking level (off/low/medium/high)"),
             BotCommand("reasoning", "Set reasoning visibility (off/on/stream)"),
+            BotCommand("subagents", "Manage subagents (list/spawn/info/send/stop)"),
         ])
     except Exception as e:
         logger.warning("Could not register Telegram bot commands: %s", e)

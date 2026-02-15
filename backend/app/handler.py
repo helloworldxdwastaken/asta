@@ -4,6 +4,7 @@ import io
 import json
 import re
 import html
+import shlex
 from PIL import Image
 from app.context import build_context
 from app.db import get_db
@@ -45,7 +46,9 @@ _EXEC_CHECK_VERBS = (
     "do i have",
 )
 
-_TOOL_CAPABLE_PROVIDERS = frozenset({"openai", "groq", "openrouter", "claude", "google"})
+# Providers that can participate in tool/fallback guardrails.
+# Ollama is included because Asta uses text tool-call protocols with it.
+_TOOL_CAPABLE_PROVIDERS = frozenset({"openai", "groq", "openrouter", "claude", "google", "ollama"})
 _GIF_COOLDOWN_SECONDS = 30 * 60
 _SILENT_REPLY_TOKEN = "NO_REPLY"
 _FILES_LOCATION_HINTS = {
@@ -62,6 +65,11 @@ _FILES_CHECK_VERBS = (
     "show",
     "search",
     "scan",
+)
+_FILES_CHECK_QUESTION_HINTS = (
+    "what",
+    "do i have",
+    "any",
 )
 _STATUS_PREFIX = "[[ASTA_STATUS]]"
 
@@ -238,6 +246,7 @@ def _looks_like_files_check_request(text: str) -> bool:
     if any(k in t for k in ("write", "create", "save", "delete", "remove", "rename", "move", "edit")):
         return False
     has_verb = any(v in t for v in _FILES_CHECK_VERBS)
+    has_question_hint = any(v in t for v in _FILES_CHECK_QUESTION_HINTS)
     has_target = any(
         k in t
         for k in (
@@ -251,7 +260,7 @@ def _looks_like_files_check_request(text: str) -> bool:
             "on my mac",
         )
     )
-    return has_verb and has_target
+    return (has_verb or has_question_hint) and has_target
 
 
 def _extract_path_hint(text: str) -> str | None:
@@ -279,6 +288,17 @@ def _extract_files_search_term(text: str) -> str:
     t = (text or "").strip()
     if not t:
         return ""
+
+    def _clean_candidate(value: str) -> str:
+        q = (value or "").strip().strip("\"'`").strip(" .?!,")
+        q = re.sub(r"^(any|some|all|the|a|an)\s+", "", q, flags=re.IGNORECASE).strip()
+        generic = {"files", "file", "folders", "folder", "items", "stuff"}
+        if q.lower() in generic:
+            return ""
+        if q and len(q) <= 120:
+            return q
+        return ""
+
     for pat in (
         r"\bfor\s+(.+)$",
         r"\bnamed\s+(.+)$",
@@ -286,10 +306,23 @@ def _extract_files_search_term(text: str) -> str:
     ):
         m = re.search(pat, t, flags=re.IGNORECASE)
         if m:
-            q = m.group(1).strip().strip("\"'`").strip(" .?!,")
-            q = re.sub(r"^(the|a|an)\s+", "", q, flags=re.IGNORECASE).strip()
-            if q and len(q) <= 120:
+            q = _clean_candidate(m.group(1))
+            if q:
                 return q
+
+    # Natural phrasing support:
+    # - "any screenshots on my desktop?"
+    # - "find notes in my documents"
+    m = re.search(
+        r"\b(?:any|some|all|find|search(?: for)?|look(?:ing)? for|check(?: for)?)\s+(.+?)\s+"
+        r"(?:on|in)\s+(?:my|the)\s+(?:desktop|documents|downloads)\b",
+        t,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        q = _clean_candidate(m.group(1))
+        if q:
+            return q
     return ""
 
 
@@ -302,7 +335,12 @@ def _name_matches_query(name: str, query: str) -> bool:
     nq = _normalize_match_text(query)
     if not nn or not nq:
         return False
-    return nq in nn
+    if nq in nn:
+        return True
+    # Handle simple plural phrasing ("screenshots" -> "screenshot").
+    if nq.endswith("s") and len(nq) > 3:
+        return nq[:-1] in nn
+    return False
 
 
 def _looks_like_reminder_list_request(text: str) -> bool:
@@ -711,6 +749,218 @@ def _strip_shell_command_leakage(reply: str) -> tuple[str, bool]:
             continue
         out_lines.append(line)
     return "\n".join(out_lines).strip(), removed
+
+
+def _subagents_help_text() -> str:
+    return (
+        "Subagents commands:\n"
+        "- /subagents list [limit]\n"
+        "- /subagents spawn <task>\n"
+        "- /subagents info <runId> [limit]\n"
+        "- /subagents send <runId> <message>\n"
+        "- /subagents stop <runId>\n"
+        "- /subagents help"
+    )
+
+
+def _parse_subagents_command(text: str) -> tuple[str, list[str]] | None:
+    raw = (text or "").strip()
+    if not raw.lower().startswith("/subagents"):
+        return None
+    rest = raw[len("/subagents"):].strip()
+    if not rest:
+        return "help", []
+    try:
+        tokens = shlex.split(rest)
+    except Exception:
+        tokens = rest.split()
+    if not tokens:
+        return "help", []
+    action = (tokens[0] or "").strip().lower()
+    return action, [t for t in tokens[1:] if isinstance(t, str)]
+
+
+def _format_subagents_list(payload: dict) -> str:
+    runs = payload.get("runs") if isinstance(payload, dict) else None
+    if not isinstance(runs, list) or not runs:
+        return "No subagent runs yet. Use /subagents spawn <task>."
+    lines = [f"Subagents ({len(runs)}):"]
+    for i, row in enumerate(runs, 1):
+        if not isinstance(row, dict):
+            continue
+        run_id = str(row.get("runId") or "").strip() or "unknown"
+        status = str(row.get("status") or "unknown").strip()
+        label = str(row.get("label") or "").strip() or "task"
+        model = str(row.get("model") or "").strip()
+        thinking = str(row.get("thinking") or "").strip()
+        suffix = []
+        if model:
+            suffix.append(f"model={model}")
+        if thinking:
+            suffix.append(f"thinking={thinking}")
+        extra = f" ({', '.join(suffix)})" if suffix else ""
+        lines.append(f"{i}. [{run_id}] {status} - {label}{extra}")
+    return "\n".join(lines)
+
+
+def _format_subagents_history(payload: dict, limit: int) -> str:
+    if not isinstance(payload, dict):
+        return "Could not read subagent history."
+    if payload.get("error"):
+        return str(payload.get("error"))
+    run_id = str(payload.get("runId") or "unknown")
+    status = str(payload.get("status") or "unknown")
+    msgs = payload.get("messages") if isinstance(payload.get("messages"), list) else []
+    lines = [f"Subagent [{run_id}] status: {status}"]
+    if not msgs:
+        lines.append("No history messages.")
+        return "\n".join(lines)
+    shown = 0
+    for msg in reversed(msgs):
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "").strip().lower()
+        content = str(msg.get("content") or "").strip()
+        if not content:
+            continue
+        if role not in ("assistant", "user"):
+            continue
+        excerpt = content[:220] + ("..." if len(content) > 220 else "")
+        lines.append(f"- {role}: {excerpt}")
+        shown += 1
+        if shown >= max(1, min(limit, 5)):
+            break
+    if shown == 0:
+        lines.append("No readable user/assistant messages.")
+    return "\n".join(lines)
+
+
+async def _handle_subagents_command(
+    *,
+    text: str,
+    user_id: str,
+    conversation_id: str,
+    provider_name: str,
+    channel: str,
+    channel_target: str,
+) -> str | None:
+    parsed = _parse_subagents_command(text)
+    if not parsed:
+        return None
+    action, args = parsed
+    from app.subagent_orchestrator import run_subagent_tool
+
+    if action in ("help", "h", "?"):
+        return _subagents_help_text()
+
+    if action in ("list", "ls"):
+        limit = 20
+        if args and args[0].isdigit():
+            limit = max(1, min(int(args[0]), 100))
+        raw = await run_subagent_tool(
+            tool_name="sessions_list",
+            params={"limit": limit},
+            user_id=user_id,
+            parent_conversation_id=conversation_id,
+            provider_name=provider_name,
+            channel=channel,
+            channel_target=channel_target,
+        )
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            return "Could not list subagents right now."
+        return _format_subagents_list(payload)
+
+    if action in ("spawn", "run", "start"):
+        task = " ".join(args).strip()
+        if not task:
+            return "Usage: /subagents spawn <task>"
+        raw = await run_subagent_tool(
+            tool_name="sessions_spawn",
+            params={"task": task},
+            user_id=user_id,
+            parent_conversation_id=conversation_id,
+            provider_name=provider_name,
+            channel=channel,
+            channel_target=channel_target,
+        )
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            return "Could not spawn subagent right now."
+        if payload.get("status") == "accepted":
+            run_id = str(payload.get("runId") or "").strip()
+            return f"Spawned subagent [{run_id}] for: {task}"
+        return str(payload.get("error") or "Could not spawn subagent.")
+
+    if action in ("info", "history", "log"):
+        if not args:
+            return "Usage: /subagents info <runId> [limit]"
+        run_id = args[0].strip()
+        limit = 20
+        if len(args) > 1 and args[1].isdigit():
+            limit = max(1, min(int(args[1]), 200))
+        raw = await run_subagent_tool(
+            tool_name="sessions_history",
+            params={"runId": run_id, "limit": limit},
+            user_id=user_id,
+            parent_conversation_id=conversation_id,
+            provider_name=provider_name,
+            channel=channel,
+            channel_target=channel_target,
+        )
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            return "Could not read subagent history right now."
+        return _format_subagents_history(payload, limit)
+
+    if action in ("send", "steer", "tell"):
+        if len(args) < 2:
+            return "Usage: /subagents send <runId> <message>"
+        run_id = args[0].strip()
+        message = " ".join(args[1:]).strip()
+        raw = await run_subagent_tool(
+            tool_name="sessions_send",
+            params={"runId": run_id, "message": message},
+            user_id=user_id,
+            parent_conversation_id=conversation_id,
+            provider_name=provider_name,
+            channel=channel,
+            channel_target=channel_target,
+        )
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            return "Could not send to subagent right now."
+        if payload.get("status") == "accepted":
+            return f"Sent to subagent [{run_id}]."
+        return str(payload.get("error") or "Could not send to subagent.")
+
+    if action in ("stop", "kill"):
+        if not args:
+            return "Usage: /subagents stop <runId>"
+        run_id = args[0].strip()
+        raw = await run_subagent_tool(
+            tool_name="sessions_stop",
+            params={"runId": run_id},
+            user_id=user_id,
+            parent_conversation_id=conversation_id,
+            provider_name=provider_name,
+            channel=channel,
+            channel_target=channel_target,
+        )
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            return "Could not stop subagent right now."
+        status = str(payload.get("status") or "").strip()
+        if status in ("stopped", "already-ended"):
+            return f"Subagent [{run_id}] {status}."
+        return str(payload.get("error") or "Could not stop subagent.")
+
+    return _subagents_help_text()
 
 
 def _extract_textual_cron_add_protocol(reply: str) -> tuple[dict[str, str] | None, str]:
@@ -1132,6 +1382,20 @@ async def handle_message(
     if provider_name == "default":
         provider_name = await db.get_user_default_ai(user_id)
 
+    # OpenClaw-style explicit subagent command UX (single-user):
+    # /subagents list|spawn|info|send|stop
+    subagents_cmd_reply = await _handle_subagents_command(
+        text=text,
+        user_id=user_id,
+        conversation_id=cid,
+        provider_name=provider_name,
+        channel=channel,
+        channel_target=channel_target,
+    )
+    if subagents_cmd_reply is not None:
+        await db.add_message(cid, "assistant", subagents_cmd_reply, "script")
+        return subagents_cmd_reply
+
     # If user is setting their location (for time/weather skill), save it now
     # 1. Explicit syntax "I'm in Paris"
     location_place = parse_location_from_message(text)
@@ -1465,10 +1729,55 @@ async def handle_message(
             "content": asst_content,
             "tool_calls": asst_tool_calls,
         })
+
+        # Track seen IDs to prevent duplicates
+        seen_ids = set()
+
         for tc in asst_tool_calls:
             fn = (tc.get("function") or {}) if isinstance(tc.get("function"), dict) else {}
             name = fn.get("name") or tc.get("function", {}).get("name")
             args_str = fn.get("arguments") or "{}"
+
+            # SECURITY: Validate tool name against registry
+            if not name:
+                logger.warning("Tool call missing name: %s", tc)
+                out = "Error: Tool call missing name"
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+                continue
+
+            # Normalize and validate tool name
+            name = name.strip().lower()
+            if name not in allowed_tool_names:
+                logger.warning("Tool '%s' not in allowed tools: %s", name, sorted(allowed_tool_names))
+                out = f"Error: Tool '{name}' not available (not in registry)"
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+                continue
+
+            # SECURITY: Validate database availability for tools that need it
+            db_required_tools = {
+                "list_directory", "read_file", "write_file", "delete_file",
+                "delete_matching_files", "allow_path", "reminders", "cron",
+                "message", "agents_list", "sessions_spawn", "sessions_list",
+                "sessions_history", "sessions_send", "sessions_stop"
+            }
+            if name in db_required_tools and db is None:
+                out = f"Error: Database not available for tool '{name}'"
+                logger.error("Tool %s requires database but db is None", name)
+                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+                continue
+
+            # Validate and normalize tool_call_id
+            tool_call_id = tc.get("id", "")
+            if not tool_call_id:
+                logger.warning("Tool call missing ID, generating fallback: %s", name)
+                tool_call_id = f"{name}_{len(current_messages)}"
+
+            # Check for duplicate IDs
+            if tool_call_id in seen_ids:
+                logger.error("Duplicate tool_call_id: %s", tool_call_id)
+                tool_call_id = f"{tool_call_id}_dup_{len(seen_ids)}"
+            seen_ids.add(tool_call_id)
+
             if name and (reasoning_mode or "").lower() == "stream":
                 await _emit_stream_status(
                     db=db,
@@ -1526,14 +1835,14 @@ async def handle_message(
                     out = f"stdout:\n{stdout}\n" + (f"stderr:\n{stderr}\n" if stderr else "")
                 else:
                     out = f"error: {stderr or 'Command not allowed or failed.'}"
-                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "process":
                 from app.process_tool import parse_process_tool_args, run_process_tool
 
                 params = parse_process_tool_args(args_str)
                 used_tool_labels.append(_build_tool_trace_label("process", str(params.get("action") or "")))
                 out = await run_process_tool(params)
-                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "list_directory":
                 from app.files_tool import list_directory as list_dir, parse_files_tool_args as parse_files_args
                 params = parse_files_args(args_str)
@@ -1541,7 +1850,7 @@ async def handle_message(
                 out = await list_dir(path, user_id, db)
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label("list_directory"))
-                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "read_file":
                 from app.files_tool import read_file_content as read_file_fn, parse_files_tool_args as parse_files_args
                 params = parse_files_args(args_str)
@@ -1549,7 +1858,7 @@ async def handle_message(
                 out = await read_file_fn(path, user_id, db)
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label("read_file"))
-                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "write_file":
                 from app.files_tool import write_file as write_file_fn, parse_files_tool_args as parse_files_args
 
@@ -1559,7 +1868,7 @@ async def handle_message(
                 out = await write_file_fn(path, content if isinstance(content, str) else "", user_id, db)
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label("write_file"))
-                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "allow_path":
                 from app.files_tool import allow_path as allow_path_fn, parse_files_tool_args as parse_files_args
                 params = parse_files_args(args_str)
@@ -1567,7 +1876,7 @@ async def handle_message(
                 out = await allow_path_fn(path, user_id, db)
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label("allow_path"))
-                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "delete_file":
                 from app.files_tool import delete_file as delete_file_fn, parse_files_tool_args as parse_files_args
                 params = parse_files_args(args_str)
@@ -1576,7 +1885,7 @@ async def handle_message(
                 out = await delete_file_fn(path, user_id, db, permanently=permanently)
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label("delete_file"))
-                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "delete_matching_files":
                 from app.files_tool import (
                     delete_matching_files as delete_matching_files_fn,
@@ -1595,7 +1904,7 @@ async def handle_message(
                 )
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label("delete_matching_files"))
-                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name in ("read", "write", "edit"):
                 from app.coding_compat_tool import (
                     parse_coding_compat_args,
@@ -1613,35 +1922,35 @@ async def handle_message(
                     out = await run_edit_compat(params, user_id, db)
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label(name))
-                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "web_search":
                 from app.openclaw_compat_tools import parse_openclaw_compat_args, run_web_search_compat
 
                 params = parse_openclaw_compat_args(args_str)
                 used_tool_labels.append(_build_tool_trace_label("web_search"))
                 out = await run_web_search_compat(params)
-                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "web_fetch":
                 from app.openclaw_compat_tools import parse_openclaw_compat_args, run_web_fetch_compat
 
                 params = parse_openclaw_compat_args(args_str)
                 used_tool_labels.append(_build_tool_trace_label("web_fetch"))
                 out = await run_web_fetch_compat(params)
-                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "memory_search":
                 from app.openclaw_compat_tools import parse_openclaw_compat_args, run_memory_search_compat
 
                 params = parse_openclaw_compat_args(args_str)
                 used_tool_labels.append(_build_tool_trace_label("memory_search"))
                 out = await run_memory_search_compat(params, user_id=user_id)
-                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "memory_get":
                 from app.openclaw_compat_tools import parse_openclaw_compat_args, run_memory_get_compat
 
                 params = parse_openclaw_compat_args(args_str)
                 used_tool_labels.append(_build_tool_trace_label("memory_get"))
                 out = await run_memory_get_compat(params)
-                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "apply_patch":
                 from app.apply_patch_compat_tool import parse_apply_patch_compat_args, run_apply_patch_compat
 
@@ -1649,7 +1958,7 @@ async def handle_message(
                 used_tool_labels.append(_build_tool_trace_label("apply_patch"))
                 out = await run_apply_patch_compat(params)
                 ran_files_tool = True
-                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "message":
                 from app.message_compat_tool import parse_message_compat_args, run_message_compat
 
@@ -1662,7 +1971,7 @@ async def handle_message(
                     current_channel=channel,
                     current_target=channel_target,
                 )
-                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "reminders":
                 from app.reminders_tool import run_reminders_tool, parse_reminders_tool_args
                 params = parse_reminders_tool_args(args_str)
@@ -1690,7 +1999,7 @@ async def handle_message(
                             )
                     except Exception:
                         pass
-                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "cron":
                 from app.cron_tool import run_cron_tool, parse_cron_tool_args
                 params = parse_cron_tool_args(args_str)
@@ -1705,7 +2014,7 @@ async def handle_message(
                     db=db,
                 )
                 ran_cron_tool = True
-                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name in (
                 "agents_list",
                 "sessions_spawn",
@@ -1729,9 +2038,9 @@ async def handle_message(
                     channel=channel,
                     channel_target=channel_target,
                 )
-                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
+                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             else:
-                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": "Unknown tool."})
+                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": "Unknown tool."})
         # Re-call same provider with updated messages (no fallback switch); use that provider's model
         tool_kwargs = {**chat_kwargs}
         if provider_used.name == provider.name:

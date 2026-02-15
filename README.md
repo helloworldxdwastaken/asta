@@ -95,7 +95,7 @@ If the panel shows "API off", start the backend first or use **Settings -> Run t
 ## Channel Setup
 
 - Telegram: set `TELEGRAM_BOT_TOKEN` in `backend/.env` or configure it in **Channels**.
-- Telegram bot commands: `/status`, `/exec_mode`, `/thinking`, `/reasoning`.
+- Telegram bot commands: `/status`, `/exec_mode`, `/thinking`, `/reasoning`, `/subagents`.
 - WhatsApp (Beta): run `services/whatsapp` (see `services/whatsapp/README.md`), scan QR in **Channels**, and set `ASTA_WHATSAPP_BRIDGE_URL`.
 - Optional debugging: set `ASTA_SHOW_TOOL_TRACE=true` and `ASTA_TOOL_TRACE_CHANNELS=web` to append `Tools used: ...` on replies (Telegram footer is suppressed because it already shows proactive skill-status pings).
 

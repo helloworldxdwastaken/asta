@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 from types import SimpleNamespace
 
 import pytest
 
 from app.db import get_db
+from app.handler import handle_message
 from app.subagent_orchestrator import (
     recover_subagent_runs_on_startup,
     run_subagent_tool,
@@ -334,3 +336,84 @@ async def test_subagent_auto_archive_removes_child_conversation(monkeypatch):
     row = await db.get_subagent_run(run_id)
     assert row is not None
     assert row.get("archived_at")
+
+
+@pytest.mark.asyncio
+async def test_subagents_slash_help_and_list_are_deterministic():
+    db = get_db()
+    await db.connect()
+    user_id = f"test-subagent-slash-help-{uuid.uuid4().hex[:8]}"
+    cid = await db.get_or_create_conversation(user_id, "web")
+
+    help_reply = await handle_message(
+        user_id=user_id,
+        channel="web",
+        text="/subagents",
+        provider_name="openai",
+        conversation_id=cid,
+    )
+    assert "Subagents commands:" in help_reply
+
+    list_reply = await handle_message(
+        user_id=user_id,
+        channel="web",
+        text="/subagents list",
+        provider_name="openai",
+        conversation_id=cid,
+    )
+    assert "No subagent runs yet" in list_reply
+
+
+@pytest.mark.asyncio
+async def test_subagents_slash_spawn_list_and_stop(monkeypatch):
+    db = get_db()
+    await db.connect()
+    user_id = f"test-subagent-slash-spawn-{uuid.uuid4().hex[:8]}"
+    cid = await db.get_or_create_conversation(user_id, "web")
+
+    async def _fake_turn(
+        *,
+        user_id: str,
+        child_conversation_id: str,
+        task: str,
+        provider_name: str,
+        model_override: str | None = None,
+        thinking_override: str | None = None,
+    ) -> str:
+        await db.add_message(child_conversation_id, "assistant", f"done: {task}")
+        return f"done: {task}"
+
+    monkeypatch.setattr("app.subagent_orchestrator._run_subagent_turn", _fake_turn)
+
+    spawn_reply = await handle_message(
+        user_id=user_id,
+        channel="web",
+        text="/subagents spawn check desktop files",
+        provider_name="openai",
+        conversation_id=cid,
+    )
+    m = re.search(r"Spawned subagent \[([^\]]+)\]", spawn_reply)
+    assert m is not None
+    run_id = m.group(1).strip()
+    assert run_id
+
+    assert await wait_subagent_run(run_id, timeout_seconds=2.0) is True
+
+    list_reply = await handle_message(
+        user_id=user_id,
+        channel="web",
+        text="/subagents list",
+        provider_name="openai",
+        conversation_id=cid,
+    )
+    assert run_id in list_reply
+
+    stop_reply = await handle_message(
+        user_id=user_id,
+        channel="web",
+        text=f"/subagents stop {run_id}",
+        provider_name="openai",
+        conversation_id=cid,
+    )
+    assert "Subagent" in stop_reply
+    assert "stopped" in stop_reply or "already-ended" in stop_reply

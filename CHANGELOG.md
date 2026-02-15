@@ -14,6 +14,7 @@ All notable changes to Asta are documented here.
   - `/thinking` (and `/thinking <level>`)
   - `/reasoning` (and `/reasoning <mode>`)
   Registered in Telegram bot menu.
+- **Subagent command UX (single-user)** — Added deterministic `/subagents` command handling (`list/spawn/info/send/stop/help`) in core handler, plus Telegram `/subagents` command registration/menu entry.
 
 ### Changed
 
