@@ -194,6 +194,12 @@ class Settings(BaseSettings):
     asta_subagents_auto_spawn: bool = True
     asta_subagents_max_concurrent: int = 3
     asta_subagents_archive_after_minutes: int = 60
+    # Vision pipeline:
+    # - preprocess=True: run a low-cost vision model first, then pass analysis to the main agent model.
+    # - provider order: first configured provider in this list is used.
+    asta_vision_preprocess: bool = True
+    asta_vision_provider_order: str = "openrouter,claude,openai"
+    asta_vision_openrouter_model: str = "nvidia/nemotron-nano-12b-v2-vl:free"
 
     @property
     def tool_trace_channels(self) -> set[str]:

@@ -31,6 +31,7 @@ Quick reference for errors you might see and how to fix them.
 | **No AI provider found** | No API key set | Add at least one key in Settings → API keys: Groq, Gemini, Claude, OpenAI, OpenRouter, or run Ollama. |
 | **invalid or expired API key** | Key wrong or expired | Update the key in Settings → API keys or `backend/.env`, then restart. |
 | **Client error 404 for Ollama** | Ollama not running or wrong URL | Start Ollama (`ollama serve`) or set correct `OLLAMA_BASE_URL` in `backend/.env`. |
+| **Image reply says it only sees `image/jpeg` / generic image placeholder** | Vision preprocessor/provider path is not configured (or no vision-capable key available). | Add at least one vision-capable key (OpenRouter, Claude, or OpenAI). Keep `ASTA_VISION_PREPROCESS=true` (default). If using OpenRouter vision, ensure `OPENROUTER_API_KEY` is set and optionally set `ASTA_VISION_OPENROUTER_MODEL`. |
 
 ---
 
@@ -118,6 +119,7 @@ Quick reference for errors you might see and how to fix them.
 |---------|-------|----------|
 | **Telegram handler error** | Bot token invalid or network issue | Check `TELEGRAM_BOT_TOKEN` in Settings or `backend/.env`. Get token from [@BotFather](https://t.me/BotFather). |
 | **WhatsApp QR / bridge not connecting** | Bridge not running | Start `services/whatsapp` with `ASTA_API_URL=http://localhost:8010`. Set `ASTA_WHATSAPP_BRIDGE_URL` in `.env` if bridge runs elsewhere. |
+| **Sent image in web chat but Asta cannot analyze it** | Web image upload path is not implemented yet. | Use Telegram photo input for vision turns. |
 
 ---
 

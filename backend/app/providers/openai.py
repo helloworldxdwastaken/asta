@@ -1,4 +1,6 @@
 """OpenAI provider (GPT-4o, gpt-4o-mini, etc.)."""
+import base64
+
 from openai import AsyncOpenAI
 from app.providers.base import BaseProvider, Message, ProviderResponse, ProviderError
 from app.keys import get_api_key
@@ -33,9 +35,29 @@ class OpenAIProvider(BaseProvider):
             )
         client = AsyncOpenAI(api_key=key)
         system = kwargs.get("context", "")
+        image_bytes: bytes | None = kwargs.get("image_bytes")
+        image_mime: str | None = kwargs.get("image_mime", "image/jpeg")
+        image_data_url = ""
+        if image_bytes:
+            image_data_url = f"data:{image_mime};base64,{base64.b64encode(image_bytes).decode('utf-8')}"
         msgs = []
-        for m in messages:
-            msg = {"role": m["role"], "content": m.get("content") or ""}
+        for i, m in enumerate(messages):
+            role = m["role"]
+            content = m.get("content") or ""
+            is_last_user_with_image = bool(
+                image_data_url and role == "user" and i == (len(messages) - 1)
+            )
+            if is_last_user_with_image:
+                text_part = content or "Please analyze this image."
+                msg = {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": text_part},
+                        {"type": "image_url", "image_url": {"url": image_data_url}},
+                    ],
+                }
+            else:
+                msg = {"role": role, "content": content}
             if "tool_calls" in m:
                 msg["tool_calls"] = m["tool_calls"]
             if "tool_call_id" in m:

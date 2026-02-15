@@ -49,6 +49,14 @@ _EXEC_CHECK_VERBS = (
 # Providers that can participate in tool/fallback guardrails.
 # Ollama is included because Asta uses text tool-call protocols with it.
 _TOOL_CAPABLE_PROVIDERS = frozenset({"openai", "groq", "openrouter", "claude", "google", "ollama"})
+_VISION_CAPABLE_PROVIDERS = frozenset({"openrouter", "claude", "openai"})
+_VISION_PROVIDER_KEY = {
+    "openrouter": "openrouter_api_key",
+    "claude": "anthropic_api_key",
+    "openai": "openai_api_key",
+}
+_VISION_PROVIDER_ORDER_DEFAULT = ("openrouter", "claude", "openai")
+_VISION_OPENROUTER_MODEL_DEFAULT = "nvidia/nemotron-nano-12b-v2-vl:free"
 _GIF_COOLDOWN_SECONDS = 30 * 60
 _SILENT_REPLY_TOKEN = "NO_REPLY"
 _FILES_LOCATION_HINTS = {
@@ -191,6 +199,83 @@ def _is_exec_check_request(text: str) -> bool:
 
 def _provider_supports_tools(provider_name: str) -> bool:
     return (provider_name or "").strip().lower() in _TOOL_CAPABLE_PROVIDERS
+
+
+async def _run_vision_preprocessor(
+    *,
+    text: str,
+    image_bytes: bytes,
+    image_mime: str | None,
+) -> tuple[str, str, str | None] | None:
+    from app.config import get_settings
+    from app.keys import get_api_key
+
+    settings = get_settings()
+    if not bool(getattr(settings, "asta_vision_preprocess", True)):
+        return None
+
+    raw_order = str(getattr(settings, "asta_vision_provider_order", "") or "").strip().lower()
+    provider_order = [
+        p.strip()
+        for p in raw_order.split(",")
+        if p.strip() and p.strip() in _VISION_CAPABLE_PROVIDERS
+    ]
+    if not provider_order:
+        provider_order = list(_VISION_PROVIDER_ORDER_DEFAULT)
+
+    openrouter_model = (
+        str(getattr(settings, "asta_vision_openrouter_model", _VISION_OPENROUTER_MODEL_DEFAULT) or "").strip()
+        or _VISION_OPENROUTER_MODEL_DEFAULT
+    )
+    image_prompt = (text or "").strip() or "Describe this image."
+    vision_context = (
+        "You are Asta's vision preprocessor. Analyze the image and return concise factual notes.\n"
+        "Output plain text only (no code fences). Include:\n"
+        "- scene summary\n"
+        "- visible text (OCR)\n"
+        "- important objects/entities\n"
+        "- uncertainty notes if relevant"
+    )
+
+    for candidate in provider_order:
+        key_name = _VISION_PROVIDER_KEY.get(candidate)
+        if not key_name:
+            continue
+        api_key = await get_api_key(key_name)
+        if not api_key:
+            continue
+        provider = get_provider(candidate)
+        if not provider:
+            continue
+        chat_kwargs: dict = {
+            "context": vision_context,
+            "image_bytes": image_bytes,
+            "image_mime": image_mime or "image/jpeg",
+            "thinking_level": "off",
+        }
+        if candidate == "openrouter" and openrouter_model:
+            chat_kwargs["model"] = openrouter_model
+        try:
+            resp = await provider.chat(
+                [{"role": "user", "content": image_prompt}],
+                **chat_kwargs,
+            )
+        except Exception as e:
+            logger.warning("Vision preprocessor provider=%s failed: %s", candidate, e)
+            continue
+        if resp.error:
+            logger.warning(
+                "Vision preprocessor provider=%s returned error=%s",
+                candidate,
+                (resp.error_message or str(resp.error)),
+            )
+            continue
+        analysis = (resp.content or "").strip()
+        if not analysis:
+            continue
+        model_used = str(chat_kwargs.get("model") or "").strip() or None
+        return analysis[:5000], candidate, model_used
+    return None
 
 
 def _thinking_instruction(level: str) -> str:
@@ -1795,6 +1880,31 @@ async def handle_message(
             "Use sessions_list/sessions_history to inspect results."
         )
 
+    effective_user_text = text
+    if image_bytes:
+        vision_result = await _run_vision_preprocessor(
+            text=text,
+            image_bytes=image_bytes,
+            image_mime=image_mime,
+        )
+        if vision_result:
+            analysis, vision_provider, vision_model = vision_result
+            source = vision_provider + (f"/{vision_model}" if vision_model else "")
+            context += (
+                "\n\n[VISION PREPROCESSOR]\n"
+                "The user shared an image. A separate vision model already analyzed it. "
+                "Use the vision analysis block from the user message as the image observation source."
+            )
+            effective_user_text = (
+                f"{text}\n\n"
+                f"[VISION_ANALYSIS source={source}]\n"
+                f"{analysis}\n"
+                f"[/VISION_ANALYSIS]"
+            )
+            image_bytes = None
+            image_mime = None
+            logger.info("Vision preprocess complete using %s", source)
+
     # Load recent messages; skip old assistant error messages so the model doesn't repeat "check your API key"
     recent = await db.get_recent_messages(cid, limit=20)
 
@@ -1811,7 +1921,7 @@ async def handle_message(
             )
         )
     ]
-    messages.append({"role": "user", "content": text})
+    messages.append({"role": "user", "content": effective_user_text})
 
 
     # Context compaction: summarize older messages if history is too long
@@ -1823,6 +1933,36 @@ async def handle_message(
     provider = get_provider(provider_name)
     if not provider:
         return f"No AI provider found for '{provider_name}'. Check your provider settings."
+    if image_bytes and provider.name not in _VISION_CAPABLE_PROVIDERS:
+        from app.keys import get_api_key
+        original = provider.name
+        switched = False
+        for candidate in ("openrouter", "claude", "openai"):
+            key_name = _VISION_PROVIDER_KEY.get(candidate)
+            if not key_name:
+                continue
+            key_val = await get_api_key(key_name)
+            if not key_val:
+                continue
+            p = get_provider(candidate)
+            if not p:
+                continue
+            provider = p
+            provider_name = candidate
+            switched = True
+            logger.info(
+                "Vision input: routing provider %s -> %s for image handling",
+                original,
+                candidate,
+            )
+            break
+        if not switched:
+            msg = (
+                f"Image received, but provider '{original}' does not support vision in Asta yet. "
+                "Use OpenRouter, Claude, or OpenAI and set its API key in Settings."
+            )
+            await db.add_message(cid, "assistant", msg, "script")
+            return msg
     user_model = await db.get_user_provider_model(user_id, provider.name)
     model_override = (extra.get("subagent_model_override") or "").strip()
     if model_override:

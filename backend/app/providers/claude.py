@@ -1,4 +1,5 @@
 """Claude (Anthropic) provider (key from panel Settings or .env)."""
+import base64
 import json
 
 from anthropic import AsyncAnthropic
@@ -12,9 +13,21 @@ class ClaudeProvider(BaseProvider):
         return "claude"
 
     @staticmethod
-    def _to_anthropic_messages(messages: list[Message]) -> list[dict]:
+    def _to_anthropic_messages(
+        messages: list[Message],
+        *,
+        image_b64: str | None = None,
+        image_mime: str = "image/jpeg",
+    ) -> list[dict]:
         out: list[dict] = []
-        for m in messages:
+        image_idx = -1
+        if image_b64:
+            for i in range(len(messages) - 1, -1, -1):
+                role = (messages[i].get("role") or "").strip().lower()
+                if role == "user":
+                    image_idx = i
+                    break
+        for idx, m in enumerate(messages):
             role = (m.get("role") or "").strip().lower()
             content = m.get("content") or ""
             if role == "assistant" and m.get("tool_calls"):
@@ -58,6 +71,25 @@ class ClaudeProvider(BaseProvider):
                     }
                 )
                 continue
+            if role != "assistant" and image_b64 and image_idx == idx:
+                text_content = str(content or "").strip() or "Please analyze this image."
+                out.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": text_content},
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": image_mime or "image/jpeg",
+                                    "data": image_b64,
+                                },
+                            },
+                        ],
+                    }
+                )
+                continue
             out.append({"role": "assistant" if role == "assistant" else "user", "content": str(content)})
         return out
 
@@ -90,7 +122,12 @@ class ClaudeProvider(BaseProvider):
             )
         client = AsyncAnthropic(api_key=key)
         system = kwargs.get("context", "")
-        msgs = self._to_anthropic_messages(messages)
+        image_bytes: bytes | None = kwargs.get("image_bytes")
+        image_mime: str = (kwargs.get("image_mime") or "image/jpeg").strip() or "image/jpeg"
+        image_b64: str | None = None
+        if image_bytes:
+            image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+        msgs = self._to_anthropic_messages(messages, image_b64=image_b64, image_mime=image_mime)
         model = kwargs.get("model") or "claude-3-5-sonnet-20241022"
         tools = self._to_anthropic_tools(kwargs.get("tools"))
         try:
