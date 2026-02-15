@@ -504,6 +504,20 @@ def _tool_names_from_defs(tools: list[dict] | None) -> set[str]:
     return names
 
 
+def _parse_inline_tool_args(raw: str) -> dict[str, str]:
+    args: dict[str, str] = {}
+    for m in re.finditer(
+        r"""([A-Za-z_][\w\-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^,\]]+))""",
+        raw or "",
+    ):
+        key = (m.group(1) or "").strip()
+        if not key:
+            continue
+        value = (m.group(2) or m.group(3) or m.group(4) or "").strip()
+        args[key] = html.unescape(value)
+    return args
+
+
 def _extract_textual_tool_calls(
     text: str,
     allowed_names: set[str],
@@ -579,6 +593,47 @@ def _extract_textual_tool_calls(
         if tool_calls:
             cleaned = re.sub(r"(?is)<function_calls>\s*.*?\s*</function_calls>", "", raw).strip()
             return tool_calls, cleaned
+
+    # Bracket protocol fallback:
+    # [allow_path: path="~/Desktop"]
+    # [list_directory: path="~/Desktop"]
+    bracket_matches = list(
+        re.finditer(r"(?is)\[\s*([a-zA-Z_][\w\-]*)\s*:\s*([^\]]*?)\]", raw)
+    )
+    if bracket_matches:
+        tool_calls: list[dict] = []
+        remove_spans: list[tuple[int, int]] = []
+        for idx, m in enumerate(bracket_matches, start=1):
+            name = (m.group(1) or "").strip()
+            if not name:
+                continue
+            if allowed_names and name not in allowed_names:
+                continue
+            body = (m.group(2) or "").strip()
+            args = _parse_inline_tool_args(body) if body else {}
+            # Treat this as protocol only when it looks like tool arguments.
+            if body and ("=" in body) and not args:
+                continue
+            tool_calls.append(
+                {
+                    "id": f"text_tool_call_bracket_{idx}",
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": json.dumps(args, ensure_ascii=False),
+                    },
+                }
+            )
+            remove_spans.append((m.start(), m.end()))
+        if tool_calls:
+            chunks: list[str] = []
+            cursor = 0
+            for start, end in remove_spans:
+                chunks.append(raw[cursor:start])
+                cursor = end
+            chunks.append(raw[cursor:])
+            cleaned = "".join(chunks).strip()
+            return tool_calls, cleaned
     return None, raw
 
 
@@ -600,6 +655,172 @@ def _strip_tool_call_markup(text: str) -> str:
     cleaned = re.sub(r"\[ASTA_TOOL_CALL\]\s*\{.*?\}\s*\[/ASTA_TOOL_CALL\]", "", raw, flags=re.DOTALL)
     cleaned = re.sub(r"(?is)<function_calls>\s*.*?\s*</function_calls>", "", cleaned)
     return cleaned.strip()
+
+
+def _strip_bracket_tool_protocol(text: str) -> str:
+    raw = text or ""
+    if not raw:
+        return ""
+    tool_names = sorted(_TOOL_TRACE_GROUP.keys(), key=len, reverse=True)
+    if not tool_names:
+        return raw.strip()
+    names_pat = "|".join(re.escape(n) for n in tool_names)
+    pat = rf"(?is)\[\s*(?:{names_pat})\s*:\s*[^\]]*=\s*[^\]]*\]"
+    cleaned = re.sub(pat, "", raw)
+    return cleaned.strip()
+
+
+def _looks_like_command_request(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    return any(
+        k in t
+        for k in (
+            "command",
+            "commands",
+            "terminal",
+            "shell",
+            "bash",
+            "zsh",
+            "cli",
+            "script",
+            "run this",
+            "how to run",
+            "install",
+        )
+    )
+
+
+def _strip_shell_command_leakage(reply: str) -> tuple[str, bool]:
+    raw = (reply or "")
+    if not raw.strip():
+        return "", False
+    out_lines: list[str] = []
+    removed = False
+    cmd_line = re.compile(
+        r"(?is)^\s*(?:cd|git|npm|pnpm|yarn|bun|python|python3|node|uv|pip|brew|docker|kubectl|ls|cat|grep|rg|find|curl|wget)\b"
+    )
+    for line in raw.splitlines():
+        ln = line.strip()
+        if not ln:
+            out_lines.append(line)
+            continue
+        if cmd_line.search(ln) or ">/dev/null" in ln or "2>/dev/null" in ln or "&&" in ln or "||" in ln:
+            removed = True
+            continue
+        out_lines.append(line)
+    return "\n".join(out_lines).strip(), removed
+
+
+def _extract_textual_cron_add_protocol(reply: str) -> tuple[dict[str, str] | None, str]:
+    raw = reply or ""
+    if not raw.strip():
+        return None, raw
+    m = re.search(r"(?im)^\s*CRON\s+ACTION\s*=\s*add\b(?P<body>.*)$", raw)
+    if not m:
+        return None, raw
+    body = (m.group("body") or "").strip()
+    body = re.sub(r"\s+", " ", body)
+
+    name = ""
+    cron_expr = ""
+    tz = ""
+    message = ""
+
+    m_name = re.search(
+        r"(?is)\bname\b\s*[:=]?\s*(.+?)(?=\s+\b(?:cron(?:_expr| expr|expr)|tz|message|msg)\b|$)",
+        body,
+    )
+    if m_name:
+        name = (m_name.group(1) or "").strip(" \"'`")
+
+    m_cron = re.search(
+        r"(?is)\bcron(?:_expr| expr|expr)?\b\s*[:=]?\s*([^\n]+?)(?=\s+\b(?:tz|message|msg)\b|$)",
+        body,
+    )
+    if m_cron:
+        cron_raw = (m_cron.group(1) or "").strip()
+        cron_expr = _extract_cron_expr_from_text(cron_raw)
+
+    m_tz = re.search(r"(?is)\btz\b\s*[:=]?\s*([A-Za-z0-9_/\-+]+)", body)
+    if m_tz:
+        tz = (m_tz.group(1) or "").strip()
+
+    m_msg = re.search(r"(?is)\b(?:message|msg)\b\s*[:=]?\s*(.+)$", body)
+    if m_msg:
+        message = (m_msg.group(1) or "").strip(" \"'`")
+
+    cleaned = re.sub(r"(?im)^\s*CRON\s+ACTION\s*=\s*add\b.*$", "", raw).strip()
+    if not name or not cron_expr:
+        return None, cleaned
+    return {
+        "action": "add",
+        "name": name,
+        "cron_expr": cron_expr,
+        "tz": tz,
+        "message": message or "Reminder",
+    }, cleaned
+
+
+def _extract_proto_value(body: str, key: str) -> str:
+    pat = re.compile(
+        rf"(?is)\b{re.escape(key)}\b\s*[:=]\s*(?:\"([^\"]*)\"|'([^']*)'|([^,\]\n]+))"
+    )
+    m = pat.search(body or "")
+    if not m:
+        return ""
+    return (m.group(1) or m.group(2) or m.group(3) or "").strip()
+
+
+def _extract_cron_expr_from_text(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    # Accept common cron tokens including ranges/lists/steps and weekday/month names.
+    m = re.search(
+        r"(?i)(?<!\S)([0-9a-z*/,\-]+(?:\s+[0-9a-z*/,\-]+){4})(?!\S)",
+        raw,
+    )
+    if not m:
+        return ""
+    return (m.group(1) or "").strip()
+
+
+def _extract_bracket_cron_add_protocols(reply: str) -> tuple[list[dict[str, str]], str]:
+    raw = reply or ""
+    if not raw.strip():
+        return [], raw
+    pattern = re.compile(r"(?is)\[\s*cron\s*:\s*([^\]]+)\]")
+    matches = list(pattern.finditer(raw))
+    if not matches:
+        return [], raw
+
+    payloads: list[dict[str, str]] = []
+    for m in matches:
+        body = (m.group(1) or "").strip()
+        action = _extract_proto_value(body, "action").lower()
+        if action and action != "add":
+            continue
+        name = _extract_proto_value(body, "name").strip(" \"'`")
+        cron_raw = _extract_proto_value(body, "cron_expr") or _extract_proto_value(body, "cron")
+        cron_expr = _extract_cron_expr_from_text(cron_raw)
+        tz = _extract_proto_value(body, "tz").strip()
+        message = _extract_proto_value(body, "message") or _extract_proto_value(body, "msg")
+        message = message.strip(" \"'`")
+        if name and cron_expr:
+            payloads.append(
+                {
+                    "action": "add",
+                    "name": name,
+                    "cron_expr": cron_expr,
+                    "tz": tz,
+                    "message": message or "Reminder",
+                }
+            )
+
+    cleaned = pattern.sub("", raw).strip()
+    return payloads, cleaned
 
 
 def _get_trace_settings():
@@ -1527,6 +1748,7 @@ async def handle_message(
     raw_reply = (response.content or "").strip()
     had_tool_markup = _has_tool_call_markup(raw_reply)
     reply = _strip_tool_call_markup(raw_reply)
+    reply = _strip_bracket_tool_protocol(reply)
     if not reply and had_tool_markup and not response.error:
         reply = "I couldn't execute that tool call format. Ask again and I'll retry with tools."
     reply, suppress_user_reply = _sanitize_silent_reply_markers(reply)
@@ -1701,6 +1923,68 @@ async def handle_message(
             logger.warning("ASTA_WRITE_FILE failed: %s", e)
 
     # Claw-style cron: [ASTA_CRON_ADD: name|cron_expr|tz|message][/ASTA_CRON_ADD] and [ASTA_CRON_REMOVE: name][/ASTA_CRON_REMOVE]
+    textual_cron, reply = _extract_textual_cron_add_protocol(reply)
+    if textual_cron:
+        try:
+            from app.cron_runner import add_cron_job_to_scheduler
+            from app.tasks.scheduler import get_scheduler
+
+            job_id = await db.add_cron_job(
+                user_id,
+                textual_cron["name"],
+                textual_cron["cron_expr"],
+                textual_cron["message"],
+                tz=textual_cron.get("tz") or None,
+                channel=channel,
+                channel_target=channel_target,
+            )
+            add_cron_job_to_scheduler(
+                get_scheduler(),
+                job_id,
+                textual_cron["cron_expr"],
+                textual_cron.get("tz") or None,
+            )
+            used_tool_labels.append(_build_tool_trace_label("cron", "add/fallback"))
+            if reply:
+                reply = reply + "\n\n"
+            reply += f"I've scheduled cron job \"{textual_cron['name']}\" ({textual_cron['cron_expr']})."
+        except Exception as e:
+            if reply:
+                reply = reply + "\n\n"
+            reply += f"I couldn't schedule the cron job: {e}."
+
+    bracket_cron_adds, reply = _extract_bracket_cron_add_protocols(reply)
+    if bracket_cron_adds:
+        from app.cron_runner import add_cron_job_to_scheduler
+        from app.tasks.scheduler import get_scheduler
+
+        confirmations: list[str] = []
+        for item in bracket_cron_adds:
+            try:
+                job_id = await db.add_cron_job(
+                    user_id,
+                    item["name"],
+                    item["cron_expr"],
+                    item["message"],
+                    tz=item.get("tz") or None,
+                    channel=channel,
+                    channel_target=channel_target,
+                )
+                add_cron_job_to_scheduler(
+                    get_scheduler(),
+                    job_id,
+                    item["cron_expr"],
+                    item.get("tz") or None,
+                )
+                confirmations.append(f"I've scheduled cron job \"{item['name']}\" ({item['cron_expr']}).")
+                used_tool_labels.append(_build_tool_trace_label("cron", "add/fallback"))
+            except Exception as e:
+                confirmations.append(f"I couldn't schedule cron job \"{item['name']}\": {e}.")
+        if confirmations:
+            if reply:
+                reply = reply + "\n\n"
+            reply += "\n".join(confirmations)
+
     cron_add_pattern = re.compile(r"\[ASTA_CRON_ADD:\s*([^\]]+)\]\s*\[/ASTA_CRON_ADD\]", re.IGNORECASE)
     for m in list(cron_add_pattern.finditer(reply)):
         raw = m.group(1).strip()
@@ -1762,6 +2046,12 @@ async def handle_message(
         lower = reply.lower()
         if any(p in lower for p in ("i've set a reminder", "i set a reminder", "reminder set", "i'll remind you", "i'll send you a message at")):
             reply += "\n\n_I couldn't parse that reminder. Try: \"remind me in 5 min to X\" or \"alarm in 5 min to take a shower\"_"
+
+    # Avoid leaking internal shell snippets when user didn't ask for commands.
+    if not _looks_like_command_request(text):
+        stripped_reply, removed_shell = _strip_shell_command_leakage(reply)
+        if removed_shell:
+            reply = stripped_reply
 
     # Re-sanitize in case post-processing introduced marker leakage.
     reply, suppress_now = _sanitize_silent_reply_markers(reply)

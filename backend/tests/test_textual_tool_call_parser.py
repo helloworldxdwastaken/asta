@@ -1,6 +1,6 @@
 import json
 
-from app.handler import _extract_textual_tool_calls, _strip_tool_call_markup
+from app.handler import _extract_textual_tool_calls, _strip_tool_call_markup, _strip_bracket_tool_protocol
 
 
 def test_extract_textual_tool_calls_from_asta_tag():
@@ -57,3 +57,29 @@ def test_strip_tool_call_markup_removes_known_blocks():
     assert "<function_calls>" not in cleaned
     assert "Before" in cleaned
     assert "After" in cleaned
+
+
+def test_extract_textual_tool_calls_from_bracket_protocol():
+    text = '[allow_path: path="~/Desktop"]\n[list_directory: path="~/Desktop"]'
+    calls, cleaned = _extract_textual_tool_calls(text, {"allow_path", "list_directory"})
+    assert calls is not None
+    assert len(calls) == 2
+    assert calls[0]["function"]["name"] == "allow_path"
+    assert json.loads(calls[0]["function"]["arguments"]) == {"path": "~/Desktop"}
+    assert calls[1]["function"]["name"] == "list_directory"
+    assert json.loads(calls[1]["function"]["arguments"]) == {"path": "~/Desktop"}
+    assert cleaned == ""
+
+
+def test_strip_bracket_tool_protocol_removes_internal_lines():
+    text = (
+        "I'll check now.\n"
+        '[allow_path: path="~/Desktop"]\n'
+        '[list_directory: path="~/Desktop"]\n'
+        "Done."
+    )
+    cleaned = _strip_bracket_tool_protocol(text)
+    assert "[allow_path:" not in cleaned
+    assert "[list_directory:" not in cleaned
+    assert "I'll check now." in cleaned
+    assert "Done." in cleaned
