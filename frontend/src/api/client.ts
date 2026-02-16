@@ -20,6 +20,9 @@ export type Status = {
   reasoning?: {
     mode: "off" | "on" | "stream";
   };
+  final?: {
+    mode: "off" | "strict";
+  };
   channels?: {
     telegram?: {
       configured: boolean;
@@ -103,6 +106,25 @@ export type VisionSettings = {
   openrouter_model: string;
 };
 
+export type ProviderFlowEntry = {
+  provider: "claude" | "ollama" | "openrouter";
+  label: string;
+  position: number;
+  connected: boolean;
+  enabled: boolean;
+  auto_disabled: boolean;
+  disabled_reason: string;
+  active: boolean;
+  model: string;
+  default_model: string;
+};
+
+export type ProviderFlow = {
+  default_provider: "claude" | "ollama" | "openrouter";
+  order: Array<"claude" | "ollama" | "openrouter">;
+  providers: ProviderFlowEntry[];
+};
+
 export const api = {
   health: () => req<{ status: string; app?: string }>("/health"),
   status: () => req<Status>("/status"),
@@ -135,6 +157,99 @@ export const api = {
       body: JSON.stringify({ text, provider, user_id: "default", conversation_id: conversationId }),
       ...(signal && { signal }),
     }),
+  chatStream: async (
+    text: string,
+    provider: string = "groq",
+    conversationId?: string,
+    opts?: {
+      signal?: AbortSignal;
+      onEvent?: (event: string, payload: Record<string, unknown>) => void;
+    }
+  ): Promise<{ reply: string; conversation_id: string; provider: string }> => {
+    const r = await fetch(API_BASE + "/chat/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, provider, user_id: "default", conversation_id: conversationId }),
+      ...(opts?.signal ? { signal: opts.signal } : {}),
+    });
+    if (!r.ok) throw new Error(await r.text().then((t) => t.slice(0, 300)));
+    if (!r.body) throw new Error("Streaming not available in this browser.");
+
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+    let finalReply = "";
+    let finalConversationId = conversationId || "default:web";
+    let finalProvider = provider;
+
+    const parseBlock = (block: string): { event: string; payload: Record<string, unknown> | null } => {
+      let event = "message";
+      const dataLines: string[] = [];
+      for (const line of block.split(/\r?\n/)) {
+        if (!line) continue;
+        if (line.startsWith("event:")) {
+          event = line.slice("event:".length).trim();
+          continue;
+        }
+        if (line.startsWith("data:")) {
+          dataLines.push(line.slice("data:".length).trimStart());
+        }
+      }
+      if (dataLines.length === 0) return { event, payload: null };
+      try {
+        const payload = JSON.parse(dataLines.join("\n")) as Record<string, unknown>;
+        return { event, payload };
+      } catch {
+        return { event, payload: null };
+      }
+    };
+
+    const handleParsed = (event: string, payload: Record<string, unknown> | null) => {
+      if (!payload) return;
+      opts?.onEvent?.(event, payload);
+      if (event === "done") {
+        finalReply = String(payload.reply ?? "");
+        finalConversationId = String(payload.conversation_id ?? finalConversationId);
+        finalProvider = String(payload.provider ?? finalProvider);
+        return;
+      }
+      if (event === "meta") {
+        finalConversationId = String(payload.conversation_id ?? finalConversationId);
+        finalProvider = String(payload.provider ?? finalProvider);
+        return;
+      }
+      if (event === "error") {
+        const msg = String(payload.error ?? "Stream error");
+        throw new Error(msg);
+      }
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      while (true) {
+        const splitIndex = buffer.indexOf("\n\n");
+        if (splitIndex === -1) break;
+        const block = buffer.slice(0, splitIndex);
+        buffer = buffer.slice(splitIndex + 2);
+        const parsed = parseBlock(block);
+        handleParsed(parsed.event, parsed.payload);
+      }
+    }
+
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+      const parsed = parseBlock(buffer);
+      handleParsed(parsed.event, parsed.payload);
+    }
+
+    return {
+      reply: finalReply,
+      conversation_id: finalConversationId,
+      provider: finalProvider,
+    };
+  },
   filesList: (directory?: string) =>
     req<{ roots?: string[]; root?: string; entries: { name: string; path: string; dir: boolean; size?: number }[] }>(
       "/files/list" + (directory ? `?directory=${encodeURIComponent(directory)}` : "")
@@ -221,6 +336,13 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ reasoning_mode }),
     }),
+  getFinalMode: () =>
+    req<{ final_mode: "off" | "strict" }>("/settings/final-mode"),
+  setFinalMode: (final_mode: "off" | "strict") =>
+    req<{ final_mode: "off" | "strict" }>("/settings/final-mode", {
+      method: "PUT",
+      body: JSON.stringify({ final_mode }),
+    }),
   getVisionSettings: () =>
     req<VisionSettings>("/settings/vision"),
   setVisionSettings: (body: VisionSettings) =>
@@ -228,6 +350,16 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(body),
     }),
+  getProviderFlow: () =>
+    req<ProviderFlow>("/settings/provider-flow"),
+  setProviderEnabled: (provider: "claude" | "ollama" | "openrouter", enabled: boolean) =>
+    req<{ provider: string; enabled: boolean; auto_disabled: boolean; disabled_reason: string }>(
+      "/settings/provider-flow/provider-enabled",
+      {
+        method: "PUT",
+        body: JSON.stringify({ provider, enabled }),
+      }
+    ),
   getFallbackProviders: () =>
     req<{ providers: string }>("/settings/fallback"),
   setFallbackProviders: (providers: string) =>
@@ -239,7 +371,7 @@ export const api = {
     req<{ models: Record<string, string>; defaults: Record<string, string> }>("/settings/models"),
   /** Available models per provider (e.g. Ollama local models for Dashboard Brain) */
   getAvailableModels: () =>
-    req<{ ollama: string[] }>("/settings/available-models"),
+    req<{ ollama: string[]; openrouter?: string[] }>("/settings/available-models"),
   setModel: (provider: string, model: string) =>
     req<{ provider: string; model: string }>("/settings/models", {
       method: "PUT",

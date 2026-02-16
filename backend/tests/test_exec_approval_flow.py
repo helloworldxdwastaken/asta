@@ -5,6 +5,7 @@ import pytest
 
 from app.config import get_settings
 from app.db import get_db
+from app.exec_tool import SYSTEM_CONFIG_EXEC_BINS_KEY
 from app.handler import handle_message
 from app.providers.base import ProviderResponse
 
@@ -28,6 +29,8 @@ async def test_exec_disallowed_bin_creates_pending_approval(monkeypatch):
 
     db = get_db()
     await db.connect()
+    # Keep test deterministic even if prior tests/users persisted extra allowlist bins.
+    await db.set_system_config(SYSTEM_CONFIG_EXEC_BINS_KEY, "")
     user_id = f"test-exec-approval-{uuid.uuid4().hex[:8]}"
 
     existing = await db.list_pending_exec_approvals(limit=100)

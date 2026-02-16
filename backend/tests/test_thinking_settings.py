@@ -5,13 +5,33 @@ import uuid
 from fastapi import HTTPException
 
 from app.db import get_db
-from app.handler import _extract_reasoning_blocks, handle_message
+from app.handler import (
+    _extract_reasoning_blocks,
+    _extract_thinking_from_tagged_stream,
+    _format_reasoning_message,
+    _strip_reasoning_tags_from_text,
+    handle_message,
+)
 from app.providers.base import ProviderResponse
-from app.routers.settings import set_thinking, set_reasoning, ThinkingIn, ReasoningIn
+from app.routers.settings import (
+    set_final_mode,
+    set_reasoning,
+    set_thinking,
+    FinalModeIn,
+    ReasoningIn,
+    ThinkingIn,
+)
 
 
 class _DummyProvider:
     name = "openai"
+
+    async def chat(self, messages, **kwargs):
+        return ProviderResponse(content="ok")
+
+
+class _DummyOllamaProvider:
+    name = "ollama"
 
     async def chat(self, messages, **kwargs):
         return ProviderResponse(content="ok")
@@ -293,6 +313,56 @@ def test_extract_reasoning_blocks_unclosed_think_stays_hidden_from_final():
     assert "internal unfinished section" in reasoning
 
 
+def test_extract_thinking_from_tagged_stream_handles_partial_open_block():
+    reasoning = _extract_thinking_from_tagged_stream("<think>step one\nstep two")
+    assert reasoning == "step one\nstep two"
+
+
+def test_extract_thinking_from_tagged_stream_prefers_closed_reasoning():
+    reasoning = _extract_thinking_from_tagged_stream("<think>one</think>\n<think>two")
+    assert reasoning == "one"
+
+
+def test_extract_thinking_from_tagged_stream_ignores_code_regions():
+    reasoning = _extract_thinking_from_tagged_stream("`<think>code</think>`\n<think>live")
+    assert reasoning == "live"
+
+
+def test_strip_reasoning_tags_from_text_supports_preserve_mode():
+    cleaned = _strip_reasoning_tags_from_text(
+        "Visible start <thinking>unfinished section",
+        mode="preserve",
+        trim="both",
+    )
+    assert cleaned == "Visible start unfinished section"
+
+
+def test_strip_reasoning_tags_from_text_strict_final_requires_final_tag():
+    assert (
+        _strip_reasoning_tags_from_text(
+            "Visible answer without final tag",
+            mode="strict",
+            trim="both",
+            strict_final=True,
+        )
+        == ""
+    )
+
+
+def test_extract_reasoning_blocks_strict_final_only_keeps_final_block():
+    final_text, reasoning = _extract_reasoning_blocks(
+        "Draft outside <think>hidden</think> <final>Visible only</final>",
+        strict_final=True,
+    )
+    assert final_text == "Visible only"
+    assert reasoning == "hidden"
+
+
+def test_format_reasoning_message_normalizes_prefix_and_trim():
+    assert _format_reasoning_message("  step one\nstep two  ") == "Reasoning:\nstep one\nstep two"
+    assert _format_reasoning_message("   ") == ""
+
+
 @pytest.mark.asyncio
 async def test_set_thinking_invalid_value_returns_http_400():
     with pytest.raises(HTTPException) as exc:
@@ -311,6 +381,142 @@ async def test_set_reasoning_invalid_value_returns_http_400():
     with pytest.raises(HTTPException) as exc:
         await set_reasoning(ReasoningIn(reasoning_mode="invalid"), user_id="default")
     assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_set_final_mode_invalid_value_returns_http_400():
+    with pytest.raises(HTTPException) as exc:
+        await set_final_mode(FinalModeIn(final_mode="invalid"), user_id="default")
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_set_final_mode_accepts_strict():
+    out = await set_final_mode(FinalModeIn(final_mode="strict"), user_id="default")
+    assert out["final_mode"] == "strict"
+
+
+@pytest.mark.asyncio
+async def test_final_mode_strict_shows_only_final_block():
+    db = get_db()
+    await db.connect()
+    user_id = "test-final-mode-strict-visible"
+    await db.set_user_reasoning_mode(user_id, "off")
+    await db.set_user_final_mode(user_id, "strict")
+
+    async def _fake_chat_with_fallback(primary, messages, fallback_names, **kwargs):
+        return ProviderResponse(content="Internal draft <final>Final answer</final>"), primary
+
+    with (
+        patch("app.handler.get_provider", return_value=_DummyProvider()),
+        patch("app.compaction.compact_history", side_effect=_fake_compact_history),
+        patch("app.providers.fallback.chat_with_fallback", side_effect=_fake_chat_with_fallback),
+    ):
+        reply = await handle_message(
+            user_id=user_id,
+            channel="web",
+            text="hello",
+            provider_name="openai",
+        )
+
+    assert reply.startswith("Final answer")
+
+
+@pytest.mark.asyncio
+async def test_final_mode_strict_hides_non_final_text_and_uses_fallback():
+    db = get_db()
+    await db.connect()
+    user_id = "test-final-mode-strict-no-final"
+    await db.set_user_reasoning_mode(user_id, "off")
+    await db.set_user_final_mode(user_id, "strict")
+
+    async def _fake_chat_with_fallback(primary, messages, fallback_names, **kwargs):
+        return ProviderResponse(content="Visible answer without final tag"), primary
+
+    with (
+        patch("app.handler.get_provider", return_value=_DummyProvider()),
+        patch("app.compaction.compact_history", side_effect=_fake_compact_history),
+        patch("app.providers.fallback.chat_with_fallback", side_effect=_fake_chat_with_fallback),
+    ):
+        reply = await handle_message(
+            user_id=user_id,
+            channel="web",
+            text="hello",
+            provider_name="openai",
+        )
+
+    assert reply.startswith("I didn't get a reply back. Try again or rephrase.")
+
+
+@pytest.mark.asyncio
+async def test_final_mode_strict_does_not_blank_ollama_plain_text():
+    db = get_db()
+    await db.connect()
+    user_id = "test-final-mode-strict-ollama-no-final"
+    await db.set_user_reasoning_mode(user_id, "off")
+    await db.set_user_final_mode(user_id, "strict")
+
+    observed = {"context": ""}
+
+    async def _fake_chat_with_fallback(primary, messages, fallback_names, **kwargs):
+        observed["context"] = kwargs.get("context") or ""
+        return ProviderResponse(content="Visible answer without final tag"), primary
+
+    with (
+        patch("app.handler.get_provider", return_value=_DummyOllamaProvider()),
+        patch("app.compaction.compact_history", side_effect=_fake_compact_history),
+        patch("app.providers.fallback.chat_with_fallback", side_effect=_fake_chat_with_fallback),
+    ):
+        reply = await handle_message(
+            user_id=user_id,
+            channel="web",
+            text="hello",
+            provider_name="ollama",
+        )
+
+    assert "[FINAL]" not in observed["context"]
+    assert "Visible answer without final tag" in reply
+    assert "I didn't get a reply back" not in reply
+
+
+@pytest.mark.asyncio
+async def test_final_mode_strict_stream_emits_only_final_content():
+    db = get_db()
+    await db.connect()
+    user_id = "test-final-mode-strict-stream-events"
+    await db.set_user_reasoning_mode(user_id, "off")
+    await db.set_user_final_mode(user_id, "strict")
+
+    async def _fake_chat_with_fallback_stream(primary, messages, fallback_names, on_text_delta=None, **kwargs):
+        if on_text_delta:
+            await on_text_delta("Draft outside ")
+            await on_text_delta("<final>Safe")
+            await on_text_delta(" answer</final>")
+        return ProviderResponse(content="Draft outside <final>Safe answer</final>"), primary
+
+    events: list[dict] = []
+
+    async def _collect_event(payload: dict) -> None:
+        events.append(payload)
+
+    with (
+        patch("app.handler.get_provider", return_value=_DummyProvider()),
+        patch("app.compaction.compact_history", side_effect=_fake_compact_history),
+        patch("app.providers.fallback.chat_with_fallback_stream", side_effect=_fake_chat_with_fallback_stream),
+    ):
+        reply = await handle_message(
+            user_id=user_id,
+            channel="web",
+            text="hello",
+            provider_name="openai",
+            extra_context={"_stream_event_callback": _collect_event},
+        )
+
+    assert reply.startswith("Safe answer")
+    assistant_events = [e for e in events if str(e.get("type")) == "assistant"]
+    assert assistant_events
+    assert all("Draft outside" not in str(e.get("text") or "") for e in assistant_events)
+    assert str(assistant_events[-1].get("text") or "").startswith("Safe answer")
 
 
 @pytest.mark.asyncio

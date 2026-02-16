@@ -54,7 +54,7 @@ async def build_context(
             "list Things (things inbox), or run another allowlisted CLI. Do not say you will check — call the exec tool with the command; you will get the real output and then answer. "
             "For long-running commands, exec supports background/yield (background=true or yield_ms). "
             "When exec returns status=running with session_id, use the process tool to manage it: list, poll, log, write, kill, clear, remove. "
-            "If exec tool output says 'approval-needed' with an id, ask the user to approve it with /approve <id> once or /approve <id> always (or /deny <id>) before retrying. "
+            "If exec tool output says 'approval-needed' with an id, tell the user approval is blocking the action and to open /approvals and tap Once, Always, or Deny. "
             "Fallback: if the exec tool is not available, you can output [ASTA_EXEC: command][/ASTA_EXEC] (e.g. [ASTA_EXEC: memo notes][/ASTA_EXEC]) in your reply."
         )
         parts.append("")
@@ -85,9 +85,10 @@ async def build_context(
 
     # 3a3. Cron (Claw-style recurring jobs): use cron tool actions for recurring schedules
     parts.append(
-        "[CRON] For recurring jobs, use the cron tool (actions: status, list, add, update, remove). "
+        "[CRON] For recurring jobs, use the cron tool (actions: status, list, add, update, remove, run, runs, wake). "
         "Use 5-field cron expressions: minute hour day month day_of_week (e.g. 0 8 * * * means every day at 08:00). "
-        "When adding, provide name, cron_expr, and message; tz is optional."
+        "When adding, provide name, cron_expr, and message; tz is optional. "
+        "Use run with id to trigger immediately (run_mode=force|due), runs to inspect recent execution history, and wake to refresh scheduler state."
     )
     parts.append("")
 

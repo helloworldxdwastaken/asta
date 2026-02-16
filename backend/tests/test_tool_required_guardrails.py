@@ -200,3 +200,42 @@ async def test_bracket_files_protocol_executes_tools_and_does_not_leak():
     assert "[allow_path:" not in low
     assert "[list_directory:" not in low
     assert "i found 4 screenshots" in low
+
+
+@pytest.mark.asyncio
+async def test_workspace_notes_list_uses_deterministic_fallback(monkeypatch):
+    async def _fake_get_workspace_notes(limit: int = 20):
+        return {
+            "notes": [
+                {
+                    "name": "work-door-design.md",
+                    "path": "notes/work-door-design.md",
+                    "size": 1200,
+                    "modified_at": "2026-02-16T18:20:00Z",
+                },
+                {
+                    "name": "shopping.md",
+                    "path": "notes/shopping.md",
+                    "size": 600,
+                    "modified_at": "2026-02-15T10:00:00Z",
+                },
+            ]
+        }
+
+    monkeypatch.setattr("app.routers.settings.get_workspace_notes", _fake_get_workspace_notes)
+
+    with (
+        patch("app.handler.get_provider", return_value=_DummyProvider()),
+        patch("app.compaction.compact_history", side_effect=_fake_compact_history),
+        patch("app.providers.fallback.chat_with_fallback", side_effect=_fake_chat_with_fallback_no_tools),
+    ):
+        reply = await handle_message(
+            user_id="test-workspace-notes-fallback",
+            channel="web",
+            text="What notes I have?",
+            provider_name="openai",
+        )
+
+    assert "You have 2 workspace note(s)" in reply
+    assert "work-door-design.md" in reply
+    assert "notes/work-door-design.md" in reply

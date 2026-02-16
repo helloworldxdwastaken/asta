@@ -18,6 +18,7 @@ from pathlib import Path
 from app.exec_tool import (
     MAX_OUTPUT_BYTES,
     MAX_TIMEOUT_SECONDS,
+    build_exec_runtime_argv,
     prepare_allowlisted_command,
     resolve_safe_workdir,
 )
@@ -413,6 +414,7 @@ async def run_exec_with_process_support(
     if err:
         return {"status": "failed", "error": err}
     assert parts is not None
+    runtime_argv = build_exec_runtime_argv(command, parts)
     cwd = resolve_safe_workdir(workdir)
     if workdir and cwd is None:
         return {"status": "failed", "error": "Invalid workdir. Use a directory under your home or workspace."}
@@ -423,7 +425,7 @@ async def run_exec_with_process_support(
     y_ms = DEFAULT_YIELD_MS if yield_ms is None else max(10, min(int(yield_ms), 120_000))
 
     s = await _spawn_session(
-        parts,
+        runtime_argv,
         command=command,
         cwd=cwd,
         timeout_seconds=timeout,

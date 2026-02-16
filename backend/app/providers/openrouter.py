@@ -14,6 +14,10 @@ from app.providers.base import (
     merge_stream_tool_call_delta,
 )
 from app.keys import get_api_key
+from app.model_policy import (
+    OPENROUTER_DEFAULT_MODEL_CHAIN,
+    classify_openrouter_model_csv,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -76,8 +80,8 @@ def _extract_tool_call_from_text(text: str, allowed_names: set[str]) -> tuple[li
     ]
     cleaned = (text[: m.start()] + text[m.end() :]).strip()
     return tool_calls, cleaned
-# Free model; user can set any OpenRouter model in Settings (e.g. arcee-ai/trinity-large-preview:free)
-DEFAULT_MODEL = "arcee-ai/trinity-large-preview:free"
+# Tool-stable default chain (Kimi primary, Trinity fallback).
+DEFAULT_MODEL = OPENROUTER_DEFAULT_MODEL_CHAIN
 # Timeout per model attempt (seconds). 60 helps when we send large tool output (e.g. memo notes) and wait for a summary.
 MODEL_TIMEOUT = 60
 
@@ -164,15 +168,26 @@ class OpenRouterProvider(BaseProvider):
                     msg["tool_call_id"] = m["tool_call_id"]
                 msgs.append(msg)
 
-        # Support comma-separated models: first is primary, rest are fallbacks
-        model_raw = kwargs.get("model") or DEFAULT_MODEL
+        # Support comma-separated models: first is primary, rest are fallbacks.
+        # Guardrail: keep OpenRouter model selection on Kimi/Trinity families for tool reliability.
+        model_raw = str(kwargs.get("model") or DEFAULT_MODEL).strip()
         if image_bytes:
             # Force vision model if image present
             model_raw = "nvidia/nemotron-nano-12b-v2-vl:free"
+        else:
+            allowed_models, rejected_models = classify_openrouter_model_csv(model_raw)
+            if rejected_models:
+                logger.warning(
+                    "OpenRouter model policy dropped unsupported model(s): %s",
+                    ", ".join(rejected_models),
+                )
+            if not allowed_models:
+                allowed_models, _ = classify_openrouter_model_csv(DEFAULT_MODEL)
+            model_raw = ",".join(allowed_models)
             
         models = [m.strip() for m in model_raw.split(",") if m.strip()]
         if not models:
-            models = [DEFAULT_MODEL]
+            models = [m.strip() for m in DEFAULT_MODEL.split(",") if m.strip()]
 
         last_error = ""
         for i, model in enumerate(models):
@@ -301,13 +316,23 @@ class OpenRouterProvider(BaseProvider):
                     msg["tool_call_id"] = m["tool_call_id"]
                 msgs.append(msg)
 
-        model_raw = kwargs.get("model") or DEFAULT_MODEL
+        model_raw = str(kwargs.get("model") or DEFAULT_MODEL).strip()
         if image_bytes:
             model_raw = "nvidia/nemotron-nano-12b-v2-vl:free"
+        else:
+            allowed_models, rejected_models = classify_openrouter_model_csv(model_raw)
+            if rejected_models:
+                logger.warning(
+                    "OpenRouter model policy dropped unsupported model(s): %s",
+                    ", ".join(rejected_models),
+                )
+            if not allowed_models:
+                allowed_models, _ = classify_openrouter_model_csv(DEFAULT_MODEL)
+            model_raw = ",".join(allowed_models)
 
         models = [m.strip() for m in model_raw.split(",") if m.strip()]
         if not models:
-            models = [DEFAULT_MODEL]
+            models = [m.strip() for m in DEFAULT_MODEL.split(",") if m.strip()]
 
         last_error = ""
         for i, model in enumerate(models):

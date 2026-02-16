@@ -81,6 +81,7 @@ export default function Dashboard() {
   const connected = !error && status;
   const pendingReminders = notifications.filter(n => n.status === 'pending');
   const scheduleCount = pendingReminders.length + cronCount;
+  const latestWorkspaceNote = workspaceNotes[0];
 
   return (
     <div className="dashboard-container">
@@ -226,7 +227,7 @@ export default function Dashboard() {
             <div className="vision-status">
               <div className="model-badge">
                 <span className="model-label">Multimodal VL</span>
-                <span className="model-name">{apis.openrouter ? "Nemotron-Nano 12B" : "—"}</span>
+                <span className="model-name">{apis.openrouter ? "Nemotron-Nano 12B (vision)" : "—"}</span>
               </div>
               {apis.openrouter ? (
                 <>
@@ -299,25 +300,16 @@ export default function Dashboard() {
                 <p className="desc">Local markdown notes in workspace/notes</p>
               </div>
             </div>
-            <div className="memory-list">
-              {workspaceNotes.length === 0 ? (
-                <div className="empty-state">
-                  No notes yet. Ask Asta: "take a note..." or create one in Files under <code>notes/</code>.
-                </div>
-              ) : (
-                <ul>
-                  {workspaceNotes.slice(0, 5).map((note) => (
-                    <li key={note.path}>
-                      <span className="time">
-                        {new Date(note.modified_at).toLocaleDateString([], { month: "short", day: "numeric" })}
-                      </span>
-                      <span className="msg" title={note.path}>{note.name}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
+            <div className="stat-and-link">
+              <div className="stat-value">{workspaceNotes.length}</div>
+              <div className="stat-label">{workspaceNotes.length === 1 ? "workspace note" : "workspace notes"}</div>
+              <div className="help" style={{ marginTop: "0.25rem" }}>
+                {latestWorkspaceNote
+                  ? `Last updated ${new Date(latestWorkspaceNote.modified_at).toLocaleDateString([], { month: "short", day: "numeric" })}`
+                  : "No notes yet"}
+              </div>
             </div>
-            <Link to="/files" className="setup-link">Open Files →</Link>
+            <Link to="/notes" className="setup-link">Open Notes →</Link>
           </div>
 
           {/* ─── 3c. SCHEDULE (reminders + cron) ─── */}
@@ -380,6 +372,8 @@ export default function Dashboard() {
             display: flex;
             justify-content: space-between;
             align-items: center;
+            gap: 1rem;
+            flex-wrap: wrap;
             margin-bottom: 2.5rem;
             padding: 1.5rem 0;
             border-bottom: 1px solid var(--border);
@@ -401,6 +395,8 @@ export default function Dashboard() {
             display: flex;
             align-items: center;
             gap: 0.5rem;
+            flex-wrap: wrap;
+            max-width: 100%;
             padding: 0.5rem 1rem;
             border-radius: 99px;
             font-weight: 500;
@@ -453,13 +449,13 @@ export default function Dashboard() {
         .bento-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
-            gap: 2rem;
+            gap: 1.5rem;
         }
         .bento-card {
             background: #ffffff;
             border: 1px solid var(--border);
             border-radius: 20px;
-            padding: 2rem;
+            padding: 1.75rem;
             display: flex;
             flex-direction: column;
             transition: transform 0.2s ease, box-shadow 0.25s ease, border-color 0.2s;
@@ -518,16 +514,64 @@ export default function Dashboard() {
         .stat-and-link .setup-link { margin-top: 0.5rem; }
 
         /* Responsive */
-        @media (max-width: 1100px) {
-            .bento-grid { grid-template-columns: 1fr 1fr; gap: 1.5rem; }
-            .brain-section, .body-section, .vision-section, .connectors-section, .memory-section, .cron-section, .skills-section { grid-column: span 1; }
+        @media (max-width: 1460px) {
+            .dashboard-container { padding: 0 1.5rem 3.25rem; }
+            .bento-grid { grid-template-columns: repeat(3, 1fr); gap: 1.25rem; }
+            .brain-section, .vision-section, .connectors-section, .memory-section, .cron-section, .skills-section { grid-column: span 1; }
             .body-section { grid-column: span 2; }
         }
-        @media (max-width: 700px) {
-            .dashboard-container { padding: 0 1rem 3rem; }
-            .bento-grid { grid-template-columns: 1fr; gap: 1.25rem; }
-            .body-section { grid-column: span 1; }
-            .bento-card { padding: 1.5rem; }
+        @media (max-width: 1180px) {
+            .dashboard-container { padding: 0 1.1rem 3rem; }
+            .dashboard-header {
+                align-items: flex-start;
+                margin-bottom: 1.75rem;
+                padding: 1.1rem 0;
+            }
+            .system-status-badge {
+                width: 100%;
+                justify-content: flex-start;
+            }
+            .bento-grid { grid-template-columns: repeat(2, 1fr); gap: 1rem; }
+            .brain-section, .vision-section, .connectors-section, .memory-section, .cron-section, .skills-section { grid-column: span 1; }
+            .body-section { grid-column: span 2; }
+            .bento-card { padding: 1.35rem; border-radius: 16px; }
+            .card-header { gap: 0.9rem; margin-bottom: 1.1rem; padding-bottom: 0.95rem; }
+            .icon { width: 50px; height: 50px; font-size: 1.6rem; border-radius: 14px; }
+            .connectors-list { grid-template-columns: 1fr; gap: 0.8rem; }
+            .vitals-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.85rem; }
+            .uptime-box, .update-prompt { grid-column: span 2; margin-top: 0.65rem; }
+        }
+        @media (max-width: 820px) {
+            .dashboard-container { padding: 0 0.9rem 2.75rem; }
+            .dashboard-header .title { font-size: 1.55rem; }
+            .dashboard-header .subtitle { font-size: 0.88rem; }
+            .bento-grid { grid-template-columns: 1fr; gap: 0.9rem; }
+            .brain-section, .body-section, .vision-section, .connectors-section, .memory-section, .cron-section, .skills-section { grid-column: span 1; }
+            .bento-card { padding: 1.1rem; border-radius: 14px; }
+            .card-header h2 { font-size: 1.05rem; }
+            .vitals-grid { grid-template-columns: 1fr; }
+            .uptime-box, .update-prompt { grid-column: span 1; }
+            .update-prompt {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 0.55rem;
+                padding: 0.8rem 0.9rem;
+            }
+            .setup-link {
+                text-align: left;
+                margin-top: 0.75rem;
+            }
+        }
+        @media (max-width: 560px) {
+            .dashboard-container { padding: 0 0.7rem 2.5rem; }
+            .dashboard-header .title { font-size: 1.35rem; }
+            .system-status-badge {
+                padding: 0.45rem 0.7rem;
+                font-size: 0.8rem;
+            }
+            .bento-card { padding: 1rem; }
+            .status-row { padding: 0.7rem 0.8rem; }
+            .stat-value { font-size: 1.6rem; }
         }
 
         /* Brain Lists */
@@ -536,6 +580,7 @@ export default function Dashboard() {
         .status-row {
             display: flex;
             align-items: center;
+            justify-content: space-between;
             gap: 0.85rem;
             padding: 0.85rem 1.15rem;
             border-radius: 12px;
@@ -549,8 +594,8 @@ export default function Dashboard() {
         .status-row-content { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
         .status-row .label { font-weight: 600; color: var(--text); font-size: 0.95rem; }
         .status-row.active .label { color: var(--success-dark, #15803d); }
-        .status-row .model-name { font-size: 0.75rem; opacity: 0.85; color: var(--muted); }
-        .status-row .model-list { font-size: 0.75rem; opacity: 0.8; color: var(--muted); display: block; margin-top: 0.2rem; }
+        .status-row .model-name { font-size: 0.75rem; opacity: 0.85; color: var(--muted); overflow-wrap: anywhere; }
+        .status-row .model-list { font-size: 0.75rem; opacity: 0.8; color: var(--muted); display: block; margin-top: 0.2rem; overflow-wrap: anywhere; }
         .status-row .state { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--success); }
         .provider-logo-img { border: 1px solid var(--border); }
 
@@ -591,7 +636,9 @@ export default function Dashboard() {
             justify-content: space-between;
             align-items: center;
             padding: 0 1.5rem;
-            height: 40px;
+            min-height: 40px;
+            height: auto;
+            gap: 0.6rem;
         }
         .update-prompt {
             grid-column: span 3;
@@ -657,18 +704,13 @@ export default function Dashboard() {
         }
 
         /* Memory */
-        .memory-list ul { list-style: none; padding: 0; margin: 0; }
-        .memory-list li {
-            display: flex;
-            gap: 0.85rem;
-            padding: 0.85rem 0;
-            border-bottom: 1px solid var(--border);
-            font-size: 0.9rem;
+        .memory-list { display: flex; flex-direction: column; min-height: 0; }
+        .loading-state {
+            text-align: center;
+            color: var(--muted);
+            font-style: italic;
+            padding: 0.75rem 0;
         }
-        .memory-list .time { color: var(--muted); font-mono: monospace; font-size: 0.8rem; }
-        .memory-list .msg { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .del-btn { background: none; border: none; color: var(--muted); cursor: pointer; }
-        .del-btn:hover { color: var(--destroy); }
         .empty-state { text-align: center; padding: 2rem; color: var(--muted); font-size: 0.9rem; font-style: italic; }
 
         .setup-link {
@@ -682,7 +724,6 @@ export default function Dashboard() {
         .setup-link:hover { text-decoration: underline; }
         .dashboard-inline-link { color: var(--primary); font-weight: 500; text-decoration: none; }
         .dashboard-inline-link:hover { text-decoration: underline; }
-
         /* Vision Section specific */
         .vision-section {
             background: linear-gradient(160deg, #ffffff 0%, #faf5ff 35%, #f8fafc 100%);

@@ -2,13 +2,25 @@
 from __future__ import annotations
 
 import json
+import re
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from app.cron_runner import CRON_JOB_PREFIX, add_cron_job_to_scheduler
+from app.cron_runner import (
+    CRON_JOB_PREFIX,
+    add_cron_job_to_scheduler,
+    reload_cron_jobs,
+    run_cron_job_now,
+)
 from app.tasks.scheduler import get_scheduler
 
 if TYPE_CHECKING:
     from app.db import Db
+
+
+_CRON_ACTIONS = ("status", "list", "add", "update", "remove", "run", "runs", "wake")
+_CRON_WAKE_MODES = ("now", "next-heartbeat")
+_CRON_RUN_MODES = ("due", "force")
 
 
 def get_cron_tool_openai_def() -> list[dict]:
@@ -19,7 +31,7 @@ def get_cron_tool_openai_def() -> list[dict]:
                 "name": "cron",
                 "description": (
                     "Manage recurring cron jobs. "
-                    "Actions: status, list, add, update, remove. "
+                    "Actions: status, list, add, update, remove, run, runs, wake. "
                     "Use for recurring schedules like daily/weekly reminders."
                 ),
                 "parameters": {
@@ -27,9 +39,10 @@ def get_cron_tool_openai_def() -> list[dict]:
                     "properties": {
                         "action": {
                             "type": "string",
-                            "enum": ["status", "list", "add", "update", "remove"],
+                            "enum": list(_CRON_ACTIONS),
                         },
-                        "id": {"type": "integer", "description": "Cron job id for update/remove."},
+                        "id": {"type": "integer", "description": "Cron job id (update/remove/run/runs)."},
+                        "jobId": {"type": "integer", "description": "Alias for id (run/runs/update/remove)."},
                         "name": {"type": "string", "description": "Cron job name."},
                         "cron_expr": {
                             "type": "string",
@@ -43,6 +56,32 @@ def get_cron_tool_openai_def() -> list[dict]:
                             "type": "string",
                             "description": "Message to run when cron triggers.",
                         },
+                        "job": {
+                            "type": "object",
+                            "description": "Optional nested job object (flattened add recovery).",
+                        },
+                        "patch": {
+                            "type": "object",
+                            "description": "Optional nested patch object (update recovery).",
+                        },
+                        "runMode": {
+                            "type": "string",
+                            "enum": list(_CRON_RUN_MODES),
+                            "description": "Run mode for action=run: due or force (default force).",
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": list(_CRON_WAKE_MODES),
+                            "description": "Wake mode for action=wake: now or next-heartbeat.",
+                        },
+                        "text": {
+                            "type": "string",
+                            "description": "Optional wake text metadata.",
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Max run history rows for action=runs (1-100, default 20).",
+                        },
                     },
                     "required": ["action"],
                 },
@@ -51,14 +90,184 @@ def get_cron_tool_openai_def() -> list[dict]:
     ]
 
 
+def _parse_inline_args(raw: str) -> dict[str, str]:
+    args: dict[str, str] = {}
+    for m in re.finditer(
+        r"""([A-Za-z_][\w\-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^,\]]+))""",
+        raw or "",
+    ):
+        key = (m.group(1) or "").strip()
+        if not key:
+            continue
+        args[key] = (m.group(2) or m.group(3) or m.group(4) or "").strip()
+    return args
+
+
+def _as_int(value) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and float(value).is_integer():
+        return int(value)
+    if isinstance(value, str):
+        v = value.strip()
+        if v.isdigit():
+            return int(v)
+    return None
+
+
+def _pick_first(record: dict, keys: tuple[str, ...]):
+    for key in keys:
+        if key in record and record.get(key) is not None:
+            return record.get(key)
+    return None
+
+
+def _to_str(value) -> str:
+    return str(value).strip() if value is not None else ""
+
+
+def _normalize_add_from_job(job_obj: dict) -> dict:
+    out: dict[str, object] = {}
+    name = _to_str(_pick_first(job_obj, ("name", "job_name", "jobName", "title")))
+    if name:
+        out["name"] = name
+    cron_expr = _to_str(_pick_first(job_obj, ("cron_expr", "cron", "expr", "cronExpr")))
+    tz = _to_str(_pick_first(job_obj, ("tz", "timezone")))
+    message = _to_str(_pick_first(job_obj, ("message", "msg", "text")))
+
+    schedule = job_obj.get("schedule")
+    if isinstance(schedule, dict):
+        schedule_kind = _to_str(schedule.get("kind")).lower()
+        if schedule_kind == "cron":
+            cron_expr = _to_str(_pick_first(schedule, ("expr", "cron_expr", "cron", "cronExpr"))) or cron_expr
+            tz = _to_str(_pick_first(schedule, ("tz", "timezone"))) or tz
+        elif schedule_kind:
+            out["schedule_kind"] = schedule_kind
+
+    payload = job_obj.get("payload")
+    if isinstance(payload, dict):
+        payload_kind = _to_str(payload.get("kind")).lower()
+        if payload_kind == "systemevent":
+            message = _to_str(_pick_first(payload, ("text", "message"))) or message
+        elif payload_kind == "agentturn":
+            message = _to_str(_pick_first(payload, ("message", "text"))) or message
+        elif payload_kind:
+            out["payload_kind"] = payload_kind
+
+    if cron_expr:
+        out["cron_expr"] = cron_expr
+    if tz:
+        out["tz"] = tz
+    if message:
+        out["message"] = message
+    return out
+
+
+def _normalize_cron_params(raw: dict) -> dict:
+    params = dict(raw or {})
+    action = _to_str(params.get("action")).lower()
+    if action not in _CRON_ACTIONS:
+        return params
+    out: dict[str, object] = {"action": action}
+
+    if action == "add":
+        job_obj = params.get("job")
+        if isinstance(job_obj, dict):
+            out.update(_normalize_add_from_job(job_obj))
+
+        name = _to_str(_pick_first(params, ("name", "jobName", "job_name", "title")))
+        cron_expr = _to_str(_pick_first(params, ("cron_expr", "cron", "expr", "cronExpr")))
+        tz = _to_str(_pick_first(params, ("tz", "timezone")))
+        message = _to_str(_pick_first(params, ("message", "msg", "text")))
+
+        if name:
+            out["name"] = name
+        if cron_expr:
+            out["cron_expr"] = cron_expr
+        if tz:
+            out["tz"] = tz
+        if message:
+            out["message"] = message
+        return out
+
+    if action == "update":
+        job_id = _as_int(_pick_first(params, ("id", "jobId")))
+        if job_id is not None:
+            out["id"] = job_id
+        patch = params.get("patch")
+        if isinstance(patch, dict):
+            patch_norm = _normalize_add_from_job(patch)
+            for key in ("name", "cron_expr", "tz", "message"):
+                v = patch_norm.get(key)
+                if isinstance(v, str) and v.strip():
+                    out[key] = v.strip()
+        for key_group, target_key in (
+            (("name", "jobName", "job_name", "title"), "name"),
+            (("cron_expr", "cron", "expr", "cronExpr"), "cron_expr"),
+            (("tz", "timezone"), "tz"),
+            (("message", "msg", "text"), "message"),
+        ):
+            value = _to_str(_pick_first(params, key_group))
+            if value:
+                out[target_key] = value
+        return out
+
+    if action == "remove":
+        job_id = _as_int(_pick_first(params, ("id", "jobId")))
+        if job_id is not None:
+            out["id"] = job_id
+        name = _to_str(params.get("name"))
+        if name:
+            out["name"] = name
+        return out
+
+    if action == "run":
+        job_id = _as_int(_pick_first(params, ("id", "jobId")))
+        if job_id is not None:
+            out["id"] = job_id
+        run_mode = _to_str(_pick_first(params, ("runMode", "run_mode", "mode"))).lower()
+        if run_mode in _CRON_RUN_MODES:
+            out["run_mode"] = run_mode
+        return out
+
+    if action == "runs":
+        job_id = _as_int(_pick_first(params, ("id", "jobId")))
+        if job_id is not None:
+            out["id"] = job_id
+        limit = _as_int(params.get("limit"))
+        if limit is not None:
+            out["limit"] = max(1, min(limit, 100))
+        return out
+
+    if action == "wake":
+        mode = _to_str(params.get("mode")).lower()
+        if mode in _CRON_WAKE_MODES:
+            out["mode"] = mode
+        text = _to_str(params.get("text"))
+        if text:
+            out["text"] = text
+        return out
+
+    return out
+
+
 def parse_cron_tool_args(arguments_str: str | dict) -> dict:
     if isinstance(arguments_str, dict):
-        return arguments_str
+        return _normalize_cron_params(arguments_str)
     try:
         data = json.loads(arguments_str)
-        return data if isinstance(data, dict) else {}
+        if isinstance(data, dict):
+            return _normalize_cron_params(data)
     except (json.JSONDecodeError, TypeError):
-        return {}
+        pass
+
+    if isinstance(arguments_str, str):
+        inline = _parse_inline_args(arguments_str)
+        if inline:
+            return _normalize_cron_params(inline)
+    return {}
 
 
 async def run_cron_tool(
@@ -69,6 +278,8 @@ async def run_cron_tool(
     channel_target: str,
     db: "Db",
 ) -> str:
+    action = (params.get("action") or "").strip().lower()
+    params = _normalize_cron_params(params)
     action = (params.get("action") or "").strip().lower()
     await db.connect()
     sch = get_scheduler()
@@ -92,6 +303,12 @@ async def run_cron_tool(
         cron_expr = (params.get("cron_expr") or "").strip()
         message = (params.get("message") or "").strip()
         tz = (params.get("tz") or "").strip() or None
+        schedule_kind = (params.get("schedule_kind") or "").strip().lower()
+        payload_kind = (params.get("payload_kind") or "").strip().lower()
+        if schedule_kind and schedule_kind != "cron":
+            return "Error: add only supports cron schedule.kind='cron' in Asta."
+        if payload_kind and payload_kind not in ("systemevent", "agentturn"):
+            return f"Error: unsupported payload kind '{payload_kind}' for cron add."
         if not name or not cron_expr or not message:
             return "Error: add requires `name`, `cron_expr`, and `message`."
 
@@ -124,7 +341,7 @@ async def run_cron_tool(
         )
 
     if action == "update":
-        job_id = params.get("id")
+        job_id = _as_int(params.get("id"))
         if not isinstance(job_id, int) or job_id <= 0:
             return "Error: update requires integer `id`."
         name = (params.get("name") or "").strip() or None
@@ -164,7 +381,7 @@ async def run_cron_tool(
         return json.dumps({"ok": True, "job": updated}, indent=0)
 
     if action == "remove":
-        job_id = params.get("id")
+        job_id = _as_int(params.get("id"))
         name = (params.get("name") or "").strip()
         removed = False
         removed_ids: list[int] = []
@@ -185,4 +402,71 @@ async def run_cron_tool(
                 sch.remove_job(sched_id)
         return json.dumps({"ok": bool(removed), "removed_ids": removed_ids}, indent=0)
 
-    return "Error: unknown action. Use one of: status, list, add, update, remove."
+    if action == "run":
+        job_id = _as_int(params.get("id"))
+        if not isinstance(job_id, int) or job_id <= 0:
+            return "Error: run requires integer `id`."
+        row = await db.get_cron_job(job_id)
+        if not row or (row.get("user_id") or "") != user_id:
+            return f"Error: cron job id {job_id} not found."
+        run_mode = (params.get("run_mode") or "force").strip().lower()
+        if run_mode not in _CRON_RUN_MODES:
+            run_mode = "force"
+        if run_mode == "due":
+            sched_id = f"{CRON_JOB_PREFIX}{job_id}"
+            sched_job = sch.get_job(sched_id)
+            next_run_at = getattr(sched_job, "next_run_time", None) if sched_job else None
+            now_utc = datetime.now(timezone.utc)
+            if next_run_at is None or next_run_at > now_utc:
+                await db.add_cron_job_run(
+                    cron_job_id=job_id,
+                    user_id=user_id,
+                    trigger="manual",
+                    run_mode="due",
+                    status="skipped_not_due",
+                    output="Cron run skipped because next run is not due yet.",
+                )
+                return json.dumps(
+                    {
+                        "ok": False,
+                        "id": job_id,
+                        "status": "skipped_not_due",
+                        "run_mode": "due",
+                        "next_run_at": next_run_at.isoformat() if next_run_at else None,
+                    },
+                    indent=0,
+                )
+        result = await run_cron_job_now(job_id, run_mode=run_mode)
+        return json.dumps(result, indent=0)
+
+    if action == "runs":
+        job_id = _as_int(params.get("id"))
+        if not isinstance(job_id, int) or job_id <= 0:
+            return "Error: runs requires integer `id`."
+        row = await db.get_cron_job(job_id)
+        if not row or (row.get("user_id") or "") != user_id:
+            return f"Error: cron job id {job_id} not found."
+        limit = _as_int(params.get("limit")) or 20
+        runs = await db.get_cron_job_runs(user_id=user_id, cron_job_id=job_id, limit=limit)
+        return json.dumps({"job_id": job_id, "runs": runs}, indent=0)
+
+    if action == "wake":
+        mode = (params.get("mode") or "next-heartbeat").strip().lower()
+        if mode not in _CRON_WAKE_MODES:
+            mode = "next-heartbeat"
+        text = (params.get("text") or "").strip()
+        if mode == "now":
+            await reload_cron_jobs()
+        cron_jobs = [j for j in sch.get_jobs() if (j.id or "").startswith(CRON_JOB_PREFIX)]
+        return json.dumps(
+            {
+                "ok": True,
+                "mode": mode,
+                "scheduler_running": bool(getattr(sch, "running", False)),
+                "scheduled_cron_jobs": len(cron_jobs),
+                "text": text or None,
+            },
+            indent=0,
+        )
+
+    return "Error: unknown action. Use one of: status, list, add, update, remove, run, runs, wake."

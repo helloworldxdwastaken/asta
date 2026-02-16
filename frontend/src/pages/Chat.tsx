@@ -28,9 +28,10 @@ export default function Chat() {
   const [loadingHistory, setLoadingHistory] = useState(true);
   const bottom = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const pollRef = useRef<number | null>(null);
   const [requestStartedAt, setRequestStartedAt] = useState<number | null>(null);
   const [elapsedSec, setElapsedSec] = useState(0);
+  const [liveAssistant, setLiveAssistant] = useState("");
+  const [liveReasoning, setLiveReasoning] = useState("");
 
   const conversationId = `${USER_ID}:${channel}`;
 
@@ -84,15 +85,6 @@ export default function Chat() {
   }, [messages]);
 
   useEffect(() => {
-    return () => {
-      if (pollRef.current != null) {
-        window.clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
     if (!loading || requestStartedAt == null) {
       setElapsedSec(0);
       return;
@@ -116,17 +108,26 @@ export default function Chat() {
     setMessages((m) => [...m, { role: "user", content: text }]);
     setLoading(true);
     setRequestStartedAt(Date.now());
-    if (pollRef.current != null) {
-      window.clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-    pollRef.current = window.setInterval(() => {
-      void syncMessages();
-    }, 1000);
+    setLiveAssistant("");
+    setLiveReasoning("");
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 120_000); // 120s for exec (e.g. Apple Notes)
     try {
-      const r = await api.chat(text, provider, conversationId, controller.signal);
+      const r = await api.chatStream(text, provider, conversationId, {
+        signal: controller.signal,
+        onEvent: (event, payload) => {
+          if (event === "assistant") {
+            const textPayload = String(payload.text ?? "").trim();
+            if (textPayload) setLiveAssistant(textPayload);
+            return;
+          }
+          if (event === "reasoning") {
+            const textPayload = String(payload.text ?? "").trim();
+            if (textPayload) setLiveReasoning(textPayload);
+            return;
+          }
+        },
+      });
       const synced = await syncMessages();
       if (!synced) {
         const reply = (r.reply || "").trim();
@@ -148,13 +149,11 @@ export default function Chat() {
       ]);
     } finally {
       clearTimeout(timeoutId);
-      if (pollRef.current != null) {
-        window.clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
       setLoading(false);
       setRequestStartedAt(null);
       setElapsedSec(0);
+      setLiveAssistant("");
+      setLiveReasoning("");
     }
   };
 
@@ -259,14 +258,25 @@ export default function Chat() {
                   <div className="chat-bubble">{m.content}</div>
                 </div>
               ))}
-              {loading && (
+              {loading && liveReasoning && (
+                <div className="chat-msg assistant">
+                  <span className="chat-msg-label">Reasoning</span>
+                  <div className="chat-bubble">{liveReasoning}</div>
+                </div>
+              )}
+              {loading && liveAssistant ? (
+                <div className="chat-msg assistant">
+                  <span className="chat-msg-label">Asta</span>
+                  <div className="chat-bubble">{liveAssistant}</div>
+                </div>
+              ) : loading ? (
                 <div className="chat-msg assistant">
                   <span className="chat-msg-label">Asta</span>
                   <div className="chat-bubble chat-bubble-typing">
                     <span className="chat-typing-dots"><span></span><span></span><span></span></span>
                   </div>
                 </div>
-              )}
+              ) : null}
             </div>
           )}
           <div ref={bottom} />

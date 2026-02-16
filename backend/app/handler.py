@@ -5,6 +5,8 @@ import json
 import re
 import html
 import shlex
+from pathlib import Path
+from inspect import isawaitable
 from typing import Any
 from PIL import Image
 from app.context import build_context
@@ -35,6 +37,12 @@ _EXEC_INTENT_HINTS = (
     "things app",
     "things inbox",
 )
+_APPLE_NOTES_EXPLICIT_HINTS = (
+    "apple notes",
+    "notes.app",
+    "icloud notes",
+    "memo",
+)
 _EXEC_CHECK_VERBS = (
     "check",
     "see",
@@ -45,6 +53,27 @@ _EXEC_CHECK_VERBS = (
     "open",
     "what",
     "do i have",
+)
+_NOTE_CAPTURE_HINTS = (
+    "take a note",
+    "note that",
+    "add a note",
+    "create a note",
+    "quick note",
+    "save this",
+    "write that down",
+    "remember this",
+    "add to my notes",
+    "save a note",
+)
+_WORKSPACE_NOTES_LIST_HINTS = (
+    "what notes",
+    "my notes",
+    "list notes",
+    "show notes",
+    "notes i have",
+    "do i have notes",
+    "which notes",
 )
 
 # Providers that can participate in tool/fallback guardrails.
@@ -120,6 +149,9 @@ _AUTO_SUBAGENT_COMPLEXITY_VERBS = (
 )
 _THINK_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh")
 _REASONING_MODES = ("off", "on", "stream")
+_FINAL_MODES = ("off", "strict")
+# OpenClaw-style: Ollama should not require strict <final> tags.
+_STRICT_FINAL_UNSUPPORTED_PROVIDERS = frozenset({"ollama"})
 _THINK_DIRECTIVE_PATTERN = re.compile(
     r"(?:^|\s)/(?:thinking|think|t)(?=$|\s|:)",
     re.IGNORECASE,
@@ -205,6 +237,78 @@ _TOOL_TRACE_DEFAULT_ACTION = {
     "sessions_stop": "stop",
 }
 
+_MUTATING_TOOL_NAMES = frozenset(
+    {
+        "exec",
+        "bash",
+        "write_file",
+        "allow_path",
+        "delete_file",
+        "delete_matching_files",
+        "write",
+        "edit",
+        "apply_patch",
+        "sessions_spawn",
+        "sessions_send",
+        "sessions_stop",
+    }
+)
+_MUTATING_ACTION_NAMES = frozenset(
+    {
+        "add",
+        "create",
+        "set",
+        "update",
+        "edit",
+        "remove",
+        "delete",
+        "cancel",
+        "clear",
+        "send",
+        "spawn",
+        "stop",
+        "run",
+        "enable",
+        "disable",
+        "pause",
+        "resume",
+    }
+)
+_RECOVERABLE_TOOL_ERROR_KEYWORDS = (
+    "required",
+    "missing",
+    "invalid",
+    "must be",
+    "must have",
+    "needs",
+    "requires",
+)
+
+
+async def _emit_live_stream_event(
+    callback,
+    payload: dict[str, Any],
+) -> None:
+    """Best-effort stream event emitter for web SSE/live callbacks."""
+    if not callable(callback):
+        return
+    try:
+        maybe = callback(payload)
+        if isawaitable(maybe):
+            await maybe
+    except Exception as e:
+        logger.debug("Live stream event callback failed: %s", e)
+
+
+def _compute_incremental_delta(previous: str, current: str) -> str:
+    prev = previous or ""
+    cur = current or ""
+    if not cur:
+        return ""
+    if cur.startswith(prev):
+        return cur[len(prev):]
+    return cur
+
 
 def _is_short_acknowledgment(text: str) -> bool:
     """True if the message is only a short acknowledgment (ok, thanks, etc.)."""
@@ -231,8 +335,107 @@ def _is_exec_check_request(text: str) -> bool:
     return _is_exec_intent(t) and any(v in t for v in _EXEC_CHECK_VERBS)
 
 
+def _is_explicit_apple_notes_request(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    return any(hint in t for hint in _APPLE_NOTES_EXPLICIT_HINTS)
+
+
+def _is_note_capture_request(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    # Apple Notes / memo CLI intents are separate from local markdown note capture.
+    if _is_explicit_apple_notes_request(t):
+        return False
+    return any(hint in t for hint in _NOTE_CAPTURE_HINTS)
+
+
+def _is_workspace_notes_list_request(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    if _is_explicit_apple_notes_request(t):
+        return False
+    if _is_note_capture_request(t):
+        return False
+    if "notes" not in t and "note" not in t:
+        return False
+    if t in {"notes", "note", "my notes"}:
+        return True
+    return any(hint in t for hint in _WORKSPACE_NOTES_LIST_HINTS)
+
+
+def _sanitize_note_path_component(value: str) -> str:
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return ""
+    cleaned = cleaned.replace("\\", "/")
+    cleaned = cleaned.strip("/.")
+    cleaned = re.sub(r"\s+", "-", cleaned)
+    cleaned = re.sub(r"[^A-Za-z0-9._-]", "-", cleaned)
+    cleaned = re.sub(r"-{2,}", "-", cleaned).strip("-_.")
+    return cleaned
+
+
+def _canonicalize_note_write_path(path: str) -> str:
+    """Normalize note writes into workspace-relative notes/* markdown files."""
+    raw = (path or "").strip().replace("\\", "/")
+    if not raw:
+        return "notes/note.md"
+
+    candidate = raw
+    while candidate.startswith("./"):
+        candidate = candidate[2:]
+    if candidate.startswith("~/workspace/"):
+        candidate = candidate[len("~/workspace/") :]
+    elif candidate.startswith("~/"):
+        # For note capture intents, keep notes in workspace/notes even if model emits home paths.
+        candidate = candidate[2:]
+    if Path(candidate).is_absolute():
+        # For note capture intents, keep notes in workspace/notes even if model emits absolute paths.
+        candidate = Path(candidate).as_posix().lstrip("/")
+    while candidate.lower().startswith("workspace/"):
+        candidate = candidate[len("workspace/") :]
+    if candidate.startswith("~/"):
+        candidate = candidate[2:]
+
+    parts = [p for p in candidate.split("/") if p and p not in (".", "..")]
+    lower_parts = [p.lower() for p in parts]
+
+    note_tail: list[str]
+    if "notes" in lower_parts:
+        idx = lower_parts.index("notes")
+        note_tail = parts[idx + 1 :]
+    else:
+        note_tail = [parts[-1]] if parts else []
+
+    sanitized_parts = [_sanitize_note_path_component(part) for part in note_tail]
+    sanitized_parts = [part for part in sanitized_parts if part]
+    if not sanitized_parts:
+        sanitized_parts = ["note.md"]
+
+    filename = sanitized_parts[-1]
+    if "." in filename:
+        stem = filename.rsplit(".", 1)[0]
+        filename = f"{stem}.md" if stem else "note.md"
+    else:
+        filename = f"{filename}.md"
+    sanitized_parts[-1] = filename
+
+    return "notes/" + "/".join(sanitized_parts)
+
+
 def _provider_supports_tools(provider_name: str) -> bool:
     return (provider_name or "").strip().lower() in _TOOL_CAPABLE_PROVIDERS
+
+
+def _provider_supports_strict_final(provider_name: str) -> bool:
+    normalized = (provider_name or "").strip().lower()
+    if not normalized:
+        return True
+    return normalized not in _STRICT_FINAL_UNSUPPORTED_PROVIDERS
 
 
 async def _run_vision_preprocessor(
@@ -484,12 +687,15 @@ async def _emit_reasoning_stream_progressively(
     built: list[str] = []
     for line in lines:
         built.append(line)
+        formatted = _format_reasoning_message("\n".join(built))
+        if not formatted:
+            continue
         await _emit_stream_status(
             db=db,
             conversation_id=conversation_id,
             channel=channel,
             channel_target=channel_target,
-            text=f"Reasoning:\n" + "\n".join(built),
+            text=formatted,
         )
 
 
@@ -502,6 +708,17 @@ def _reasoning_instruction(mode: str) -> str:
         "Before your final answer, you MUST include exactly one brief rationale block inside "
         "<think>...</think>. Do not skip it in this mode. "
         "Keep it short (1-3 lines), factual, and directly tied to tool results when tools are used."
+    )
+
+
+def _final_tag_instruction(mode: str) -> str:
+    fm = (mode or "off").strip().lower()
+    if fm != "strict":
+        return ""
+    return (
+        "\n\n[FINAL]\n"
+        "You MUST wrap user-visible output in exactly one <final>...</final> block. "
+        "Text outside <final> may be hidden."
     )
 
 
@@ -609,23 +826,70 @@ def _strip_pattern_outside_code(
     return "".join(output)
 
 
-def _extract_reasoning_blocks(text: str) -> tuple[str, str]:
+def _apply_reasoning_trim(value: str, mode: str = "both") -> str:
+    trim_mode = (mode or "both").strip().lower()
+    if trim_mode == "none":
+        return value
+    if trim_mode == "start":
+        return value.lstrip()
+    return value.strip()
+
+
+def _extract_final_tag_content(text: str) -> tuple[str, bool]:
+    """Return content inside <final> blocks (code-safe), plus whether a real final tag was seen."""
     raw = (text or "")
     if not raw:
-        return "", ""
+        return "", False
+    code_regions = _build_code_regions(raw)
+    in_final = False
+    saw_final = False
+    last_index = 0
+    out_parts: list[str] = []
+
+    for match in _REASONING_FINAL_TAG_RE.finditer(raw):
+        index = match.start()
+        if _is_inside_code_region(index, code_regions):
+            continue
+        tag_text = match.group(0) or ""
+        is_close = bool(re.match(r"<\s*/", tag_text))
+        if not in_final and not is_close:
+            in_final = True
+            saw_final = True
+            last_index = match.end()
+            continue
+        if in_final and is_close:
+            out_parts.append(raw[last_index:index])
+            in_final = False
+            last_index = match.end()
+
+    if in_final:
+        out_parts.append(raw[last_index:])
+
+    return "".join(out_parts), saw_final
+
+
+def _strip_reasoning_tags_from_text(
+    text: str,
+    *,
+    mode: str = "strict",  # strict | preserve
+    trim: str = "both",    # none | start | both
+    strict_final: bool = False,
+) -> str:
+    """OpenClaw-style thinking/final tag stripping with code-span safety."""
+    raw = (text or "")
+    if not raw:
+        return raw
     if not _REASONING_QUICK_TAG_RE.search(raw):
-        return raw.strip(), ""
+        if strict_final:
+            return ""
+        return _apply_reasoning_trim(raw, trim)
 
     cleaned = raw
-    pre_code_regions = _build_code_regions(cleaned)
-    cleaned = _strip_pattern_outside_code(cleaned, _REASONING_FINAL_TAG_RE, pre_code_regions)
     code_regions = _build_code_regions(cleaned)
 
-    final_parts: list[str] = []
-    reasoning_parts: list[str] = []
+    result_parts: list[str] = []
     in_thinking = False
     last_index = 0
-    reasoning_start = 0
 
     for match in _REASONING_THINK_TAG_RE.finditer(cleaned):
         index = match.start()
@@ -634,27 +898,126 @@ def _extract_reasoning_blocks(text: str) -> tuple[str, str]:
         is_close = bool(match.group(1))
 
         if not in_thinking:
-            final_parts.append(cleaned[last_index:index])
+            result_parts.append(cleaned[last_index:index])
             if not is_close:
                 in_thinking = True
-                reasoning_start = match.end()
         elif is_close:
-            reasoning = cleaned[reasoning_start:index].strip()
-            if reasoning:
-                reasoning_parts.append(reasoning)
             in_thinking = False
 
         last_index = match.end()
 
-    if in_thinking:
-        trailing_reasoning = cleaned[reasoning_start:].strip()
-        if trailing_reasoning:
-            reasoning_parts.append(trailing_reasoning)
-    else:
-        final_parts.append(cleaned[last_index:])
+    mode_norm = (mode or "strict").strip().lower()
+    if (not in_thinking) or mode_norm == "preserve":
+        result_parts.append(cleaned[last_index:])
 
-    final_text = "".join(final_parts).strip()
-    reasoning_text = "\n\n".join(reasoning_parts).strip()
+    without_thinking = "".join(result_parts)
+
+    if strict_final:
+        final_only, saw_final = _extract_final_tag_content(without_thinking)
+        if not saw_final:
+            return ""
+        final_code_regions = _build_code_regions(final_only)
+        final_only = _strip_pattern_outside_code(final_only, _REASONING_FINAL_TAG_RE, final_code_regions)
+        return _apply_reasoning_trim(final_only, trim)
+
+    pre_code_regions = _build_code_regions(without_thinking)
+    without_final_tags = _strip_pattern_outside_code(
+        without_thinking,
+        _REASONING_FINAL_TAG_RE,
+        pre_code_regions,
+    )
+    return _apply_reasoning_trim(without_final_tags, trim)
+
+
+def _extract_thinking_from_tagged_text(text: str) -> str:
+    """Extract text inside closed <think>/<thinking>/<thought>/<antthinking> blocks."""
+    raw = (text or "")
+    if not raw:
+        return ""
+    if not _REASONING_QUICK_TAG_RE.search(raw):
+        return ""
+
+    code_regions = _build_code_regions(raw)
+    reasoning_parts: list[str] = []
+    in_thinking = False
+    reasoning_start = 0
+
+    for match in _REASONING_THINK_TAG_RE.finditer(raw):
+        index = match.start()
+        if _is_inside_code_region(index, code_regions):
+            continue
+        is_close = bool(match.group(1))
+
+        if not in_thinking and not is_close:
+            in_thinking = True
+            reasoning_start = match.end()
+            continue
+
+        if in_thinking and is_close:
+            chunk = raw[reasoning_start:index].strip()
+            if chunk:
+                reasoning_parts.append(chunk)
+            in_thinking = False
+
+    return "\n\n".join(reasoning_parts).strip()
+
+
+def _extract_thinking_from_tagged_stream(text: str) -> str:
+    """Streaming-friendly extraction: closed blocks first, otherwise last open block tail."""
+    raw = (text or "")
+    if not raw:
+        return ""
+    if not _REASONING_QUICK_TAG_RE.search(raw):
+        return ""
+
+    closed = _extract_thinking_from_tagged_text(raw)
+    if closed:
+        return closed
+
+    code_regions = _build_code_regions(raw)
+    last_open_start: int | None = None
+    last_open_end: int | None = None
+    last_close_start: int | None = None
+
+    for match in _REASONING_THINK_TAG_RE.finditer(raw):
+        index = match.start()
+        if _is_inside_code_region(index, code_regions):
+            continue
+        is_close = bool(match.group(1))
+        if is_close:
+            last_close_start = index
+        else:
+            last_open_start = index
+            last_open_end = match.end()
+
+    if last_open_start is None or last_open_end is None:
+        return ""
+    if last_close_start is not None and last_close_start > last_open_start:
+        return closed
+
+    return raw[last_open_end:].strip()
+
+
+def _format_reasoning_message(text: str) -> str:
+    trimmed = (text or "").strip()
+    if not trimmed:
+        return ""
+    return f"Reasoning:\n{trimmed}"
+
+
+def _extract_reasoning_blocks(text: str, *, strict_final: bool = False) -> tuple[str, str]:
+    raw = (text or "")
+    if not raw:
+        return "", ""
+    final_text = _strip_reasoning_tags_from_text(
+        raw,
+        mode="strict",
+        trim="both",
+        strict_final=strict_final,
+    )
+    reasoning_text = _extract_thinking_from_tagged_text(raw)
+    if not reasoning_text:
+        reasoning_text = _extract_thinking_from_tagged_stream(raw)
     return final_text, reasoning_text
 
 
@@ -1015,6 +1378,96 @@ def _render_tool_trace(labels: list[str]) -> str:
     return "Tools used: " + ", ".join(uniq)
 
 
+def _extract_tool_error_message(tool_output: str) -> str:
+    text = (tool_output or "").strip()
+    if not text:
+        return ""
+    lower = text.lower()
+    if lower.startswith("error:"):
+        return text.split(":", 1)[1].strip() or text
+    if lower.startswith("approval-needed:"):
+        return text
+    if lower.startswith("failed:") or lower.startswith("failed "):
+        return text
+
+    parsed: Any
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+
+    if parsed.get("ok") is False or parsed.get("success") is False:
+        for key in ("error", "message", "reason", "detail"):
+            value = parsed.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return "Tool reported failure."
+
+    status = parsed.get("status")
+    if isinstance(status, str) and status.strip().lower() in {"failed", "error"}:
+        for key in ("error", "message", "reason", "detail"):
+            value = parsed.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return f"Tool reported status={status.strip()}."
+
+    return ""
+
+
+def _is_recoverable_tool_error(error_text: str) -> bool:
+    low = (error_text or "").strip().lower()
+    if not low:
+        return False
+    return any(keyword in low for keyword in _RECOVERABLE_TOOL_ERROR_KEYWORDS)
+
+
+def _is_likely_mutating_tool_call(tool_name: str, args: dict[str, Any] | None = None) -> bool:
+    name = (tool_name or "").strip().lower()
+    if name in _MUTATING_TOOL_NAMES:
+        return True
+    action = (args or {}).get("action")
+    action_norm = action.strip().lower() if isinstance(action, str) else ""
+    if name in {"reminders", "cron", "message"}:
+        return action_norm in _MUTATING_ACTION_NAMES
+    return False
+
+
+def _build_tool_action_fingerprint(tool_name: str, args: dict[str, Any] | None = None) -> str:
+    name = (tool_name or "").strip().lower()
+    payload: dict[str, Any] = {}
+    data = args if isinstance(args, dict) else {}
+    for key in (
+        "action",
+        "path",
+        "file_path",
+        "directory",
+        "glob_pattern",
+        "command",
+        "id",
+        "job_id",
+        "reminder_id",
+        "session_id",
+        "name",
+        "channel",
+        "channel_id",
+        "thread_id",
+    ):
+        value = data.get(key)
+        if isinstance(value, (str, int, float, bool)):
+            if isinstance(value, str) and not value.strip():
+                continue
+            payload[key] = value
+    if not payload:
+        return name
+    try:
+        encoded = json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+    except Exception:
+        encoded = str(payload)
+    return f"{name}:{encoded}"
+
+
 def _make_status_message(text: str) -> str:
     return f"{_STATUS_PREFIX}{(text or '').strip()}"
 
@@ -1026,17 +1479,28 @@ async def _emit_stream_status(
     channel: str,
     channel_target: str,
     text: str,
+    stream_event_callback=None,
+    stream_event_type: str = "status",
 ) -> None:
     msg = (text or "").strip()
     if not msg:
         return
+    if callable(stream_event_callback):
+        await _emit_live_stream_event(
+            stream_event_callback,
+            {
+                "type": stream_event_type,
+                "text": msg,
+            },
+        )
     ch = (channel or "").strip().lower()
     if ch in ("telegram", "whatsapp") and channel_target:
         try:
             await send_notification(ch, channel_target, msg)
         except Exception as e:
             logger.debug("Could not send stream status to channel=%s: %s", ch, e)
-    if ch == "web":
+    # For live-stream web requests, status is delivered over SSE and should stay ephemeral.
+    if ch == "web" and not callable(stream_event_callback):
         try:
             await db.add_message(conversation_id, "assistant", _make_status_message(msg), "script")
         except Exception as e:
@@ -2181,6 +2645,45 @@ async def _handle_files_check_fallback(
     return f"I checked {display_path}. It looks empty.", trace
 
 
+async def _handle_workspace_notes_list_fallback(
+    *,
+    text: str,
+    limit: int = 20,
+) -> tuple[str, str] | None:
+    if not _is_workspace_notes_list_request(text):
+        return None
+    from app.routers.settings import get_workspace_notes
+
+    trace = _build_tool_trace_label("read_file", "notes/fallback")
+    try:
+        payload = await get_workspace_notes(limit=limit)
+    except Exception as e:
+        logger.warning("Workspace notes fallback failed: %s", e)
+        return "I couldn't check workspace notes right now.", trace
+
+    rows = payload.get("notes") if isinstance(payload, dict) else None
+    if not isinstance(rows, list) or not rows:
+        return (
+            "You have no workspace notes yet. I can save one for you in notes/ when you say 'take a note ...'.",
+            trace,
+        )
+
+    lines = [f"You have {len(rows)} workspace note(s):"]
+    for idx, row in enumerate(rows[:10], start=1):
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "untitled.md")
+        rel_path = str(row.get("path") or "")
+        modified = str(row.get("modified_at") or "")
+        date_short = modified[:10] if modified else ""
+        suffix = f" (updated {date_short})" if date_short else ""
+        path_part = f" — {rel_path}" if rel_path else ""
+        lines.append(f"{idx}. {name}{path_part}{suffix}")
+    if len(rows) > 10:
+        lines.append(f"... and {len(rows) - 10} more.")
+    return "\n".join(lines), trace
+
+
 async def handle_message(
     user_id: str,
     channel: str,
@@ -2225,6 +2728,13 @@ async def handle_message(
     user_content = f" [Image: {image_mime or 'image/jpeg'}] {text}" if image_bytes else text
     await db.add_message(cid, "user", user_content)
     extra = extra_context or {}
+    stream_event_callback = extra.get("_stream_event_callback")
+    if not callable(stream_event_callback):
+        stream_event_callback = None
+    stream_events_enabled = bool(stream_event_callback) and (channel or "").strip().lower() == "web"
+    streamed_raw_model_text = ""
+    streamed_assistant_text = ""
+    streamed_reasoning_text = ""
     if mood is None:
         mood = await db.get_user_mood(user_id)
     extra["mood"] = mood
@@ -2236,8 +2746,22 @@ async def handle_message(
     reasoning_mode = await db.get_user_reasoning_mode(user_id)
     extra["reasoning_mode"] = reasoning_mode
     reasoning_mode_norm = (reasoning_mode or "").strip().lower()
+    final_mode = await db.get_user_final_mode(user_id)
+    if final_mode not in _FINAL_MODES:
+        final_mode = "off"
+    extra["final_mode"] = final_mode
     if provider_name == "default":
         provider_name = await db.get_user_default_ai(user_id)
+    strict_final_mode_requested = final_mode == "strict"
+    strict_final_mode_enabled = (
+        strict_final_mode_requested
+        and _provider_supports_strict_final(provider_name)
+    )
+    if strict_final_mode_requested and not strict_final_mode_enabled:
+        logger.info(
+            "Strict final mode requested but disabled for provider=%s (OpenClaw-style provider guardrail).",
+            provider_name,
+        )
 
     # OpenClaw-style inline directives:
     # - /t <level>, /think:<level>, /thinking <level>
@@ -2447,6 +2971,7 @@ async def handle_message(
             channel=channel,
             channel_target=channel_target,
             text=" • ".join(skill_labels),
+            stream_event_callback=stream_event_callback,
         )
 
     # Execute skills to gather data (populate `extra`)
@@ -2503,6 +3028,7 @@ async def handle_message(
         )
     context += _thinking_instruction(thinking_level)
     context += _reasoning_instruction(reasoning_mode)
+    context += _final_tag_instruction("strict" if strict_final_mode_enabled else "off")
     if channel != "subagent":
         context += (
             "\n\n[SUBAGENTS]\n"
@@ -2686,6 +3212,8 @@ async def handle_message(
     chat_kwargs = dict(
         context=context, model=user_model or None,
         _fallback_models=fallback_models,
+        _runtime_db=db,
+        _runtime_user_id=user_id,
         image_bytes=image_bytes,
         image_mime=image_mime,
         thinking_level=thinking_level,
@@ -2696,39 +3224,83 @@ async def handle_message(
     allowed_tool_names = _tool_names_from_defs(tools)
 
     live_stream_reasoning_enabled = reasoning_mode_norm == "stream"
+    # Enable provider streaming for real-time web assistant deltas, even when reasoning mode is off.
+    live_model_stream_enabled = live_stream_reasoning_enabled or stream_events_enabled
     live_stream_reasoning_emitted = False
 
-    def _make_reasoning_delta_handler():
-        streamed_text = ""
-        streamed_reasoning = ""
+    async def _emit_live_assistant_text(text_value: str) -> None:
+        nonlocal streamed_assistant_text
+        if not stream_events_enabled:
+            return
+        next_text = (text_value or "").strip()
+        if not next_text or next_text == streamed_assistant_text:
+            return
+        delta = _compute_incremental_delta(streamed_assistant_text, next_text)
+        streamed_assistant_text = next_text
+        await _emit_live_stream_event(
+            stream_event_callback,
+            {
+                "type": "assistant",
+                "text": next_text,
+                "delta": delta,
+            },
+        )
 
-        async def _on_text_delta(delta_text: str) -> None:
-            nonlocal streamed_text, streamed_reasoning, live_stream_reasoning_emitted
-            if not delta_text:
-                return
-            streamed_text += delta_text
-            _, reasoning_live = _extract_reasoning_blocks(streamed_text)
-            reasoning_live = reasoning_live.strip()
-            if not reasoning_live or reasoning_live == streamed_reasoning:
-                return
-            streamed_reasoning = reasoning_live
-            live_stream_reasoning_emitted = True
-            await _emit_stream_status(
-                db=db,
-                conversation_id=cid,
-                channel=channel,
-                channel_target=channel_target,
-                text=f"Reasoning:\n{reasoning_live}",
+    async def _emit_live_reasoning_text(text_value: str) -> None:
+        nonlocal streamed_reasoning_text
+        next_text = (text_value or "").strip()
+        if not next_text or next_text == streamed_reasoning_text:
+            return
+        delta = _compute_incremental_delta(streamed_reasoning_text, next_text)
+        streamed_reasoning_text = next_text
+        if stream_events_enabled:
+            await _emit_live_stream_event(
+                stream_event_callback,
+                {
+                    "type": "reasoning",
+                    "text": next_text,
+                    "delta": delta,
+                },
             )
+            return
+        await _emit_stream_status(
+            db=db,
+            conversation_id=cid,
+            channel=channel,
+            channel_target=channel_target,
+            text=next_text,
+            stream_event_callback=stream_event_callback,
+            stream_event_type="reasoning",
+        )
 
-        return _on_text_delta
+    async def _on_model_text_delta(delta_text: str) -> None:
+        nonlocal streamed_raw_model_text, live_stream_reasoning_emitted
+        if not delta_text:
+            return
+        streamed_raw_model_text += delta_text
+        assistant_live = _strip_reasoning_tags_from_text(
+            streamed_raw_model_text,
+            mode="strict",
+            trim="both",
+            strict_final=strict_final_mode_enabled,
+        )
+        reasoning_live = _extract_thinking_from_tagged_stream(streamed_raw_model_text)
+        assistant_live = _strip_bracket_tool_protocol(_strip_tool_call_markup(assistant_live or "")).strip()
+        reasoning_live = (reasoning_live or "").strip()
+        if assistant_live:
+            await _emit_live_assistant_text(assistant_live)
+        if live_stream_reasoning_enabled and reasoning_live:
+            live_stream_reasoning_emitted = True
+            formatted_reasoning = _format_reasoning_message(reasoning_live)
+            if formatted_reasoning:
+                await _emit_live_reasoning_text(formatted_reasoning)
 
-    if live_stream_reasoning_enabled:
+    if live_model_stream_enabled:
         response, provider_used = await chat_with_fallback_stream(
             provider,
             messages,
             fallback_names,
-            on_text_delta=_make_reasoning_delta_handler(),
+            on_text_delta=_on_model_text_delta,
             **chat_kwargs,
         )
     else:
@@ -2753,12 +3325,66 @@ async def handle_message(
     MAX_TOOL_ROUNDS = 3
     current_messages = list(messages)
     ran_exec_tool = False
+    ran_any_tool = False
     ran_files_tool = False
     ran_reminders_tool = False
     ran_cron_tool = False
     used_tool_labels: list[str] = []
     reminder_tool_scheduled = False
     last_exec_stdout: str = ""
+    last_exec_stderr: str = ""
+    last_exec_command: str = ""
+    last_exec_error: str = ""
+    last_tool_output: str = ""
+    last_tool_label: str = ""
+    last_tool_error: str = ""
+    last_tool_error_label: str = ""
+    last_tool_error_mutating = False
+    last_tool_error_fingerprint: str = ""
+
+    def _record_tool_outcome(
+        *,
+        tool_name: str,
+        tool_output: str,
+        tool_args: dict[str, Any] | None = None,
+        action: str | None = None,
+    ) -> None:
+        nonlocal ran_any_tool, last_tool_output, last_tool_label
+        nonlocal last_tool_error, last_tool_error_label, last_tool_error_mutating, last_tool_error_fingerprint
+
+        ran_any_tool = True
+        label = _build_tool_trace_label(tool_name, action)
+        output_text = (tool_output or "").strip()
+        last_tool_output = output_text
+        last_tool_label = label
+
+        mutating = _is_likely_mutating_tool_call(tool_name, tool_args)
+        fingerprint = _build_tool_action_fingerprint(tool_name, tool_args)
+        error_text = _extract_tool_error_message(output_text)
+        if error_text:
+            last_tool_error = error_text
+            last_tool_error_label = label
+            last_tool_error_mutating = mutating
+            last_tool_error_fingerprint = fingerprint
+            return
+
+        if not last_tool_error:
+            return
+
+        if last_tool_error_mutating:
+            if last_tool_error_fingerprint and fingerprint == last_tool_error_fingerprint:
+                last_tool_error = ""
+                last_tool_error_label = ""
+                last_tool_error_mutating = False
+                last_tool_error_fingerprint = ""
+            return
+
+        # Non-mutating errors are recoverable once any later tool call succeeds.
+        last_tool_error = ""
+        last_tool_error_label = ""
+        last_tool_error_mutating = False
+        last_tool_error_fingerprint = ""
+
     for _ in range(MAX_TOOL_ROUNDS):
         if tools and not response.tool_calls:
             parsed_calls, cleaned = _extract_textual_tool_calls(response.content or "", allowed_tool_names)
@@ -2788,11 +3414,22 @@ async def handle_message(
             fn = (tc.get("function") or {}) if isinstance(tc.get("function"), dict) else {}
             name = fn.get("name") or tc.get("function", {}).get("name")
             args_str = fn.get("arguments") or "{}"
+            args_data: dict[str, Any] = {}
+            if isinstance(args_str, dict):
+                args_data = args_str
+            elif isinstance(args_str, str):
+                try:
+                    parsed_args = json.loads(args_str)
+                    if isinstance(parsed_args, dict):
+                        args_data = parsed_args
+                except Exception:
+                    args_data = {}
 
             # SECURITY: Validate tool name against registry
             if not name:
                 logger.warning("Tool call missing name: %s", tc)
                 out = "Error: Tool call missing name"
+                _record_tool_outcome(tool_name="tool_call", tool_output=out, tool_args=args_data)
                 current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
                 continue
 
@@ -2801,6 +3438,7 @@ async def handle_message(
             if name not in allowed_tool_names:
                 logger.warning("Tool '%s' not in allowed tools: %s", name, sorted(allowed_tool_names))
                 out = f"Error: Tool '{name}' not available (not in registry)"
+                _record_tool_outcome(tool_name=name, tool_output=out, tool_args=args_data)
                 current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
                 continue
 
@@ -2814,6 +3452,7 @@ async def handle_message(
             if name in db_required_tools and db is None:
                 out = f"Error: Database not available for tool '{name}'"
                 logger.error("Tool %s requires database but db is None", name)
+                _record_tool_outcome(tool_name=name, tool_output=out, tool_args=args_data)
                 current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
                 continue
 
@@ -2836,6 +3475,7 @@ async def handle_message(
                     channel=channel,
                     channel_target=channel_target,
                     text=f"Running {_build_tool_trace_label(name)}…",
+                    stream_event_callback=stream_event_callback,
                 )
             if name in ("exec", "bash"):
                 params = parse_exec_arguments(args_str)
@@ -2870,17 +3510,28 @@ async def handle_message(
                     )
                     out = (
                         f"approval-needed: id={approval_id} binary={requested_bin or 'unknown'} command={cmd}\n"
-                        f"User can approve with: /approve {approval_id} once  (or /approve {approval_id} always)\n"
-                        f"User can deny with: /deny {approval_id}"
+                        "Approval is blocking this action. In Telegram: open /approvals and tap Once, Always, or Deny."
                     )
                     ran_exec_tool = True
+                    last_exec_command = cmd
+                    last_exec_stdout = ""
+                    last_exec_stderr = ""
+                    last_exec_error = (
+                        "Approval is blocking this action. In Telegram: open /approvals and tap Once, Always, or Deny."
+                    )
                     used_tool_labels.append(_build_tool_trace_label(name))
+                    _record_tool_outcome(tool_name=name, tool_output=out, tool_args=params)
                     current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
                     continue
                 if precheck_err and exec_mode != "allowlist":
                     ran_exec_tool = True
+                    last_exec_command = cmd
+                    last_exec_stdout = ""
+                    last_exec_stderr = ""
+                    last_exec_error = precheck_err
                     used_tool_labels.append(_build_tool_trace_label(name))
                     out = f"error: {precheck_err}"
+                    _record_tool_outcome(tool_name=name, tool_output=out, tool_args=params)
                     current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
                     continue
                 # precheck_argv is intentionally not reused; runtime functions re-validate for safety.
@@ -2919,12 +3570,19 @@ async def handle_message(
                     )
                 ran_exec_tool = True
                 used_tool_labels.append(_build_tool_trace_label(name))
+                last_exec_command = cmd
                 last_exec_stdout = stdout
+                last_exec_stderr = stderr
+                if not ok:
+                    last_exec_error = (stderr or stdout or "").strip() or "Command not allowed or failed."
+                else:
+                    last_exec_error = ""
                 logger.info("Exec result: ok=%s stdout_len=%s stderr_len=%s", ok, len(stdout), len(stderr))
                 if ok or stdout or stderr:
                     out = f"stdout:\n{stdout}\n" + (f"stderr:\n{stderr}\n" if stderr else "")
                 else:
                     out = f"error: {stderr or 'Command not allowed or failed.'}"
+                _record_tool_outcome(tool_name=name, tool_output=out, tool_args=params)
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "process":
                 from app.process_tool import parse_process_tool_args, run_process_tool
@@ -2932,6 +3590,12 @@ async def handle_message(
                 params = parse_process_tool_args(args_str)
                 used_tool_labels.append(_build_tool_trace_label("process", str(params.get("action") or "")))
                 out = await run_process_tool(params)
+                _record_tool_outcome(
+                    tool_name="process",
+                    tool_output=out,
+                    tool_args=params,
+                    action=str(params.get("action") or ""),
+                )
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "list_directory":
                 from app.files_tool import list_directory as list_dir, parse_files_tool_args as parse_files_args
@@ -2940,6 +3604,7 @@ async def handle_message(
                 out = await list_dir(path, user_id, db)
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label("list_directory"))
+                _record_tool_outcome(tool_name="list_directory", tool_output=out, tool_args=params)
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "read_file":
                 from app.files_tool import read_file_content as read_file_fn, parse_files_tool_args as parse_files_args
@@ -2948,16 +3613,21 @@ async def handle_message(
                 out = await read_file_fn(path, user_id, db)
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label("read_file"))
+                _record_tool_outcome(tool_name="read_file", tool_output=out, tool_args=params)
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "write_file":
                 from app.files_tool import write_file as write_file_fn, parse_files_tool_args as parse_files_args
 
                 params = parse_files_args(args_str)
                 path = (params.get("path") or "").strip()
+                if _is_note_capture_request(text):
+                    path = _canonicalize_note_write_path(path)
+                    params["path"] = path
                 content = params.get("content")
                 out = await write_file_fn(path, content if isinstance(content, str) else "", user_id, db)
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label("write_file"))
+                _record_tool_outcome(tool_name="write_file", tool_output=out, tool_args=params)
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "allow_path":
                 from app.files_tool import allow_path as allow_path_fn, parse_files_tool_args as parse_files_args
@@ -2966,6 +3636,7 @@ async def handle_message(
                 out = await allow_path_fn(path, user_id, db)
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label("allow_path"))
+                _record_tool_outcome(tool_name="allow_path", tool_output=out, tool_args=params)
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "delete_file":
                 from app.files_tool import delete_file as delete_file_fn, parse_files_tool_args as parse_files_args
@@ -2975,6 +3646,7 @@ async def handle_message(
                 out = await delete_file_fn(path, user_id, db, permanently=permanently)
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label("delete_file"))
+                _record_tool_outcome(tool_name="delete_file", tool_output=out, tool_args=params)
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "delete_matching_files":
                 from app.files_tool import (
@@ -2994,6 +3666,7 @@ async def handle_message(
                 )
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label("delete_matching_files"))
+                _record_tool_outcome(tool_name="delete_matching_files", tool_output=out, tool_args=params)
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name in ("read", "write", "edit"):
                 from app.coding_compat_tool import (
@@ -3007,11 +3680,15 @@ async def handle_message(
                 if name == "read":
                     out = await run_read_compat(params, user_id, db)
                 elif name == "write":
+                    if _is_note_capture_request(text):
+                        note_path = _canonicalize_note_write_path(str(params.get("path") or ""))
+                        params["path"] = note_path
                     out = await run_write_compat(params, user_id, db)
                 else:
                     out = await run_edit_compat(params, user_id, db)
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label(name))
+                _record_tool_outcome(tool_name=name, tool_output=out, tool_args=params)
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "web_search":
                 from app.openclaw_compat_tools import parse_openclaw_compat_args, run_web_search_compat
@@ -3019,6 +3696,7 @@ async def handle_message(
                 params = parse_openclaw_compat_args(args_str)
                 used_tool_labels.append(_build_tool_trace_label("web_search"))
                 out = await run_web_search_compat(params)
+                _record_tool_outcome(tool_name="web_search", tool_output=out, tool_args=params)
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "web_fetch":
                 from app.openclaw_compat_tools import parse_openclaw_compat_args, run_web_fetch_compat
@@ -3026,6 +3704,7 @@ async def handle_message(
                 params = parse_openclaw_compat_args(args_str)
                 used_tool_labels.append(_build_tool_trace_label("web_fetch"))
                 out = await run_web_fetch_compat(params)
+                _record_tool_outcome(tool_name="web_fetch", tool_output=out, tool_args=params)
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "memory_search":
                 from app.openclaw_compat_tools import parse_openclaw_compat_args, run_memory_search_compat
@@ -3033,6 +3712,7 @@ async def handle_message(
                 params = parse_openclaw_compat_args(args_str)
                 used_tool_labels.append(_build_tool_trace_label("memory_search"))
                 out = await run_memory_search_compat(params, user_id=user_id)
+                _record_tool_outcome(tool_name="memory_search", tool_output=out, tool_args=params)
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "memory_get":
                 from app.openclaw_compat_tools import parse_openclaw_compat_args, run_memory_get_compat
@@ -3040,6 +3720,7 @@ async def handle_message(
                 params = parse_openclaw_compat_args(args_str)
                 used_tool_labels.append(_build_tool_trace_label("memory_get"))
                 out = await run_memory_get_compat(params)
+                _record_tool_outcome(tool_name="memory_get", tool_output=out, tool_args=params)
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "apply_patch":
                 from app.apply_patch_compat_tool import parse_apply_patch_compat_args, run_apply_patch_compat
@@ -3048,6 +3729,7 @@ async def handle_message(
                 used_tool_labels.append(_build_tool_trace_label("apply_patch"))
                 out = await run_apply_patch_compat(params)
                 ran_files_tool = True
+                _record_tool_outcome(tool_name="apply_patch", tool_output=out, tool_args=params)
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "message":
                 from app.message_compat_tool import parse_message_compat_args, run_message_compat
@@ -3060,6 +3742,12 @@ async def handle_message(
                     params,
                     current_channel=channel,
                     current_target=channel_target,
+                )
+                _record_tool_outcome(
+                    tool_name="message",
+                    tool_output=out,
+                    tool_args=params,
+                    action=str(params.get("action") or "send"),
                 )
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "reminders":
@@ -3089,6 +3777,12 @@ async def handle_message(
                             )
                     except Exception:
                         pass
+                _record_tool_outcome(
+                    tool_name="reminders",
+                    tool_output=out,
+                    tool_args=params,
+                    action=str(params.get("action") or ""),
+                )
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "cron":
                 from app.cron_tool import run_cron_tool, parse_cron_tool_args
@@ -3104,6 +3798,12 @@ async def handle_message(
                     db=db,
                 )
                 ran_cron_tool = True
+                _record_tool_outcome(
+                    tool_name="cron",
+                    tool_output=out,
+                    tool_args=params,
+                    action=str(params.get("action") or ""),
+                )
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name in (
                 "agents_list",
@@ -3128,9 +3828,12 @@ async def handle_message(
                     channel=channel,
                     channel_target=channel_target,
                 )
+                _record_tool_outcome(tool_name=name, tool_output=out, tool_args=params)
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             else:
-                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": "Unknown tool."})
+                out = "Unknown tool."
+                _record_tool_outcome(tool_name=name, tool_output=out, tool_args=args_data)
+                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
         # Re-call same provider with updated messages (no fallback switch); use that provider's model
         tool_kwargs = {**chat_kwargs}
         if provider_used.name == provider.name:
@@ -3140,10 +3843,10 @@ async def handle_message(
         # Give the model more time when it has to summarize large tool output (e.g. memo notes)
         if provider_used.name == "openrouter":
             tool_kwargs["timeout"] = 90
-        if live_stream_reasoning_enabled and hasattr(provider_used, "chat_stream"):
+        if live_model_stream_enabled and hasattr(provider_used, "chat_stream"):
             response = await provider_used.chat_stream(
                 current_messages,
-                on_text_delta=_make_reasoning_delta_handler(),
+                on_text_delta=_on_model_text_delta,
                 **tool_kwargs,
             )
         else:
@@ -3204,6 +3907,19 @@ async def handle_message(
             reply = fallback_reply
             used_tool_labels.append(fallback_label)
 
+    # Generic "notes" requests should use workspace markdown notes, not Apple Notes exec.
+    # Apply deterministic fallback so model misrouting (e.g. memo commands) can't hallucinate.
+    if (
+        _provider_supports_tools(provider_name)
+        and "files" in enabled
+        and _is_workspace_notes_list_request(text)
+    ):
+        notes_fallback = await _handle_workspace_notes_list_fallback(text=text)
+        if notes_fallback:
+            fallback_reply, fallback_label = notes_fallback
+            reply = fallback_reply
+            used_tool_labels.append(fallback_label)
+
     # Strict no-fake-check rule for exec-backed checks (Apple Notes/Things): if no exec tool ran,
     # do not allow unverified "I checked..." claims.
     if (
@@ -3220,7 +3936,15 @@ async def handle_message(
     # Reasoning visibility mode (OpenClaw-like):
     # - off: hide extracted <think> blocks
     # - on/stream: show extracted reasoning above final answer
-    final_text, extracted_reasoning = _extract_reasoning_blocks(reply)
+    effective_reply_provider = provider_used.name if provider_used else provider_name
+    strict_final_for_reply = (
+        strict_final_mode_requested
+        and _provider_supports_strict_final(effective_reply_provider)
+    )
+    final_text, extracted_reasoning = _extract_reasoning_blocks(
+        reply,
+        strict_final=strict_final_for_reply,
+    )
     reasoning_mode_norm = (reasoning_mode or "").strip().lower()
     if reasoning_mode_norm == "off":
         # Never leak raw <think> blocks to user output.
@@ -3228,29 +3952,74 @@ async def handle_message(
     elif extracted_reasoning:
         if reasoning_mode_norm == "stream":
             if not live_stream_reasoning_emitted:
-                await _emit_reasoning_stream_progressively(
-                    db=db,
-                    conversation_id=cid,
-                    channel=channel,
-                    channel_target=channel_target,
-                    reasoning=extracted_reasoning,
-                )
+                if stream_events_enabled:
+                    formatted_reasoning = _format_reasoning_message(extracted_reasoning)
+                    if formatted_reasoning:
+                        await _emit_live_reasoning_text(formatted_reasoning)
+                        live_stream_reasoning_emitted = True
+                else:
+                    await _emit_reasoning_stream_progressively(
+                        db=db,
+                        conversation_id=cid,
+                        channel=channel,
+                        channel_target=channel_target,
+                        reasoning=extracted_reasoning,
+                    )
             # Stream mode emits reasoning as status; final user reply should stay clean.
             reply = final_text
         else:
-            reply = f"Reasoning:\n{extracted_reasoning}\n\n{final_text}".strip()
+            formatted_reasoning = _format_reasoning_message(extracted_reasoning)
+            if formatted_reasoning:
+                reply = f"{formatted_reasoning}\n\n{final_text}".strip()
+            else:
+                reply = final_text
     else:
         reply = final_text
 
-    # OpenClaw-style: generic fallback when we ran exec but got no reply (no skill-specific hints)
+    # OpenClaw-style fallback when we ran exec but model returned no user-facing reply:
+    # surface the last concrete exec failure first, then raw output excerpt.
     if not reply and ran_exec_tool:
-        if last_exec_stdout:
-            reply = "I ran the command and got output, but the model didn't return a reply. **Command output:**\n\n```\n"
-            max_show = 2000
-            excerpt = last_exec_stdout.strip()[:max_show] + ("…" if len(last_exec_stdout) > max_show else "")
-            reply += excerpt + "\n```"
+        max_show = 2000
+        if last_exec_error:
+            safe_cmd = (last_exec_command or "").replace("`", "'")
+            if len(safe_cmd) > 140:
+                safe_cmd = safe_cmd[:140] + "…"
+            excerpt = last_exec_error[:max_show] + ("…" if len(last_exec_error) > max_show else "")
+            if safe_cmd:
+                reply = f"Exec failed for `{safe_cmd}`: {excerpt}"
+            else:
+                reply = f"Exec failed: {excerpt}"
         else:
-            reply = "I ran the command but didn't get a reply back. Try again or rephrase."
+            combined = "\n".join(
+                part for part in ((last_exec_stdout or "").strip(), (last_exec_stderr or "").strip()) if part
+            ).strip()
+            if combined:
+                reply = "I ran the command and got output, but the model didn't return a reply. **Command output:**\n\n```\n"
+                excerpt = combined[:max_show] + ("…" if len(combined) > max_show else "")
+                reply += excerpt + "\n```"
+            else:
+                reply = "I ran the command but didn't get a reply back. Try again or rephrase."
+
+    # OpenClaw-style fallback for non-exec tools: surface concrete tool failure first.
+    if not reply and last_tool_error:
+        should_show_tool_error = last_tool_error_mutating or (not _is_recoverable_tool_error(last_tool_error))
+        if should_show_tool_error:
+            max_show = 2000
+            excerpt = last_tool_error[:max_show] + ("…" if len(last_tool_error) > max_show else "")
+            label = last_tool_error_label or "Tool"
+            reply = f"Warning: {label} failed: {excerpt}"
+
+    # If a tool ran successfully but the model produced no final text, expose tool output instead
+    # of generic "no reply back" to keep behavior debuggable in channel UIs.
+    if not reply and ran_any_tool and last_tool_output:
+        max_show = 2000
+        label = last_tool_label or "a tool"
+        excerpt = last_tool_output[:max_show] + ("…" if len(last_tool_output) > max_show else "")
+        reply = (
+            f"I ran {label} but the model didn't return a reply. "
+            "Tool output:\n\n```\n"
+            f"{excerpt}\n```"
+        )
 
     
     # Expand GIF tags
@@ -3319,8 +4088,8 @@ async def handle_message(
                     )
                     exec_outputs.append(
                         f"Command: {cmd}\n"
-                        f"Approval required: /approve {approval_id} once (or /approve {approval_id} always)\n"
-                        f"Deny: /deny {approval_id}\n"
+                        "Approval is blocking this action. In Telegram: open /approvals and tap Once, Always, or Deny.\n"
+                        f"Approval id: {approval_id}\n"
                         f"Binary: {requested_bin or 'unknown'}"
                     )
                     continue
@@ -3337,6 +4106,8 @@ async def handle_message(
                     provider, messages_plus, fallback_names,
                     context=context, model=user_model or None,
                     _fallback_models=fallback_models,
+                    _runtime_db=db,
+                    _runtime_user_id=user_id,
                 )
                 if response2.content and not response2.error:
                     reply = response2.content
@@ -3351,6 +4122,8 @@ async def handle_message(
     )
     if write_match:
         file_path = write_match.group(1).strip()
+        if _is_note_capture_request(text):
+            file_path = _canonicalize_note_write_path(file_path)
         file_content = write_match.group(2).strip()
         try:
             from app.routers.files import write_to_allowed_path
@@ -3518,6 +4291,20 @@ async def handle_message(
             reply = f"{reply}\n\n{trace_line}"
         else:
             reply = trace_line
+
+    if stream_events_enabled and reply.strip():
+        final_visible_reply = reply.strip()
+        if final_visible_reply != streamed_assistant_text:
+            final_delta = _compute_incremental_delta(streamed_assistant_text, final_visible_reply)
+            streamed_assistant_text = final_visible_reply
+            await _emit_live_stream_event(
+                stream_event_callback,
+                {
+                    "type": "assistant",
+                    "text": final_visible_reply,
+                    "delta": final_delta,
+                },
+            )
 
     # Silent control-path: no assistant message emitted/persisted.
     if suppress_user_reply and not reply.strip():

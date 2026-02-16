@@ -81,8 +81,6 @@ _XHIGH_MODEL_REFS = (
 _XHIGH_MODEL_SET = {ref.lower() for ref in _XHIGH_MODEL_REFS}
 _XHIGH_MODEL_IDS = {ref.split("/", 1)[1].lower() for ref in _XHIGH_MODEL_REFS if "/" in ref}
 _ALLOW_COMMAND_HELP = "Usage: /allow <binary> (example: /allow rg)"
-_APPROVE_COMMAND_HELP = "Usage: /approve <approval_id> [once|always]"
-_DENY_COMMAND_HELP = "Usage: /deny <approval_id>"
 _ALLOWLIST_BLOCKED_BINS = {
     "sh",
     "bash",
@@ -94,6 +92,7 @@ _ALLOWLIST_BLOCKED_BINS = {
     "pwsh",
 }
 _ALLOWLIST_BIN_RE = re.compile(r"^[a-z0-9._+-]+$")
+_APPROVAL_CALLBACK_RE = re.compile(r"^approval:(once|always|deny):(app_[a-z0-9]{8})$")
 
 
 def to_telegram_format(text: str) -> str:
@@ -159,7 +158,7 @@ async def _set_reaction(chat_id: int, message_id: int, bot, emoji: str = "👍")
         return False
 
 
-async def _reply_text_safe_html(message, text: str) -> None:
+async def _reply_text_safe_html(message, text: str, reply_markup: InlineKeyboardMarkup | None = None) -> None:
     """Reply using HTML formatting; fallback to plain text if Telegram rejects entities."""
     plain = (text or "").strip()[:TELEGRAM_MAX_MESSAGE_LENGTH] or "No response."
     formatted = to_telegram_format(plain)
@@ -167,12 +166,13 @@ async def _reply_text_safe_html(message, text: str) -> None:
         await message.reply_text(
             formatted,
             parse_mode=constants.ParseMode.HTML,
+            reply_markup=reply_markup,
         )
     except Exception as e:
         msg = str(e).lower()
         if "parse entities" in msg or "unmatched end tag" in msg:
             logger.warning("Telegram HTML parse failed, falling back to plain text: %s", e)
-            await message.reply_text(plain)
+            await message.reply_text(plain, reply_markup=reply_markup)
             return
         raise
 
@@ -272,6 +272,14 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     async with lock:
         chat_id_str = str(chat_id)
         text = update.message.text
+        before_ids = {
+            str(r.get("approval_id") or "").strip().lower()
+            for r in await _list_pending_telegram_approvals_for_chat(
+                user_id=user_id,
+                chat_id_str=chat_id_str,
+                limit=50,
+            )
+        }
 
         # If message is a single URL (optionally with instruction on next line), try to process as audio link (workaround for 20 MB Telegram limit)
         if _is_audio_url(text):
@@ -347,6 +355,12 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 out = (reply or "").strip()[:TELEGRAM_MAX_MESSAGE_LENGTH] or "No response."
                 await _reply_text_safe_html(update.message, out)
                 logger.info("Telegram reply sent to %s", user_id)
+            await _notify_new_pending_approvals(
+                message=update.message,
+                user_id=user_id,
+                chat_id_str=chat_id_str,
+                before_ids=before_ids,
+            )
             # React to user's message when reply is a short yes/no or agreement (OpenClaw-style)
             if _is_short_agreement(reply):
                 from app.cooldowns import is_cooldown_ready, mark_cooldown_now
@@ -498,6 +512,94 @@ def _normalize_allow_bin(raw: str) -> str:
     return token
 
 
+def _approval_actions_markup(approval_id: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [[
+            InlineKeyboardButton("✅ Once", callback_data=f"approval:once:{approval_id}"),
+            InlineKeyboardButton("✅ Always", callback_data=f"approval:always:{approval_id}"),
+            InlineKeyboardButton("❌ Deny", callback_data=f"approval:deny:{approval_id}"),
+        ]]
+    )
+
+
+def _parse_approval_callback_data(data: str) -> tuple[str, str] | None:
+    token = (data or "").strip().lower()
+    m = _APPROVAL_CALLBACK_RE.fullmatch(token)
+    if not m:
+        return None
+    return m.group(1), m.group(2)
+
+
+async def _list_pending_telegram_approvals_for_chat(
+    *,
+    user_id: str,
+    chat_id_str: str,
+    limit: int = 50,
+) -> list[dict]:
+    from app.db import get_db
+
+    db = get_db()
+    await db.connect()
+    rows = await db.list_pending_exec_approvals(limit=max(1, min(int(limit), 100)))
+    out: list[dict] = []
+    for row in rows:
+        if str(row.get("user_id") or "").strip() != user_id:
+            continue
+        if str(row.get("channel") or "").strip().lower() != "telegram":
+            continue
+        if str(row.get("channel_target") or "").strip() != chat_id_str:
+            continue
+        out.append(row)
+    return out
+
+
+async def _notify_new_pending_approvals(
+    *,
+    message,
+    user_id: str,
+    chat_id_str: str,
+    before_ids: set[str],
+) -> None:
+    rows = await _list_pending_telegram_approvals_for_chat(user_id=user_id, chat_id_str=chat_id_str, limit=50)
+    new_rows = [
+        r for r in rows if str(r.get("approval_id") or "").strip().lower() not in before_ids
+    ]
+    if not new_rows:
+        return
+
+    await message.reply_text(
+        "This action is blocked pending exec approval. Tap Once, Always, or Deny below."
+    )
+    for i, row in enumerate(new_rows, 1):
+        aid = str(row.get("approval_id") or "").strip().lower()
+        binary = str(row.get("binary") or "").strip() or "unknown"
+        command = str(row.get("command") or "").strip()
+        short_cmd = command if len(command) <= 300 else command[:297] + "..."
+        text = f"{i}. {aid}\nBinary: {binary}\nCommand: `{short_cmd}`"
+        await _reply_text_safe_html(message, text, reply_markup=_approval_actions_markup(aid))
+
+
+def _build_approval_resume_prompt(result: dict[str, str | bool | None]) -> str:
+    command = str(result.get("command") or "").strip()
+    output = str(result.get("output") or "").strip()
+    error = str(result.get("error") or "").strip()
+    approval_id = str(result.get("approval_id") or "").strip()
+    mode = str(result.get("mode") or "").strip()
+    ok = bool(result.get("ok"))
+    result_body = output if ok else f"(command error)\n{error or 'Command failed.'}"
+    result_body = result_body[:3000]
+    return (
+        "Continue the previous blocked request now that approval is done.\n"
+        "Use the approved command result below as ground truth.\n"
+        "Do not ask the user to approve again.\n"
+        "Do not re-run the same command unless strictly necessary.\n\n"
+        f"Approval id: {approval_id}\n"
+        f"Mode: {mode}\n"
+        f"Command: {command}\n"
+        f"Result:\n{result_body}"
+    )
+
+
 async def _add_exec_allow_bin(db, bin_name: str) -> bool:
     """Add bin to extra allowlist. Returns True if bin already existed."""
     from app.exec_tool import SYSTEM_CONFIG_EXEC_BINS_KEY
@@ -561,37 +663,36 @@ async def allow_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(f"{head}{suffix}\n\nAllowed bins now: {bins_text}")
 
 
-async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.message:
-        return
-    if not _telegram_user_allowed(update):
-        await update.message.reply_text("You're not authorized to use this bot.")
-        return
-    approval_id = ((context.args[0] if context.args else "") or "").strip()
-    if not approval_id:
-        await update.message.reply_text(_APPROVE_COMMAND_HELP)
-        return
-    mode_raw = ((context.args[1] if len(context.args or []) > 1 else "once") or "").strip().lower()
-    if mode_raw in ("once", "allow-once"):
-        mode = "once"
-    elif mode_raw in ("always", "allow-always"):
-        mode = "always"
-    else:
-        await update.message.reply_text(_APPROVE_COMMAND_HELP)
-        return
+def _normalize_approve_mode(raw: str) -> str:
+    token = (raw or "").strip().lower()
+    if token in ("once", "allow-once"):
+        return "once"
+    if token in ("always", "allow-always"):
+        return "always"
+    return ""
 
+
+async def _approve_exec_approval(
+    approval_id: str,
+    mode: str,
+) -> tuple[bool, str, dict[str, str | bool | None] | None]:
     from app.db import get_db
     from app.exec_tool import get_effective_exec_bins, run_allowlisted_command
+
+    approval_id = (approval_id or "").strip().lower()
+    mode = _normalize_approve_mode(mode)
+    if not approval_id:
+        return False, "Missing approval id.", None
+    if mode not in ("once", "always"):
+        return False, "Invalid approval mode.", None
 
     db = get_db()
     await db.connect()
     row = await db.get_exec_approval(approval_id)
     if not row:
-        await update.message.reply_text(f"Approval id not found: {approval_id}")
-        return
+        return False, f"Approval id not found: {approval_id}", None
     if str(row.get("status") or "").strip().lower() != "pending":
-        await update.message.reply_text(f"Approval {approval_id} is already {row.get('status')}.")
-        return
+        return False, f"Approval {approval_id} is already {row.get('status')}.", None
 
     command = str(row.get("command") or "").strip()
     binary = _normalize_allow_bin(str(row.get("binary") or ""))
@@ -625,40 +726,46 @@ async def approve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         + (f" Added '{binary}' to allowlist." if (mode == "always" and added and binary) else "")
     )
     if ok:
-        out = (stdout or "").strip()
-        if not out:
-            out = "(no stdout)"
-        msg = f"{head}\n\nCommand:\n`{command}`\n\nOutput:\n{out[:2500]}"
-    else:
-        err = (stderr or "Command failed.").strip()
-        msg = f"{head}\n\nCommand:\n`{command}`\n\nError:\n{err[:1200]}"
-    await _reply_text_safe_html(update.message, msg)
+        out = (stdout or "").strip() or "(no stdout)"
+        return True, (
+            f"{head}\n\nCommand:\n`{command}`\n\nOutput:\n{out[:2500]}"
+        ), {
+            "approval_id": approval_id,
+            "mode": mode,
+            "command": command,
+            "output": out[:2500],
+            "error": "",
+            "ok": True,
+        }
+    err = (stderr or "Command failed.").strip()
+    return True, (
+        f"{head}\n\nCommand:\n`{command}`\n\nError:\n{err[:1200]}"
+    ), {
+        "approval_id": approval_id,
+        "mode": mode,
+        "command": command,
+        "output": "",
+        "error": err[:1200],
+        "ok": False,
+    }
 
 
-async def deny_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.message:
-        return
-    if not _telegram_user_allowed(update):
-        await update.message.reply_text("You're not authorized to use this bot.")
-        return
-    approval_id = ((context.args[0] if context.args else "") or "").strip()
-    if not approval_id:
-        await update.message.reply_text(_DENY_COMMAND_HELP)
-        return
-
+async def _deny_exec_approval(approval_id: str) -> tuple[bool, str]:
     from app.db import get_db
+
+    approval_id = (approval_id or "").strip().lower()
+    if not approval_id:
+        return False, "Missing approval id."
 
     db = get_db()
     await db.connect()
     row = await db.get_exec_approval(approval_id)
     if not row:
-        await update.message.reply_text(f"Approval id not found: {approval_id}")
-        return
+        return False, f"Approval id not found: {approval_id}"
     if str(row.get("status") or "").strip().lower() != "pending":
-        await update.message.reply_text(f"Approval {approval_id} is already {row.get('status')}.")
-        return
+        return False, f"Approval {approval_id} is already {row.get('status')}."
     await db.resolve_exec_approval(approval_id, status="denied", decision="deny")
-    await update.message.reply_text(f"Denied approval {approval_id}.")
+    return True, f"Denied approval {approval_id}."
 
 
 async def approvals_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -667,27 +774,97 @@ async def approvals_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not _telegram_user_allowed(update):
         await update.message.reply_text("You're not authorized to use this bot.")
         return
-
-    from app.db import get_db
-
-    db = get_db()
-    await db.connect()
-    rows = await db.list_pending_exec_approvals(limit=10)
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    rows = await _list_pending_telegram_approvals_for_chat(
+        user_id="default",
+        chat_id_str=str(chat_id),
+        limit=20,
+    )
     if not rows:
         await update.message.reply_text("No pending exec approvals.")
         return
 
-    lines = ["Pending exec approvals:"]
+    await update.message.reply_text(
+        "Pending exec approvals. Tap a button under each command to approve once, allow always, or deny."
+    )
     for i, row in enumerate(rows, 1):
-        aid = str(row.get("approval_id") or "").strip()
+        aid = str(row.get("approval_id") or "").strip().lower()
         binary = str(row.get("binary") or "").strip() or "unknown"
         command = str(row.get("command") or "").strip()
-        short_cmd = command if len(command) <= 70 else command[:67] + "..."
-        lines.append(f"{i}. {aid} [{binary}] {short_cmd}")
-    lines.append("")
-    lines.append("Approve: /approve <id> once|always")
-    lines.append("Deny: /deny <id>")
-    await update.message.reply_text("\n".join(lines))
+        short_cmd = command if len(command) <= 300 else command[:297] + "..."
+        text = f"{i}. {aid}\nBinary: {binary}\nCommand: `{short_cmd}`"
+        await _reply_text_safe_html(update.message, text, reply_markup=_approval_actions_markup(aid))
+
+
+async def approval_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    if not _telegram_user_allowed(update):
+        await query.answer("Unauthorized", show_alert=True)
+        return
+    parsed = _parse_approval_callback_data(query.data or "")
+    if not parsed:
+        await query.answer("Invalid action", show_alert=True)
+        return
+
+    action, approval_id = parsed
+    if action == "deny":
+        ok, msg = await _deny_exec_approval(approval_id)
+        resume_data = None
+    else:
+        ok, msg, resume_data = await _approve_exec_approval(approval_id, action)
+    if not ok:
+        await query.answer(msg[:180], show_alert=True)
+        return
+
+    await query.answer("Done")
+    if query.message:
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        if action == "deny":
+            await query.message.reply_text(msg)
+            return
+
+        await query.message.reply_text("Approved. Continuing your request…")
+        user_id = "default"
+        chat_id_str = str(query.message.chat.id)
+        before_ids = {
+            str(r.get("approval_id") or "").strip().lower()
+            for r in await _list_pending_telegram_approvals_for_chat(
+                user_id=user_id,
+                chat_id_str=chat_id_str,
+                limit=50,
+            )
+        }
+        try:
+            await query.message.chat.send_action("typing")
+            prompt = _build_approval_resume_prompt(resume_data or {})
+            resumed = await handle_message(
+                user_id,
+                "telegram",
+                prompt,
+                provider_name="default",
+                channel_target=chat_id_str,
+            )
+            sent_resume = False
+            if (resumed or "").strip():
+                out = (resumed or "").strip()[:TELEGRAM_MAX_MESSAGE_LENGTH] or "No response."
+                await _reply_text_safe_html(query.message, out)
+                sent_resume = True
+            await _notify_new_pending_approvals(
+                message=query.message,
+                user_id=user_id,
+                chat_id_str=chat_id_str,
+                before_ids=before_ids,
+            )
+            if not sent_resume:
+                await _reply_text_safe_html(query.message, msg)
+        except Exception as e:
+            logger.exception("Telegram auto-resume after approval failed: %s", e)
+            await _reply_text_safe_html(query.message, msg)
 
 
 async def allowlist_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -985,8 +1162,6 @@ def build_telegram_app(token: str) -> Application:
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("exec_mode", exec_mode_cmd))
     app.add_handler(CommandHandler("allow", allow_cmd))
-    app.add_handler(CommandHandler("approve", approve_cmd))
-    app.add_handler(CommandHandler("deny", deny_cmd))
     app.add_handler(CommandHandler("approvals", approvals_cmd))
     app.add_handler(CommandHandler("allowlist", allowlist_cmd))
     app.add_handler(CommandHandler("think", thinking_cmd))
@@ -997,6 +1172,7 @@ def build_telegram_app(token: str) -> Application:
     app.add_handler(CallbackQueryHandler(exec_mode_callback, pattern=r"^exec_mode:"))
     app.add_handler(CallbackQueryHandler(thinking_callback, pattern=r"^thinking:"))
     app.add_handler(CallbackQueryHandler(reasoning_callback, pattern=r"^reasoning:"))
+    app.add_handler(CallbackQueryHandler(approval_callback, pattern=r"^approval:"))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, on_voice_or_audio))
     app.add_handler(MessageHandler(filters.Document.AUDIO, on_voice_or_audio))
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
@@ -1017,6 +1193,14 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lock = await _get_chat_lock(chat_id)
     async with lock:
         chat_id_str = str(chat_id)
+        before_ids = {
+            str(r.get("approval_id") or "").strip().lower()
+            for r in await _list_pending_telegram_approvals_for_chat(
+                user_id=user_id,
+                chat_id_str=chat_id_str,
+                limit=50,
+            )
+        }
         # Fetch the largest available photo version
         photo = update.message.photo[-1]
         text = (update.message.caption or "").strip() or "What is in this image?"
@@ -1043,6 +1227,12 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             
             out = (reply or "").strip()[:TELEGRAM_MAX_MESSAGE_LENGTH] or "No response."
             await _reply_text_safe_html(update.message, out)
+            await _notify_new_pending_approvals(
+                message=update.message,
+                user_id=user_id,
+                chat_id_str=chat_id_str,
+                before_ids=before_ids,
+            )
             logger.info("Telegram photo reply sent to %s", user_id)
         except Exception as e:
             logger.exception("Telegram photo handler error")
@@ -1156,8 +1346,6 @@ async def start_telegram_bot_in_loop(app: Application) -> None:
             BotCommand("status", "Show server status"),
             BotCommand("exec_mode", "Set exec security mode (deny/allowlist/full)"),
             BotCommand("allow", "Allow binary in exec allowlist"),
-            BotCommand("approve", "Approve pending exec command"),
-            BotCommand("deny", "Deny pending exec command"),
             BotCommand("approvals", "List pending exec approvals"),
             BotCommand("allowlist", "Show allowed exec binaries"),
             BotCommand("think", "Set thinking level (off/minimal/low/medium/high/xhigh)"),

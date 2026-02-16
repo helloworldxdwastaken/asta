@@ -13,23 +13,28 @@ class FileWriteIn(BaseModel):
     content: str
 
 
+def _normalize_workspace_relative_write_path(raw_path: str) -> str:
+    """Normalize common model-generated relative paths to keep writes inside workspace root."""
+    path_str = (raw_path or "").strip().replace("\\", "/")
+    if not path_str:
+        return path_str
+    while path_str.startswith("./"):
+        path_str = path_str[2:]
+    # Common hallucinated form for workspace-relative writes.
+    if path_str.startswith("~/workspace/"):
+        path_str = path_str[len("~/workspace/") :]
+    # Avoid accidental nested workspace/workspace/... trees.
+    while path_str.lower().startswith("workspace/"):
+        path_str = path_str[len("workspace/") :]
+    return path_str
+
+
 async def write_to_allowed_path(user_id: str, path: str, content: str) -> str:
     """Write content to an allowed path (or workspace-relative). Returns the absolute path written. Raises ValueError if not allowed."""
     allowed = await _allowed_paths(user_id)
     if not allowed:
         raise ValueError("No allowed paths")
-    path_str = path.strip()
-    p = Path(path_str)
-    if not p.is_absolute():
-        s = get_settings()
-        if s.workspace_path:
-            p = (s.workspace_path / path_str).resolve()
-        elif allowed:
-            p = (Path(allowed[0]) / path_str).resolve()
-        else:
-            raise ValueError("Relative path requires workspace")
-    else:
-        p = p.resolve()
+    p = _resolve_path_for_allowed_access(path, allowed)
     try:
         _ensure_allowed(p, allowed)
     except PathAccessRequest as e:
@@ -43,6 +48,20 @@ class PathAccessRequest(Exception):
     """Raised when a path is not in the allowlist — client can show 'Grant access' and call allow-path."""
     def __init__(self, requested_path: Path) -> None:
         self.requested_path = Path(requested_path).resolve()
+
+
+def _resolve_path_for_allowed_access(path: str, allowed: list[Path]) -> Path:
+    """Resolve user-provided path for read/write operations under workspace/allowed roots."""
+    path_str = _normalize_workspace_relative_write_path(path)
+    p = Path(path_str).expanduser()
+    if p.is_absolute():
+        return p.resolve()
+    s = get_settings()
+    if s.workspace_path:
+        return (s.workspace_path / path_str).resolve()
+    if allowed:
+        return (Path(allowed[0]) / path_str).resolve()
+    return p.resolve()
 
 
 # Virtual roots for Asta knowledge and User memories
@@ -83,17 +102,20 @@ def _ensure_allowed(absolute: Path, allowed: list[Path]) -> None:
 
 
 def _asta_root() -> Path:
-    """Asta project root (contains backend/, docs/, README.md)."""
+    """Asta project root (contains backend/, docs/, README.md, CHANGELOG.md)."""
     return Path(__file__).resolve().parent.parent.parent.parent
 
 
 def _asta_docs() -> list[tuple[str, str]]:
-    """Return (name, path) for README and docs/*.md."""
+    """Return (name, path) for README, CHANGELOG, and docs/*.md."""
     root = _asta_root()
     out: list[tuple[str, str]] = []
     readme = root / "README.md"
     if readme.is_file():
         out.append(("README.md", f"{ASTA_KNOWLEDGE}/README.md"))
+    changelog = root / "CHANGELOG.md"
+    if changelog.is_file():
+        out.append(("CHANGELOG.md", f"{ASTA_KNOWLEDGE}/CHANGELOG.md"))
     docs_dir = root / "docs"
     if docs_dir.is_dir():
         for f in sorted(docs_dir.glob("*.md")):
@@ -181,8 +203,8 @@ async def read_file(path: str, user_id: str = "default"):
         content = _read_virtual(path, user_id)
         return {"path": path, "content": content}
 
-    p = Path(path).resolve()
     allowed = await _allowed_paths(user_id)
+    p = _resolve_path_for_allowed_access(path, allowed)
     try:
         _ensure_allowed(p, allowed)
     except PathAccessRequest as e:

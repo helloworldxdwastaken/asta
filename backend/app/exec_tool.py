@@ -42,6 +42,57 @@ def resolve_executable(name: str) -> str | None:
     return None
 
 
+def _first_runnable_fragment(cmd: str) -> str:
+    """Return first non-empty, non-comment command line fragment from raw command text."""
+    raw = (cmd or "").strip()
+    if not raw:
+        return ""
+    for line in raw.splitlines():
+        candidate = (line or "").strip()
+        if not candidate:
+            continue
+        if candidate.startswith("#"):
+            continue
+        return candidate
+    return ""
+
+
+def _normalize_known_exec_aliases(parts: list[str]) -> list[str]:
+    """Normalize known user/model aliases into valid CLI forms."""
+    if len(parts) >= 3:
+        p0 = parts[0].lower()
+        p1 = parts[1].lower()
+        p2 = parts[2].lower()
+        # memo CLI lists notes via `memo notes` (no `list` positional subcommand)
+        if p0 == "memo" and p1 == "notes" and p2 in {"list", "ls"}:
+            return [parts[0], parts[1], *parts[3:]]
+    return parts
+
+
+def _resolve_shell_for_full_mode() -> str:
+    """Best-effort shell resolution for full-mode exec."""
+    configured = (os.environ.get("SHELL") or "").strip()
+    if configured and os.path.isabs(configured) and os.path.isfile(configured) and os.access(configured, os.X_OK):
+        return configured
+    resolved = resolve_executable("bash")
+    if resolved:
+        return resolved
+    return "/bin/bash"
+
+
+def build_exec_runtime_argv(cmd: str, validated_parts: list[str]) -> list[str]:
+    """Return argv used at runtime based on exec security mode.
+
+    - allowlist/deny paths run validated argv directly
+    - full mode runs through shell (`shell -lc <cmd>`) to support multiline scripts/comments
+    """
+    mode = get_settings().exec_security
+    if mode == "full":
+        shell = _resolve_shell_for_full_mode()
+        return [shell, "-lc", cmd]
+    return validated_parts
+
+
 async def get_effective_exec_bins(db: Db | None, user_id: str | None = None) -> set[str]:
     """OpenClaw-style: env + DB + bins from enabled workspace skills (autoAllowSkills)."""
     settings = get_settings()
@@ -104,20 +155,28 @@ def prepare_allowlisted_command(
     *,
     allowed_bins: set[str] | None = None,
 ) -> tuple[list[str] | None, str | None]:
-    """Parse and validate command against exec security policy. Returns (argv, error)."""
+    """Parse and validate command against exec security policy. Returns (argv, error).
+
+    In full mode, validation still identifies the leading executable token for intent/error
+    quality, but runtime execution may use `shell -lc` (see `build_exec_runtime_argv`).
+    """
     cmd = (cmd or "").strip()
     if not cmd:
+        return None, "Empty command."
+    first_fragment = _first_runnable_fragment(cmd)
+    if not first_fragment:
         return None, "Empty command."
     settings = get_settings()
     security_mode = settings.exec_security
     if security_mode == "deny":
         return None, "Exec is disabled (ASTA_EXEC_SECURITY=deny)."
     try:
-        parts = shlex.split(cmd)
+        parts = shlex.split(first_fragment)
     except ValueError as e:
         return None, f"Invalid command: {e}"
     if not parts:
         return None, "Empty command."
+    parts = _normalize_known_exec_aliases(parts)
     binary = Path(parts[0]).name.lower()
     if security_mode == "allowlist":
         allowed = allowed_bins if allowed_bins is not None else settings.exec_allowed_bins
@@ -129,6 +188,10 @@ def prepare_allowlisted_command(
                 f"Command not allowed (binary '{binary}' not in allowlist). "
                 f"Ask the user to run /allow {binary} in Telegram, or add it to ASTA_EXEC_ALLOWED_BINS."
             )
+    # In full mode we intentionally do not pre-reject non-resolvable binaries here because
+    # runtime uses a real shell and may run shell builtins/functions/scripts.
+    if security_mode == "full":
+        return parts, None
     exe = parts[0]
     if os.path.sep not in exe and not Path(exe).is_absolute():
         resolved = resolve_executable(exe)
@@ -156,6 +219,7 @@ async def run_allowlisted_command(
     if err:
         return "", err, False
     assert parts is not None
+    argv = build_exec_runtime_argv(cmd, parts)
     cwd_path = resolve_safe_workdir(workdir)
     if workdir and cwd_path is None:
         return "", "Invalid workdir. Use a directory under your home or workspace.", False
@@ -166,7 +230,7 @@ async def run_allowlisted_command(
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            *parts,
+            *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(cwd_path) if cwd_path else None,
@@ -188,7 +252,7 @@ async def run_allowlisted_command(
             hint = " On macOS, permission is per process: run the Asta backend from Terminal (e.g. ./asta.sh start), then when you ask for notes approve the system dialog for the backend process."
         return "", f"Command timed out after {timeout}s.{hint}", False
     except FileNotFoundError:
-        return "", f"Binary not found: {parts[0]}", False
+        return "", f"Binary not found: {argv[0]}", False
     except Exception as e:
         logger.warning("Exec failed for %s: %s", cmd[:80], e)
         return "", str(e), False

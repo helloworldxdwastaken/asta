@@ -52,9 +52,9 @@ npm run dev
 
 ### 5. Optional
 
-In the panel: **Settings** → add API keys (Groq, Gemini, Claude, OpenAI, OpenRouter, Telegram, Spotify), set default AI (new installs default to OpenRouter), choose **Thinking level** (`off/minimal/low/medium/high/xhigh`) and **Reasoning visibility** (`off/on/stream`), adjust **Vision controls** (preprocess/order/model), and toggle skills. Set your **location** in Chat (e.g. “Holon, Israel”) for time and weather.
+In the panel: **Settings** → add API keys (Groq, Gemini, Claude, OpenAI, OpenRouter, Telegram, Spotify), set default AI (main runtime chain is fixed to `Claude -> Ollama -> OpenRouter`), choose **Thinking level** (`off/minimal/low/medium/high/xhigh`), **Reasoning visibility** (`off/on/stream`), and **Final tag mode** (`off/strict`), adjust **Vision controls** (preprocess toggle with fixed Nemotron model), and toggle skills. Set your **location** in Chat (e.g. “Holon, Israel”) for time and weather.
 
-**Telegram commands:** `/status`, `/exec_mode`, `/allow`, `/allowlist`, `/approvals`, `/approve`, `/deny`, `/think` (aliases: `/thinking`, `/t`), `/reasoning`, `/subagents`.
+**Telegram commands:** `/status`, `/exec_mode`, `/allow`, `/allowlist`, `/approvals` (inline `Once/Always/Deny` actions, with automatic post-approval continuation), `/think` (aliases: `/thinking`, `/t`), `/reasoning`, `/subagents`.
 `/reasoning stream` emits live reasoning status on OpenAI/Groq/OpenRouter provider paths.
 
 **Apple Notes (macOS):** See the **Apple Notes** skill on the **Skills** page: it shows the install command (`brew tap … && brew install …`) and automatically adds `memo` to the exec allowlist when you enable the skill (no need to edit `.env`). When you ask Asta to check your notes, the AI runs the command via the exec tool and replies from the output. **Permission is per process:** Run the **Asta backend from Terminal** (e.g. `./asta.sh start`). The first time you ask to check notes, a macOS dialog may appear — approve it so the **backend process** (not just Terminal) can run memo. If you only ran `memo notes` in Terminal before, that approved Terminal; the backend is a different process and needs its own approval.
@@ -120,8 +120,8 @@ From the repo root, **`./asta.sh`** starts/stops both backend and frontend:
 | `ASTA_SUBAGENTS_MAX_CONCURRENT` | Max concurrent subagent runs from `sessions_spawn` (default: `3`). |
 | `ASTA_SUBAGENTS_ARCHIVE_AFTER_MINUTES` | Auto-archive keep-mode subagent child sessions after N minutes (default: `60`, set `0` to disable). |
 | `ASTA_VISION_PREPROCESS` | Run hybrid vision flow: image analyzed by vision provider first, then main agent answers from analysis (default: `true`). |
-| `ASTA_VISION_PROVIDER_ORDER` | Vision provider priority (comma-separated): `openrouter,claude,openai` by default. |
-| `ASTA_VISION_OPENROUTER_MODEL` | OpenRouter model for vision preprocessor (default: `nvidia/nemotron-nano-12b-v2-vl:free`). |
+| `ASTA_VISION_PROVIDER_ORDER` | Advanced override for vision provider priority (default: `openrouter,claude,openai`). Settings UI keeps this fixed. |
+| `ASTA_VISION_OPENROUTER_MODEL` | Advanced override for vision preprocessor model (default: `nvidia/nemotron-nano-12b-v2-vl:free`). Settings UI keeps this fixed. |
 | `ASTA_CORS_ORIGINS` | Extra origins (e.g. LAN or Tailscale) |
 | `ASTA_WHATSAPP_BRIDGE_URL` | e.g. `http://localhost:3001` (WhatsApp) |
 | `ASTA_SHOW_TOOL_TRACE` | Append `Tools used: ...` footer (debug) |
@@ -134,6 +134,8 @@ Many keys can also be set in **Settings → API keys** or **Settings → Spotify
 **Audio notes:** No extra env; uses faster-whisper (local). **Reminders:** Stored in DB and re-loaded on backend startup.
 
 **Vision flow:** Telegram photos are supported. By default, Asta runs a low-cost vision model first, then gives that analysis to your selected main model for the final response/tool actions.
+
+**Main AI provider flow:** runtime priority is fixed to `Claude -> Ollama -> OpenRouter` (OpenClaw-style). Billing/auth failures can auto-disable a provider until it is re-enabled from Settings (or key test succeeds).
 
 ---
 

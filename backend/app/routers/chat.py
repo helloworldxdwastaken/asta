@@ -1,5 +1,8 @@
 """Chat and incoming webhook routes."""
+import asyncio
+import json
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.handler import handle_message
@@ -85,6 +88,85 @@ async def chat(body: ChatIn):
         if not reply.startswith("Error:"):
             reply = f"Error: {reply[:300]}"
         return ChatOut(reply=reply, conversation_id=body.conversation_id or "default:web", provider=body.provider)
+
+
+@router.post("/chat/stream")
+async def chat_stream(body: ChatIn):
+    """Streaming chat endpoint (SSE): emits assistant/reasoning/status/done events."""
+    db = get_db()
+    await db.connect()
+    cid = body.conversation_id or await db.get_or_create_conversation(body.user_id, "web")
+    provider = body.provider
+    if provider == "default":
+        provider = await db.get_user_default_ai(body.user_id)
+
+    event_queue: asyncio.Queue[dict | None] = asyncio.Queue()
+
+    async def _emit_event(payload: dict) -> None:
+        await event_queue.put(payload)
+
+    async def _run_chat() -> None:
+        try:
+            async with queue_key(f"web:{cid}"):
+                reply = await handle_message(
+                    body.user_id,
+                    "web",
+                    body.text,
+                    provider_name=provider,
+                    conversation_id=cid,
+                    channel_target="web",
+                    mood=body.mood,
+                    extra_context={"_stream_event_callback": _emit_event},
+                )
+            await event_queue.put(
+                {
+                    "type": "done",
+                    "reply": reply,
+                    "conversation_id": cid,
+                    "provider": provider,
+                }
+            )
+        except Exception as e:
+            msg = str(e).strip() or "Unknown error"
+            if not msg.startswith("Error:"):
+                msg = f"Error: {msg[:300]}"
+            await event_queue.put(
+                {
+                    "type": "error",
+                    "error": msg,
+                    "conversation_id": cid,
+                    "provider": provider,
+                }
+            )
+        finally:
+            await event_queue.put(None)
+
+    task = asyncio.create_task(_run_chat(), name=f"chat-stream:{cid}")
+
+    async def _sse_iter():
+        meta = {
+            "type": "meta",
+            "conversation_id": cid,
+            "provider": provider,
+        }
+        yield f"event: meta\ndata: {json.dumps(meta, ensure_ascii=False)}\n\n"
+        while True:
+            item = await event_queue.get()
+            if item is None:
+                break
+            event_name = str(item.get("type") or "message")
+            yield f"event: {event_name}\ndata: {json.dumps(item, ensure_ascii=False)}\n\n"
+        await task
+
+    return StreamingResponse(
+        _sse_iter(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 class IncomingWhatsApp(BaseModel):

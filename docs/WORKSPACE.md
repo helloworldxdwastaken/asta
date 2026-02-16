@@ -71,7 +71,7 @@ Asta has two skill types:
 
 ## Self-awareness skill
 
-When the user asks about Asta (features, how to use it, documentation), the **self-awareness** skill runs. It injects Asta’s README and `docs/*.md` into context so the model can answer from the real docs. User context (who you are) comes from **workspace/USER.md**; no separate data folder is used. Enable or disable the skill in **Settings → Skills**.
+When the user asks about Asta (features, how to use it, documentation), the **self-awareness** skill runs. It injects Asta’s `README.md`, `CHANGELOG.md`, and `docs/*.md` into context so the model can answer from the real docs. User context (who you are) comes from **workspace/USER.md**; no separate data folder is used. Enable or disable the skill in **Settings → Skills**.
 
 ## Path access (OpenClaw-style)
 
@@ -99,11 +99,10 @@ From Telegram chat, you can control core runtime behavior without opening the pa
 - `/exec_mode` — exec security mode (`deny/allowlist/full`)
 - `/allow` — add an exec binary to allowlist persistently
 - `/allowlist` — show current effective exec allowlist
-- `/approvals` — list pending exec approval requests
-- `/approve` — approve pending exec request (`once|always`)
-- `/deny` — deny pending exec request
+- `/approvals` — list pending exec approval requests with inline buttons (`Once`, `Always`, `Deny`); approved actions auto-continue
 - `/think` (aliases: `/thinking`, `/t`) — thinking level (`off/minimal/low/medium/high/xhigh`)
 - `/reasoning` — reasoning visibility (`off/on/stream`), with live stream status on OpenAI/Groq/OpenRouter paths
+- Final tag strict mode is available in panel Settings (`final_mode=off|strict`) to expose only `<final>...</final>` output.
 
 ## Summary
 

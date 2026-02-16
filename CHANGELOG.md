@@ -4,7 +4,151 @@ All notable changes to Asta are documented here.
 
 ## [Unreleased]
 
-No entries yet.
+### Changed
+
+- **Telegram exec approvals UX** — `/approvals` now renders each pending request with inline actions:
+  - `✅ Once` (approve/run once)
+  - `✅ Always` (approve + persist binary allowlist)
+  - `❌ Deny`
+- **Telegram command simplification** — Removed manual `/approve` and `/deny` command handlers/menu entries; approvals are now handled via inline buttons.
+- **Blocked-action clarity** — When a Telegram request creates a new pending exec approval, the bot now posts an explicit blocker notice with actionable approval buttons for that new request.
+- **Approval auto-resume** — After tapping `Once` or `Always`, Telegram now auto-continues the blocked request by calling the handler with the approved command result context (no manual `continue` message required).
+- **Self-knowledge includes release history** — Self-awareness docs context and the `asta:knowledge` virtual file root now include `CHANGELOG.md` alongside README and docs files.
+- **Learning intent aliases** — Added parser/runtime support for learning aliases in chat (`become an expert on`, `study`, `research`) with optional duration handling, while preserving existing `learn about` behavior.
+
+### Tests
+
+- Added `backend/tests/test_telegram_approvals_ui.py` covering callback payload parsing, action markup, callback handler registration, and auto-resume prompt construction.
+- Added `backend/tests/test_self_awareness_docs.py` to verify `CHANGELOG.md` is included in self-awareness docs loading and the `asta:knowledge` virtual root.
+- Added `backend/tests/test_learning_intents.py` covering alias parsing and learning-job scheduling flow via `LearningService`.
+
+---
+
+## [1.3.15] - 2026-02-16
+
+### Changed
+
+- **Settings provider-flow resilience** — `Provider priority (fixed)` no longer drops to “unavailable” when optional model-list requests fail. The UI now keeps provider-flow data visible and falls back gracefully for model pickers.
+- **Dashboard responsive hardening** — Improved medium/small-screen dashboard behavior with adaptive bento/vitals breakpoints, safer header/status wrapping, and long-model-name wrapping in Brain cards.
+- **Documentation alignment** — Updated README/INSTALL/SPEC to reflect fixed provider chain semantics (`Claude -> Ollama -> OpenRouter`), fixed vision-model UI behavior, and the new responsive/dashboard + provider-flow UX hardening.
+
+### Tests
+
+- Frontend build passes after responsive and Settings load-path changes (`npm run build`).
+
+---
+
+## [1.3.14] - 2026-02-16
+
+### Added
+
+- **Provider runtime-state control** — Added persistent provider runtime state (`enabled`, `auto_disabled`, `disabled_reason`) via new DB table `provider_runtime_state`.
+- **Provider-flow Settings API** — Added fixed-priority provider flow endpoints:
+  - `GET /api/settings/provider-flow`
+  - `PUT /api/settings/provider-flow/provider-enabled`
+  plus compatibility aliases under `/settings/...`.
+
+### Changed
+
+- **OpenClaw-style main-provider chain** — Main AI provider order is now fixed to `claude -> ollama -> openrouter`.
+- **Fallback reliability hardening** — Fallback now uses runtime-state-aware skipping (manual disable + auto-disabled providers) and can continue after auth/billing failures where appropriate.
+- **Auto-disable on key/billing faults** — Providers are automatically marked disabled on billing/auth-classified failures; successful provider calls or successful key tests clear the auto-disabled flag.
+- **Settings provider UX simplification** — Settings now show fixed provider priority cards (1/2/3) with connected state, enable/disable toggles, and per-provider model controls.
+- **Model policy enforcement**:
+  - OpenRouter models are constrained to Kimi/Trinity families for tool reliability.
+  - Ollama custom model overrides must resolve to locally detected tool-capable models.
+- **Vision UI lock** — Settings keeps vision model display fixed to `nvidia/nemotron-nano-12b-v2-vl:free` (with preprocess toggle).
+- **Fallback endpoint behavior** — `/api/settings/fallback` now returns derived fixed fallback order and treats manual fallback ordering as locked.
+
+### Tests
+
+- Added `backend/tests/test_provider_flow_settings.py` for provider flow endpoint and provider enable/disable behavior.
+- Added `backend/tests/test_settings_model_policy.py` for OpenRouter Kimi/Trinity policy and Ollama tool-capable model enforcement.
+- Updated fallback tests for runtime-state-aware failover and auto-disable behavior.
+- Focused backend tests pass (`17 passed`), and frontend build passes.
+
+---
+
+## [1.3.13] - 2026-02-16
+
+### Added
+
+- **Cron actions parity expansion** — Added `run`, `runs`, and `wake` actions to the `cron` tool:
+  - `run`: manual immediate execution (`runMode=force|due`)
+  - `runs`: fetch persisted run history
+  - `wake`: scheduler refresh/wake control (`mode=now|next-heartbeat`)
+- **Cron run history persistence** — Added `cron_job_runs` table and DB APIs for storing/retrieving execution history.
+
+### Changed
+
+- **Cron argument normalization hardening** — `parse_cron_tool_args` now supports flattened and nested model outputs:
+  - top-level flattened keys (`name`, `cron_expr`, `message`, `tz`, etc.)
+  - nested `job`/`patch` recovery
+  - `id`/`jobId` alias handling
+  - `runMode` normalization
+- **Cron runner instrumentation** — Scheduler/manual cron executions now record status/output/error into run history.
+- **Prompt guidance update** — Context instructions now include `run/runs/wake` action guidance for recurring jobs.
+
+### Tests
+
+- Added `backend/tests/test_cron_tool_actions.py` covering:
+  - flattened + nested add parsing recovery
+  - `run` force path
+  - `run` due-mode skip behavior
+  - `runs` history retrieval
+  - `wake` now-mode scheduler refresh
+- Full backend suite passes (`204 passed`), and frontend build passes.
+
+---
+
+## [1.3.12] - 2026-02-16
+
+### Added
+
+- **Strict `<final>` mode toggle** — Added per-user `final_mode` (`off|strict`) in:
+  - DB settings storage/migration (`user_settings.final_mode`)
+  - Settings API (`GET/PUT /api/settings/final-mode`)
+  - Web Settings UI control.
+
+### Changed
+
+- **OpenClaw-style strict final enforcement** — Handler now supports strict final-tag visibility:
+  - In strict mode, assistant-visible text is limited to content inside `<final>...</final>`.
+  - Stream-time assistant deltas follow the same enforcement logic.
+  - Added prompt instruction to require `<final>` wrapping when strict mode is enabled.
+- **Status payload expansion** — `/api/status` now includes current final mode (`final.mode`).
+
+### Tests
+
+- Added regression tests for strict final behavior:
+  - helper-level strict extraction,
+  - settings endpoint validation,
+  - no-final suppression fallback,
+  - stream-time enforcement.
+- Full backend test suite passes (`198 passed`), and frontend build passes.
+
+---
+
+## [1.3.11] - 2026-02-16
+
+### Added
+
+- **Web SSE chat stream endpoint** — Added `POST /api/chat/stream` for evented streaming responses (`meta`, `assistant`, `reasoning`, `status`, `done`, `error`) with conversation/provider metadata.
+- **Frontend live stream client path** — Chat page now consumes SSE stream events for real-time assistant/reasoning rendering instead of interval status polling.
+
+### Changed
+
+- **Streaming parity hardening** — Handler now emits assistant/reasoning live events from chunk-time provider deltas (including tool-loop recall path) and keeps web stream status events ephemeral when callback streaming is active.
+- **Reasoning tag helper parity (OpenClaw-style)** — Added code-safe helpers for:
+  - stripping reasoning/final tags outside code spans,
+  - extracting closed tagged reasoning,
+  - extracting partial open-tag reasoning during streaming.
+- **Reasoning formatting consistency** — Unified reasoning display text via shared formatter before stream/status/final rendering.
+
+### Tests
+
+- Added reasoning helper regression tests for partial open-tag stream extraction, closed-vs-open precedence, code-region safety, and formatting behavior.
+- Full backend test suite passes (`191 passed`), and frontend build passes.
 
 ---
 

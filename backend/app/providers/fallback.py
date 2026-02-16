@@ -3,6 +3,11 @@ Inspired by OpenClaw's model-fallback.ts — adapted for Asta's Python stack.
 """
 from __future__ import annotations
 import logging
+
+from app.provider_flow import (
+    classify_provider_disable_reason,
+    resolve_main_provider_order,
+)
 from app.providers.base import (
     BaseProvider,
     Message,
@@ -20,68 +25,86 @@ async def get_available_fallback_providers(
     user_id: str,
     exclude_provider: str,
 ) -> list[str]:
-    """Build a list of provider names that have API keys configured, excluding the primary.
-    If user has set explicit fallback order, use that (filtered to available ones).
-    Otherwise, auto-detect from configured keys.
-    """
-    # Check user's explicit fallback config
-    fallback_csv = await db.get_user_fallback_providers(user_id)
-    if fallback_csv:
-        explicit = [p.strip() for p in fallback_csv.split(",") if p.strip()]
-        # Filter to only providers that have keys set
-        available = []
-        for p in explicit:
-            if p == exclude_provider:
-                continue
-            if await _provider_has_key(db, p):
-                available.append(p)
-        return available
-
-    # Auto-detect: check which providers have API keys configured
-    key_map = {
-        "groq": "groq_api_key",
-        "google": "gemini_api_key",
-        "claude": "anthropic_api_key",
-        "openai": "openai_api_key",
-        "openrouter": "openrouter_api_key",
-    }
-    # Ollama doesn't need a key (local), check if reachable
-    available = []
-    for provider_name, key_name in key_map.items():
+    """Return fixed-order fallback providers that are configured and active."""
+    ordered = resolve_main_provider_order(exclude_provider)
+    states = await db.get_provider_runtime_states(user_id, ordered)
+    available: list[str] = []
+    for provider_name in ordered:
         if provider_name == exclude_provider:
             continue
-        val = await db.get_stored_api_key(key_name)
-        if val and val.strip():
+        state = states.get(provider_name) or {}
+        if not bool(state.get("enabled", True)):
+            continue
+        if bool(state.get("auto_disabled", False)):
+            continue
+        if await _provider_has_key(db, provider_name):
             available.append(provider_name)
-    # Also check google_ai_key as alternative for google
-    if "google" not in available and "google" != exclude_provider:
-        val = await db.get_stored_api_key("google_ai_key")
-        if val and val.strip():
-            available.append("google")
     return available
 
 
 async def _provider_has_key(db, provider_name: str) -> bool:
     """Check if a provider has its API key configured."""
     key_map = {
-        "groq": "groq_api_key",
-        "google": "gemini_api_key",
         "claude": "anthropic_api_key",
-        "openai": "openai_api_key",
         "openrouter": "openrouter_api_key",
         "ollama": None,  # Local, no key needed
     }
     key_name = key_map.get(provider_name)
-    if key_name is None:
+    if key_name is None and provider_name == "ollama":
         return provider_name == "ollama"  # Ollama is always "available" (but might not be running)
+    if key_name is None:
+        return False
     val = await db.get_stored_api_key(key_name)
-    if val and val.strip():
-        return True
-    # Check alternative key names
-    if provider_name == "google":
-        val2 = await db.get_stored_api_key("google_ai_key")
-        return bool(val2 and val2.strip())
-    return False
+    return bool(val and val.strip())
+
+
+async def _runtime_provider_allowed(runtime_db, user_id: str, provider_name: str) -> tuple[bool, str]:
+    if not runtime_db or not user_id:
+        return True, ""
+    try:
+        states = await runtime_db.get_provider_runtime_states(user_id, [provider_name])
+        state = states.get(provider_name) or {}
+    except Exception as e:
+        logger.debug("Runtime state check failed for %s: %s", provider_name, e)
+        return True, ""
+    enabled = bool(state.get("enabled", True))
+    auto_disabled = bool(state.get("auto_disabled", False))
+    reason = str(state.get("disabled_reason") or "").strip().lower()
+    if not enabled:
+        return False, "disabled"
+    if auto_disabled:
+        return False, reason or "auto-disabled"
+    return True, ""
+
+
+async def _runtime_mark_success(runtime_db, user_id: str, provider_name: str) -> None:
+    if not runtime_db or not user_id:
+        return
+    try:
+        await runtime_db.clear_provider_auto_disabled(user_id, provider_name)
+    except Exception as e:
+        logger.debug("Failed clearing auto-disable for provider %s: %s", provider_name, e)
+
+
+async def _runtime_mark_failure(runtime_db, user_id: str, provider_name: str, response: ProviderResponse) -> None:
+    if not runtime_db or not user_id or not response.error:
+        return
+    reason = classify_provider_disable_reason(
+        provider_error=response.error,
+        error_message=response.error_message,
+    )
+    if not reason:
+        return
+    try:
+        await runtime_db.mark_provider_auto_disabled(user_id, provider_name, reason)
+        logger.warning(
+            "Auto-disabled provider %s due to %s failure: %s",
+            provider_name,
+            reason,
+            str(response.error_message or "")[:220],
+        )
+    except Exception as e:
+        logger.debug("Failed auto-disabling provider %s: %s", provider_name, e)
 
 
 async def chat_with_fallback(
@@ -94,37 +117,52 @@ async def chat_with_fallback(
     provider_used is the provider that produced the response (for tool-call follow-up); None on failure."""
     from app.providers.registry import get_provider
 
+    fallback_models = kwargs.pop("_fallback_models", {})
+    runtime_db = kwargs.pop("_runtime_db", None)
+    runtime_user_id = str(kwargs.pop("_runtime_user_id", "") or "").strip()
+
+    primary_allowed, primary_reason = await _runtime_provider_allowed(runtime_db, runtime_user_id, primary.name)
+
     # Try primary
-    try:
-        response = await primary.chat(messages, **kwargs)
-    except Exception as e:
-        logger.error(f"Primary provider {primary.name} exception: {e}")
+    if primary_allowed:
+        try:
+            response = await primary.chat(messages, **kwargs)
+        except Exception as e:
+            logger.error(f"Primary provider {primary.name} exception: {e}")
+            response = ProviderResponse(
+                content="",
+                error=ProviderError.TRANSIENT,
+                error_message=str(e)
+            )
+        if not response.error:
+            await _runtime_mark_success(runtime_db, runtime_user_id, primary.name)
+            return (response, primary)
+        await _runtime_mark_failure(runtime_db, runtime_user_id, primary.name, response)
+    else:
         response = ProviderResponse(
             content="",
             error=ProviderError.TRANSIENT,
-            error_message=str(e)
+            error_message=f"Provider '{primary.name}' is currently unavailable ({primary_reason}).",
         )
-
-    if not response.error:
-        return (response, primary)
-
-    if response.error == ProviderError.AUTH:
-        return (response, None)
     if not fallback_names:
         return (response, None)
 
     logger.warning(
         "Primary provider %s failed (%s: %s), trying %d fallback(s)",
-        primary.name, response.error.value, response.error_message, len(fallback_names),
+        primary.name, response.error.value if response.error else "unknown", response.error_message, len(fallback_names),
     )
 
     last_response = response
     for i, fb_name in enumerate(fallback_names):
+        fb_allowed, fb_reason = await _runtime_provider_allowed(runtime_db, runtime_user_id, fb_name)
+        if not fb_allowed:
+            logger.info("Skipping fallback provider %s (%s)", fb_name, fb_reason or "disabled")
+            continue
         fb_provider = get_provider(fb_name)
         if not fb_provider:
             logger.warning("Fallback provider '%s' not found, skipping", fb_name)
             continue
-        fb_model = kwargs.get("_fallback_models", {}).get(fb_name)
+        fb_model = fallback_models.get(fb_name) if isinstance(fallback_models, dict) else None
         fb_kwargs = {**kwargs}
         if fb_model:
             fb_kwargs["model"] = fb_model
@@ -139,12 +177,10 @@ async def chat_with_fallback(
                 error_message=f"{fb_name} exception: {str(e)}"
             )
         if not fb_response.error:
+            await _runtime_mark_success(runtime_db, runtime_user_id, fb_name)
             logger.info("Fallback %s succeeded (attempt %d/%d)", fb_name, i + 1, len(fallback_names))
             return (fb_response, fb_provider)
-        if fb_response.error == ProviderError.AUTH:
-            logger.warning("Fallback %s: auth error, skipping to next", fb_name)
-            last_response = fb_response
-            continue
+        await _runtime_mark_failure(runtime_db, runtime_user_id, fb_name, fb_response)
         logger.warning("Fallback %s failed (%s), trying next", fb_name, fb_response.error.value)
         last_response = fb_response
 
@@ -167,6 +203,10 @@ async def chat_with_fallback_stream(
     """
     from app.providers.registry import get_provider
 
+    fallback_models = kwargs.pop("_fallback_models", {})
+    runtime_db = kwargs.pop("_runtime_db", None)
+    runtime_user_id = str(kwargs.pop("_runtime_user_id", "") or "").strip()
+
     async def _call_stream_capable(p, msgs, cb, **call_kwargs) -> ProviderResponse:
         if hasattr(p, "chat_stream"):
             return await p.chat_stream(msgs, on_text_delta=cb, **call_kwargs)
@@ -175,36 +215,46 @@ async def chat_with_fallback_stream(
             await emit_text_delta(cb, out.content)
         return out
 
-    try:
-        response = await _call_stream_capable(primary, messages, on_text_delta, **kwargs)
-    except Exception as e:
-        logger.error(f"Primary provider {primary.name} stream exception: {e}")
+    primary_allowed, primary_reason = await _runtime_provider_allowed(runtime_db, runtime_user_id, primary.name)
+    if primary_allowed:
+        try:
+            response = await _call_stream_capable(primary, messages, on_text_delta, **kwargs)
+        except Exception as e:
+            logger.error(f"Primary provider {primary.name} stream exception: {e}")
+            response = ProviderResponse(
+                content="",
+                error=ProviderError.TRANSIENT,
+                error_message=str(e)
+            )
+        if not response.error:
+            await _runtime_mark_success(runtime_db, runtime_user_id, primary.name)
+            return (response, primary)
+        await _runtime_mark_failure(runtime_db, runtime_user_id, primary.name, response)
+    else:
         response = ProviderResponse(
             content="",
             error=ProviderError.TRANSIENT,
-            error_message=str(e)
+            error_message=f"Provider '{primary.name}' is currently unavailable ({primary_reason}).",
         )
-
-    if not response.error:
-        return (response, primary)
-
-    if response.error == ProviderError.AUTH:
-        return (response, None)
     if not fallback_names:
         return (response, None)
 
     logger.warning(
         "Primary provider %s (stream) failed (%s: %s), trying %d fallback(s)",
-        primary.name, response.error.value, response.error_message, len(fallback_names),
+        primary.name, response.error.value if response.error else "unknown", response.error_message, len(fallback_names),
     )
 
     last_response = response
     for i, fb_name in enumerate(fallback_names):
+        fb_allowed, fb_reason = await _runtime_provider_allowed(runtime_db, runtime_user_id, fb_name)
+        if not fb_allowed:
+            logger.info("Skipping fallback provider %s (%s)", fb_name, fb_reason or "disabled")
+            continue
         fb_provider = get_provider(fb_name)
         if not fb_provider:
             logger.warning("Fallback provider '%s' not found, skipping", fb_name)
             continue
-        fb_model = kwargs.get("_fallback_models", {}).get(fb_name)
+        fb_model = fallback_models.get(fb_name) if isinstance(fallback_models, dict) else None
         fb_kwargs = {**kwargs}
         if fb_model:
             fb_kwargs["model"] = fb_model
@@ -224,12 +274,10 @@ async def chat_with_fallback_stream(
                 error_message=f"{fb_name} exception: {str(e)}"
             )
         if not fb_response.error:
+            await _runtime_mark_success(runtime_db, runtime_user_id, fb_name)
             logger.info("Fallback %s (stream) succeeded (attempt %d/%d)", fb_name, i + 1, len(fallback_names))
             return (fb_response, fb_provider)
-        if fb_response.error == ProviderError.AUTH:
-            logger.warning("Fallback %s: auth error, skipping to next", fb_name)
-            last_response = fb_response
-            continue
+        await _runtime_mark_failure(runtime_db, runtime_user_id, fb_name, fb_response)
         logger.warning("Fallback %s failed (%s), trying next", fb_name, fb_response.error.value)
         last_response = fb_response
 

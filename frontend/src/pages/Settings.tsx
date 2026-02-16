@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import type { CronJob, VisionSettings } from "../api/client";
+import type { CronJob, ProviderFlow } from "../api/client";
 import { api } from "../api/client";
 
 /** Logo URL or fallback initial for provider cards */
@@ -88,7 +88,7 @@ function RestartBackendButton() {
         </button>
       </div>
       {done && (
-        <div className={isError ? "alert alert-error" : "alert"} style={{ marginTop: "0.75rem" }}>
+        <div className={isError ? "alert alert-error settings-alert-top" : "alert settings-alert-top"}>
           {done}
         </div>
       )}
@@ -170,8 +170,7 @@ function AutoUpdaterSettings({
             value={cronExpr}
             onChange={(e) => setCronExpr(e.target.value)}
             placeholder="0 4 * * *"
-            className="input"
-            style={{ maxWidth: 220 }}
+            className="input settings-input-sm"
           />
           <p className="help">e.g. <code>0 4 * * *</code> = daily at 4:00 AM</p>
         </div>
@@ -183,8 +182,7 @@ function AutoUpdaterSettings({
             value={tz}
             onChange={(e) => setTz(e.target.value)}
             placeholder="e.g. America/Los_Angeles"
-            className="input"
-            style={{ maxWidth: 280 }}
+            className="input settings-input-md"
           />
         </div>
         <div className="actions">
@@ -192,12 +190,8 @@ function AutoUpdaterSettings({
             {saving ? "Saving…" : "Save schedule"}
           </button>
         </div>
-        {message && (
-          <div className={message.startsWith("Error") ? "alert alert-error" : "alert"} style={{ marginTop: "0.75rem" }}>
-            {message}
-          </div>
-        )}
-        <p className="help" style={{ marginTop: "0.5rem" }}>
+        {message && <div className={message.startsWith("Error") ? "alert alert-error settings-alert-top" : "alert settings-alert-top"}>{message}</div>}
+        <p className="help settings-help-gap-sm">
           View or remove this job in the <Link to="/cron" className="link">Cron</Link> tab.
         </p>
       </div>
@@ -234,27 +228,13 @@ function TestGroqButton() {
   );
 }
 
-// Provider id -> status key (backend status uses "gemini" for Google)
-const PROVIDER_STATUS_KEYS: Record<string, string> = {
-  groq: "groq",
-  google: "gemini",
-  claude: "claude",
-  ollama: "ollama",
-  openai: "openai",
-  openrouter: "openrouter",
-};
-
-const DEFAULT_AI_LABELS: Record<string, string> = {
-  groq: "Groq",
-  google: "Google (Gemini)",
+const MAIN_PROVIDER_IDS = ["claude", "ollama", "openrouter"] as const;
+type MainProviderId = (typeof MAIN_PROVIDER_IDS)[number];
+const MAIN_PROVIDER_LABELS: Record<MainProviderId, string> = {
   claude: "Claude",
   ollama: "Ollama",
-  openai: "OpenAI",
   openrouter: "OpenRouter",
 };
-
-const PROVIDER_IDS = ["groq", "google", "claude", "ollama", "openai", "openrouter"] as const;
-type ProviderId = (typeof PROVIDER_IDS)[number];
 
 const CLAUDE_CUSTOM_MODEL = "__custom__";
 const CLAUDE_MODEL_PRESETS: Array<{ label: string; value: string }> = [
@@ -264,6 +244,14 @@ const CLAUDE_MODEL_PRESETS: Array<{ label: string; value: string }> = [
 ];
 const OLLAMA_DEFAULT_MODEL = "__provider_default__";
 const OLLAMA_CUSTOM_MODEL = "__custom_model__";
+const OPENROUTER_CUSTOM_MODEL = "__custom_openrouter__";
+const FIXED_VISION_MODEL = "nvidia/nemotron-nano-12b-v2-vl:free";
+const OPENROUTER_MODEL_PRESETS: Array<{ label: string; value: string }> = [
+  { label: "Kimi K2.5 (tools)", value: "moonshotai/kimi-k2.5" },
+  { label: "Kimi K2 Thinking (tools)", value: "moonshotai/kimi-k2-thinking" },
+  { label: "Trinity Large Preview (free)", value: "arcee-ai/trinity-large-preview:free" },
+  { label: "Kimi -> Trinity fallback", value: "moonshotai/kimi-k2.5,arcee-ai/trinity-large-preview:free" },
+];
 
 function resolveOllamaSelectValue(model: string, ollamaList: string[]): string {
   const trimmed = model.trim();
@@ -272,75 +260,114 @@ function resolveOllamaSelectValue(model: string, ollamaList: string[]): string {
   return matched ?? OLLAMA_CUSTOM_MODEL;
 }
 
+function resolveOpenRouterSelectValue(model: string, presets: string[]): string {
+  const trimmed = model.trim();
+  if (!trimmed) return presets[0] ?? OPENROUTER_CUSTOM_MODEL;
+  return presets.includes(trimmed) ? trimmed : OPENROUTER_CUSTOM_MODEL;
+}
+
+function formatProviderDisableReason(reason: string): string {
+  const key = (reason || "").trim().toLowerCase();
+  if (key === "billing") return "Auto-disabled: billing / credits issue";
+  if (key === "auth") return "Auto-disabled: auth/key issue";
+  if (!key) return "Auto-disabled";
+  return `Auto-disabled: ${key}`;
+}
+
 function DefaultAiSelect() {
-  const [provider, setProvider] = useState("");
+  const [provider, setProvider] = useState<MainProviderId>("claude");
   const [model, setModel] = useState("");
+  const [models, setModels] = useState<Record<string, string>>({});
   const [thinkingLevel, setThinkingLevel] = useState<"off" | "minimal" | "low" | "medium" | "high" | "xhigh">("off");
   const [reasoningMode, setReasoningMode] = useState<"off" | "on" | "stream">("off");
-  const [visionSettings, setVisionSettings] = useState<VisionSettings>({
-    preprocess: true,
-    provider_order: "openrouter,claude,openai",
-    openrouter_model: "nvidia/nemotron-nano-12b-v2-vl:free",
-  });
-  const [availableModels, setAvailableModels] = useState<{ ollama: string[] }>({ ollama: [] });
+  const [finalMode, setFinalMode] = useState<"off" | "strict">("off");
+  const [visionPreprocess, setVisionPreprocess] = useState(true);
+  const [providerFlow, setProviderFlow] = useState<ProviderFlow | null>(null);
+  const [availableModels, setAvailableModels] = useState<{ ollama: string[]; openrouter?: string[] }>({ ollama: [] });
   const [defaults, setDefaults] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [savingModel, setSavingModel] = useState(false);
   const [savingThinking, setSavingThinking] = useState(false);
   const [savingReasoning, setSavingReasoning] = useState(false);
+  const [savingFinalMode, setSavingFinalMode] = useState(false);
   const [savingVision, setSavingVision] = useState(false);
   const [visionMsg, setVisionMsg] = useState<string | null>(null);
-  const [connected, setConnected] = useState<Record<string, boolean>>({});
-  useEffect(() => {
-    Promise.all([
+  const refresh = async () => {
+    const [
+      defaultResp,
+      modelsResp,
+      thinkingResp,
+      reasoningResp,
+      finalModeResp,
+      visionResp,
+      flowResp,
+      availableResp,
+    ] = await Promise.allSettled([
       api.getDefaultAi(),
-      api.status(),
       api.getModels(),
       api.getThinking(),
       api.getReasoning(),
+      api.getFinalMode(),
       api.getVisionSettings(),
-    ]).then(([r, status, modelsResp, thinkingResp, reasoningResp, visionResp]) => {
-      setConnected(status.apis ?? {});
-      setDefaults(modelsResp.defaults ?? {});
-      setModel((modelsResp.models ?? {})[r.provider] ?? "");
-      setThinkingLevel(thinkingResp.thinking_level ?? "off");
-      setReasoningMode(reasoningResp.reasoning_mode ?? "off");
-      setVisionSettings({
-        preprocess: !!visionResp.preprocess,
-        provider_order: visionResp.provider_order || "openrouter,claude,openai",
-        openrouter_model: visionResp.openrouter_model || "nvidia/nemotron-nano-12b-v2-vl:free",
-      });
-      setLoading(false);
-      setProvider(r.provider);
-    });
-    api.getAvailableModels().then(setAvailableModels).catch(() => setAvailableModels({ ollama: [] }));
+      api.getProviderFlow(),
+      api.getAvailableModels(),
+    ]);
+    if (defaultResp.status !== "fulfilled") {
+      throw new Error("Default AI provider settings unavailable");
+    }
+    const nextProvider = (defaultResp.value.provider || "claude") as MainProviderId;
+    setProvider(nextProvider);
+    const nextModels = modelsResp.status === "fulfilled" ? (modelsResp.value.models ?? {}) : {};
+    const nextDefaults = modelsResp.status === "fulfilled" ? (modelsResp.value.defaults ?? {}) : {};
+    setModels(nextModels);
+    setDefaults(nextDefaults);
+    setModel(nextModels[nextProvider] ?? "");
+    setThinkingLevel(thinkingResp.status === "fulfilled" ? (thinkingResp.value.thinking_level ?? "off") : "off");
+    setReasoningMode(reasoningResp.status === "fulfilled" ? (reasoningResp.value.reasoning_mode ?? "off") : "off");
+    setFinalMode(finalModeResp.status === "fulfilled" ? (finalModeResp.value.final_mode ?? "off") : "off");
+    setVisionPreprocess(visionResp.status === "fulfilled" ? !!visionResp.value.preprocess : true);
+    setProviderFlow(flowResp.status === "fulfilled" ? flowResp.value : null);
+    setAvailableModels(availableResp.status === "fulfilled" ? (availableResp.value ?? { ollama: [] }) : { ollama: [] });
+  };
+  useEffect(() => {
+    refresh()
+      .catch(() => {
+        setProviderFlow(null);
+      })
+      .finally(() => setLoading(false));
   }, []);
   useEffect(() => {
-    if (loading || !provider || Object.keys(connected).length === 0) return;
-    const connectedIds = PROVIDER_IDS.filter(
-      (id) => connected[PROVIDER_STATUS_KEYS[id]]
-    );
-    if (connectedIds.length > 0 && !connectedIds.includes(provider as typeof connectedIds[number])) {
-      const fallback = connectedIds[0];
-      setProvider(fallback);
-      api.setDefaultAi(fallback).catch(() => { });
-    }
-  }, [loading, connected, provider]);
+    setModel(models[provider] ?? "");
+  }, [provider, models]);
   useEffect(() => {
-    if (!provider || loading) return;
-    api.getModels().then((r) => {
-      setModel(r.models[provider] ?? "");
-      setDefaults(r.defaults ?? {});
-    });
-  }, [provider, loading]);
-  const change = (p: string) => {
+    if (!providerFlow) return;
+    const active = providerFlow.providers.filter((p) => p.active).map((p) => p.provider as MainProviderId);
+    const connected = providerFlow.providers
+      .filter((p) => p.connected && p.enabled)
+      .map((p) => p.provider as MainProviderId);
+    const options: MainProviderId[] =
+      active.length > 0
+        ? active
+        : connected.length > 0
+          ? connected
+          : providerFlow.providers.map((p) => p.provider as MainProviderId);
+    if (options.length === 0 || options.includes(provider)) return;
+    const fallback = options[0];
+    setProvider(fallback);
+    api.setDefaultAi(fallback).catch(() => { });
+  }, [providerFlow, provider]);
+  const change = (p: MainProviderId) => {
+    const previous = provider;
     setProvider(p);
-    api.setDefaultAi(p).catch(() => setProvider(provider));
+    api.setDefaultAi(p).catch(() => setProvider(previous));
   };
   const saveModel = () => {
     if (!provider) return;
+    const trimmed = model.trim();
     setSavingModel(true);
-    api.setModel(provider, model.trim()).finally(() => setSavingModel(false));
+    api.setModel(provider, trimmed).then(() => {
+      setModels((prev) => ({ ...prev, [provider]: trimmed }));
+    }).finally(() => setSavingModel(false));
   };
   const saveThinking = (level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh") => {
     setThinkingLevel(level);
@@ -352,16 +379,20 @@ function DefaultAiSelect() {
     setSavingReasoning(true);
     api.setReasoning(mode).finally(() => setSavingReasoning(false));
   };
+  const saveFinalMode = (mode: "off" | "strict") => {
+    setFinalMode(mode);
+    setSavingFinalMode(true);
+    api.setFinalMode(mode).finally(() => setSavingFinalMode(false));
+  };
   const saveVision = async () => {
     setSavingVision(true);
     setVisionMsg(null);
     try {
-      const saved = await api.setVisionSettings({
-        preprocess: !!visionSettings.preprocess,
-        provider_order: (visionSettings.provider_order || "").trim(),
-        openrouter_model: (visionSettings.openrouter_model || "").trim(),
+      await api.setVisionSettings({
+        preprocess: !!visionPreprocess,
+        provider_order: "openrouter,claude,openai",
+        openrouter_model: FIXED_VISION_MODEL,
       });
-      setVisionSettings(saved);
       setVisionMsg("Vision settings saved.");
     } catch (e) {
       setVisionMsg("Error: " + ((e as Error).message || "Failed to save"));
@@ -369,62 +400,95 @@ function DefaultAiSelect() {
       setSavingVision(false);
     }
   };
-  const connectedProviders = PROVIDER_IDS.filter(
-    (id) => connected[PROVIDER_STATUS_KEYS[id]]
-  );
-  if (loading) return <p style={{ color: "var(--muted)" }}>Loading…</p>;
-  if (connectedProviders.length === 0) {
+  if (loading) return <p className="settings-loading">Loading…</p>;
+  const flowProviders = providerFlow?.providers ?? [];
+  const activeOptions = flowProviders.filter((p) => p.active).map((p) => p.provider as MainProviderId);
+  const connectedEnabledOptions = flowProviders
+    .filter((p) => p.connected && p.enabled)
+    .map((p) => p.provider as MainProviderId);
+  const selectableProviders: MainProviderId[] =
+    activeOptions.length > 0
+      ? activeOptions
+      : connectedEnabledOptions.length > 0
+        ? connectedEnabledOptions
+        : flowProviders.map((p) => p.provider as MainProviderId);
+  if (selectableProviders.length === 0) {
     return (
       <p className="help">
-        No API connected yet. Add at least one key above (Groq, OpenRouter, etc.), save, then choose your default AI and model here.
+        No main AI provider is connected yet. Set up Claude, Ollama, or OpenRouter first.
       </p>
     );
   }
-  const value = connectedProviders.includes(provider as typeof connectedProviders[number]) ? provider : connectedProviders[0];
+  const value = selectableProviders.includes(provider) ? provider : selectableProviders[0];
   const defaultModel = defaults[provider] ?? "";
   const isClaudeProvider = provider === "claude";
   const ollamaList = availableModels.ollama || [];
+  const openrouterList = (availableModels.openrouter && availableModels.openrouter.length > 0)
+    ? availableModels.openrouter
+    : OPENROUTER_MODEL_PRESETS.map((p) => p.value);
   const isOllamaProvider = provider === "ollama";
+  const isOpenRouterProvider = provider === "openrouter";
   const ollamaSelectValue = resolveOllamaSelectValue(model, ollamaList);
+  const openrouterSelectValue = resolveOpenRouterSelectValue(model, openrouterList);
   const isKnownClaudePreset = CLAUDE_MODEL_PRESETS.some((p) => p.value === model);
   const claudePresetValue = isKnownClaudePreset ? model : (model.trim() ? CLAUDE_CUSTOM_MODEL : "");
   const pickClaudeModel = (picked: string) => {
     if (picked === CLAUDE_CUSTOM_MODEL) return;
+    const trimmed = picked.trim();
     setModel(picked);
     setSavingModel(true);
-    api.setModel("claude", picked.trim()).finally(() => setSavingModel(false));
+    api.setModel("claude", trimmed).then(() => {
+      setModels((prev) => ({ ...prev, claude: trimmed }));
+    }).finally(() => setSavingModel(false));
   };
   const pickOllamaModel = (picked: string) => {
     if (picked === OLLAMA_CUSTOM_MODEL) return;
     const nextModel = picked === OLLAMA_DEFAULT_MODEL ? "" : picked;
+    const trimmed = nextModel.trim();
     setModel(nextModel);
     setSavingModel(true);
-    api.setModel("ollama", nextModel.trim()).finally(() => setSavingModel(false));
+    api.setModel("ollama", trimmed).then(() => {
+      setModels((prev) => ({ ...prev, ollama: trimmed }));
+    }).finally(() => setSavingModel(false));
+  };
+  const pickOpenRouterModel = (picked: string) => {
+    if (picked === OPENROUTER_CUSTOM_MODEL) return;
+    const trimmed = picked.trim();
+    setModel(picked);
+    setSavingModel(true);
+    api.setModel("openrouter", trimmed).then(() => {
+      setModels((prev) => ({ ...prev, openrouter: trimmed }));
+    }).finally(() => setSavingModel(false));
   };
   return (
     <div>
       <div className="field">
         <label className="label" htmlFor="default-ai-select">Default AI provider</label>
-        <select id="default-ai-select" value={value} onChange={(e) => change(e.target.value)} className="select" style={{ maxWidth: 320 }}>
-          {connectedProviders.map((id) => (
+        <select
+          id="default-ai-select"
+          value={value}
+          onChange={(e) => change(e.target.value as MainProviderId)}
+          className="select settings-input-provider"
+        >
+          {selectableProviders.map((id) => (
             <option key={id} value={id}>
-              {DEFAULT_AI_LABELS[id]}
+              {MAIN_PROVIDER_LABELS[id]}
             </option>
           ))}
         </select>
+        <p className="help settings-help-gap-xs">Fallback order is fixed for now: Claude -&gt; Ollama -&gt; OpenRouter.</p>
       </div>
       <div className="field">
         <div className="field-row">
           <label className="label" htmlFor="thinking-level-select">Thinking level</label>
           <span className="help">Used across chat + channels</span>
         </div>
-        <div className="actions" style={{ gap: "0.5rem", alignItems: "center" }}>
+        <div className="actions settings-inline-controls">
           <select
             id="thinking-level-select"
             value={thinkingLevel}
             onChange={(e) => saveThinking(e.target.value as "off" | "minimal" | "low" | "medium" | "high" | "xhigh")}
-            className="select"
-            style={{ maxWidth: 220 }}
+            className="select settings-input-sm"
           >
             <option value="off">Off</option>
             <option value="minimal">Minimal</option>
@@ -435,7 +499,7 @@ function DefaultAiSelect() {
           </select>
           {savingThinking && <span className="help">Saving…</span>}
         </div>
-        <p className="help" style={{ marginTop: "0.35rem" }}>
+        <p className="help settings-help-gap-xs">
           Higher levels spend more effort before replying, especially for tool-heavy tasks. `minimal` is a lightweight nudge; `xhigh` is the deepest mode.
         </p>
       </div>
@@ -444,13 +508,12 @@ function DefaultAiSelect() {
           <label className="label" htmlFor="reasoning-mode-select">Reasoning visibility</label>
           <span className="help">Off by default</span>
         </div>
-        <div className="actions" style={{ gap: "0.5rem", alignItems: "center" }}>
+        <div className="actions settings-inline-controls">
           <select
             id="reasoning-mode-select"
             value={reasoningMode}
             onChange={(e) => saveReasoning(e.target.value as "off" | "on" | "stream")}
-            className="select"
-            style={{ maxWidth: 220 }}
+            className="select settings-input-sm"
           >
             <option value="off">Off</option>
             <option value="on">On</option>
@@ -458,8 +521,29 @@ function DefaultAiSelect() {
           </select>
           {savingReasoning && <span className="help">Saving…</span>}
         </div>
-        <p className="help" style={{ marginTop: "0.35rem" }}>
+        <p className="help settings-help-gap-xs">
           Shows a short “Reasoning:” section when available. Stream mode sends reasoning as live status updates.
+        </p>
+      </div>
+      <div className="field">
+        <div className="field-row">
+          <label className="label" htmlFor="final-mode-select">Final tag mode</label>
+          <span className="help">OpenClaw strict mode</span>
+        </div>
+        <div className="actions settings-inline-controls">
+          <select
+            id="final-mode-select"
+            value={finalMode}
+            onChange={(e) => saveFinalMode(e.target.value as "off" | "strict")}
+            className="select settings-input-sm"
+          >
+            <option value="off">Off</option>
+            <option value="strict">Strict</option>
+          </select>
+          {savingFinalMode && <span className="help">Saving…</span>}
+        </div>
+        <p className="help settings-help-gap-xs">
+          Strict mode only shows text inside <code>&lt;final&gt;...&lt;/final&gt;</code>. Text outside final tags is suppressed.
         </p>
       </div>
       <div className="field">
@@ -468,13 +552,12 @@ function DefaultAiSelect() {
           {defaultModel && <span className="help">default: {defaultModel}</span>}
         </div>
         {isClaudeProvider && (
-          <div style={{ marginBottom: "0.5rem", maxWidth: 420 }}>
+          <div className="settings-input-block settings-input-lg">
             <select
               id="default-ai-claude-preset"
               value={claudePresetValue}
               onChange={(e) => pickClaudeModel(e.target.value)}
-              className="select"
-              style={{ width: "100%" }}
+              className="select settings-full-width"
             >
               {CLAUDE_MODEL_PRESETS.map((preset) => (
                 <option key={preset.value || "__default__"} value={preset.value}>
@@ -486,13 +569,12 @@ function DefaultAiSelect() {
           </div>
         )}
         {isOllamaProvider && ollamaList.length > 0 && (
-          <div style={{ marginBottom: "0.5rem", maxWidth: 420 }}>
+          <div className="settings-input-block settings-input-lg">
             <select
               id="default-ai-ollama-select"
               value={ollamaSelectValue}
               onChange={(e) => pickOllamaModel(e.target.value)}
-              className="select"
-              style={{ width: "100%" }}
+              className="select settings-full-width"
             >
               <option value={OLLAMA_DEFAULT_MODEL}>Use provider default</option>
               {ollamaList.map((name) => (
@@ -504,13 +586,37 @@ function DefaultAiSelect() {
             </select>
           </div>
         )}
-        <div className="actions" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
+        {isOpenRouterProvider && openrouterList.length > 0 && (
+          <div className="settings-input-block settings-input-lg">
+            <select
+              id="default-ai-openrouter-select"
+              value={openrouterSelectValue}
+              onChange={(e) => pickOpenRouterModel(e.target.value)}
+              className="select settings-full-width"
+            >
+              {OPENROUTER_MODEL_PRESETS.map((preset) => (
+                <option key={preset.value} value={preset.value}>
+                  {preset.label}
+                </option>
+              ))}
+              {openrouterList
+                .filter((value) => !OPENROUTER_MODEL_PRESETS.some((preset) => preset.value === value))
+                .map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))}
+              <option value={OPENROUTER_CUSTOM_MODEL}>Custom model ID (advanced)</option>
+            </select>
+          </div>
+        )}
+        <div className="actions settings-inline-controls settings-actions-wrap">
           <input
             id="default-ai-model"
             type="text"
             placeholder={
               provider === "openrouter"
-                ? "e.g. anthropic/claude-3.5-sonnet or model,fallback (comma-separated)"
+                ? "Kimi/Trinity only (comma-separated fallback allowed)"
                 : provider === "ollama"
                   ? "Custom Ollama model/tag (optional)"
                 : provider === "claude"
@@ -520,67 +626,45 @@ function DefaultAiSelect() {
             value={model}
             onChange={(e) => setModel(e.target.value)}
             onBlur={saveModel}
-            className="input"
-            style={{ maxWidth: 420, flex: "1 1 200px" }}
+            className="input settings-input-lg settings-input-flex"
           />
           <button type="button" onClick={saveModel} disabled={savingModel} className="btn btn-secondary">
             {savingModel ? "Saving…" : "Save model"}
           </button>
         </div>
         {provider === "ollama" && ollamaList.length > 0 && (
-          <p className="help" style={{ marginTop: "0.35rem" }}>
+          <p className="help settings-help-gap-xs">
             Pick from installed models using the dropdown, or type a custom tag manually.
           </p>
         )}
-        <p className="help" style={{ marginTop: "0.35rem" }}>
-          Leave blank to use the provider default. For OpenRouter, use a model ID from{" "}
-          <a href="https://openrouter.ai/models" target="_blank" rel="noreferrer" className="link">openrouter.ai/models</a>.
+        <p className="help settings-help-gap-xs">
+          Leave blank to use the provider default.
+          {provider === "openrouter" ? " OpenRouter is restricted to Kimi/Trinity models for tool reliability." : ""}
+          {provider !== "openrouter" && (
+            <>
+              {" "}For OpenRouter, use a model ID from{" "}
+              <a href="https://openrouter.ai/models" target="_blank" rel="noreferrer" className="link">openrouter.ai/models</a>.
+            </>
+          )}
           {provider === "claude" ? " You can also pick a Claude preset above, then override with a custom model ID." : ""}
           {provider === "ollama" ? " You can pick from local models using the dropdown above, or type any Ollama model/tag manually." : ""}
         </p>
       </div>
       <div className="field">
         <div className="field-row">
-          <label className="label" htmlFor="vision-preprocess-toggle">Vision controls</label>
-          <span className="help">Image analysis path</span>
+          <label className="label" htmlFor="vision-preprocess-toggle">Vision (fixed model)</label>
+          <span className="help">{FIXED_VISION_MODEL}</span>
         </div>
-        <label style={{ display: "inline-flex", gap: "0.5rem", alignItems: "center", marginBottom: "0.5rem" }}>
+        <label className="settings-checkbox-row">
           <input
             id="vision-preprocess-toggle"
             type="checkbox"
-            checked={!!visionSettings.preprocess}
-            onChange={(e) => setVisionSettings((v) => ({ ...v, preprocess: e.target.checked }))}
+            checked={!!visionPreprocess}
+            onChange={(e) => setVisionPreprocess(e.target.checked)}
           />
           <span>Preprocess screenshots before vision analysis</span>
         </label>
-        <div className="field" style={{ marginBottom: "0.5rem" }}>
-          <label className="label" htmlFor="vision-provider-order">Provider order</label>
-          <input
-            id="vision-provider-order"
-            type="text"
-            className="input"
-            value={visionSettings.provider_order}
-            onChange={(e) => setVisionSettings((v) => ({ ...v, provider_order: e.target.value }))}
-            placeholder="openrouter,claude,openai"
-            style={{ maxWidth: 420 }}
-          />
-          <p className="help" style={{ marginTop: "0.35rem" }}>
-            Comma-separated order: <code>openrouter</code>, <code>claude</code>, <code>openai</code>.
-          </p>
-        </div>
-        <div className="field" style={{ marginBottom: "0.5rem" }}>
-          <label className="label" htmlFor="vision-openrouter-model">OpenRouter vision model</label>
-          <input
-            id="vision-openrouter-model"
-            type="text"
-            className="input"
-            value={visionSettings.openrouter_model}
-            onChange={(e) => setVisionSettings((v) => ({ ...v, openrouter_model: e.target.value }))}
-            placeholder="nvidia/nemotron-nano-12b-v2-vl:free"
-            style={{ maxWidth: 420 }}
-          />
-        </div>
-        <div className="actions" style={{ gap: "0.5rem", alignItems: "center" }}>
+        <div className="actions settings-inline-controls">
           <button type="button" onClick={saveVision} disabled={savingVision} className="btn btn-secondary">
             {savingVision ? "Saving…" : "Save vision settings"}
           </button>
@@ -592,70 +676,53 @@ function DefaultAiSelect() {
 }
 
 function FallbackProviderSelect() {
-  const [fallbackCsv, setFallbackCsv] = useState("");
-  const [defaultProvider, setDefaultProvider] = useState("");
-  const [connected, setConnected] = useState<Record<string, boolean>>({});
+  const [flow, setFlow] = useState<ProviderFlow | null>(null);
   const [models, setModels] = useState<Record<string, string>>({});
   const [defaults, setDefaults] = useState<Record<string, string>>({});
-  const [availableModels, setAvailableModels] = useState<{ ollama: string[] }>({ ollama: [] });
+  const [availableModels, setAvailableModels] = useState<{ ollama: string[]; openrouter?: string[] }>({ ollama: [] });
   const [loading, setLoading] = useState(true);
-  const [savingOrder, setSavingOrder] = useState(false);
-  const [savingModelFor, setSavingModelFor] = useState<ProviderId | null>(null);
+  const [savingProvider, setSavingProvider] = useState<MainProviderId | null>(null);
+  const [savingModelFor, setSavingModelFor] = useState<MainProviderId | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
-  useEffect(() => {
-    Promise.all([
-      api.getFallbackProviders(),
-      api.getDefaultAi(),
-      api.status(),
+  const load = async () => {
+    const [flowResp, modelsResp, availableResp] = await Promise.allSettled([
+      api.getProviderFlow(),
       api.getModels(),
       api.getAvailableModels(),
-    ]).then(([fb, ai, status, modelsResp, availableResp]) => {
-      setFallbackCsv(fb.providers || "");
-      setDefaultProvider(ai.provider);
-      setConnected(status.apis ?? {});
-      setModels(modelsResp.models ?? {});
-      setDefaults(modelsResp.defaults ?? {});
-      setAvailableModels(availableResp ?? { ollama: [] });
-      setLoading(false);
-    });
+    ]);
+    if (flowResp.status !== "fulfilled") {
+      throw flowResp.reason;
+    }
+    setFlow(flowResp.value);
+    setModels(modelsResp.status === "fulfilled" ? (modelsResp.value.models ?? {}) : {});
+    setDefaults(modelsResp.status === "fulfilled" ? (modelsResp.value.defaults ?? {}) : {});
+    setAvailableModels(availableResp.status === "fulfilled" ? (availableResp.value ?? { ollama: [] }) : { ollama: [] });
+  };
+
+  useEffect(() => {
+    load()
+      .catch(() => {
+        setFlow(null);
+      })
+      .finally(() => setLoading(false));
   }, []);
 
-  const connectedProviders: ProviderId[] = PROVIDER_IDS.filter(
-    (id) => connected[PROVIDER_STATUS_KEYS[id]] && id !== defaultProvider
-  );
-
-  const selected: ProviderId[] = fallbackCsv
-    .split(",")
-    .map((s) => s.trim())
-    .filter((s): s is ProviderId => !!s && connectedProviders.includes(s as ProviderId));
-
-  const saveOrder = async (next: ProviderId[]) => {
-    const csv = next.join(",");
-    setFallbackCsv(csv);
-    setSavingOrder(true);
+  const toggleProvider = async (provider: MainProviderId, enabled: boolean) => {
+    setSavingProvider(provider);
     setMsg(null);
     try {
-      await api.setFallbackProviders(csv);
-      setMsg(next.length ? `Fallback order: ${next.map((p) => DEFAULT_AI_LABELS[p]).join(" -> ")}` : "Auto-detect (all available keys)");
+      await api.setProviderEnabled(provider, enabled);
+      await load();
+      setMsg(`${MAIN_PROVIDER_LABELS[provider]} ${enabled ? "enabled" : "disabled"}.`);
     } catch {
-      setMsg("Failed to save fallback order.");
+      setMsg(`Failed to update ${MAIN_PROVIDER_LABELS[provider]}.`);
     } finally {
-      setSavingOrder(false);
+      setSavingProvider(null);
     }
   };
 
-  const toggle = (provider: ProviderId) => {
-    let next: string[];
-    if (selected.includes(provider)) {
-      next = selected.filter((p) => p !== provider);
-    } else {
-      next = [...selected, provider];
-    }
-    void saveOrder(next as ProviderId[]);
-  };
-
-  const saveProviderModel = async (provider: ProviderId, overrideModel?: string) => {
+  const saveProviderModel = async (provider: MainProviderId, overrideModel?: string) => {
     const rawValue = overrideModel ?? models[provider] ?? "";
     const value = rawValue.trim();
     if (overrideModel !== undefined) {
@@ -665,131 +732,163 @@ function FallbackProviderSelect() {
     setMsg(null);
     try {
       await api.setModel(provider, value);
-      setMsg(`${DEFAULT_AI_LABELS[provider]} model saved.`);
+      setMsg(`${MAIN_PROVIDER_LABELS[provider]} model saved.`);
     } catch {
-      setMsg(`Failed to save ${DEFAULT_AI_LABELS[provider]} model.`);
+      setMsg(`Failed to save ${MAIN_PROVIDER_LABELS[provider]} model.`);
     } finally {
       setSavingModelFor(null);
     }
   };
 
-  if (loading) return <p style={{ color: "var(--muted)" }}>Loading…</p>;
-  if (connectedProviders.length === 0) {
+  if (loading) return <p className="settings-loading">Loading…</p>;
+  if (!flow || flow.providers.length === 0) {
     return (
-      <p className="help" style={{ marginTop: "0.5rem" }}>
-        No other providers connected. Add more API keys above to enable fallback.
+      <p className="help settings-help-gap-sm">
+        Provider flow is unavailable right now.
       </p>
     );
   }
 
   return (
-    <div style={{ marginTop: "1rem" }}>
-      <p className="help" style={{ marginBottom: "0.5rem" }}>
-        If <strong>{DEFAULT_AI_LABELS[defaultProvider] || defaultProvider}</strong> fails (rate limit, timeout, etc.), Asta will try these providers in order.
-        {!fallbackCsv && " Currently auto-detecting from all available keys."}
+    <div className="settings-block-top">
+      <p className="help settings-help-bottom-sm">
+        Fixed provider priority (OpenClaw style). The order is locked for now, and you can enable/disable each provider.
       </p>
-      <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-        {connectedProviders.map((id) => (
-          <label
-            key={id}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "0.5rem",
-              cursor: "pointer",
-              padding: "0.35rem 0.5rem",
-              borderRadius: 6,
-              background: selected.includes(id) ? "var(--bg-hover)" : "transparent",
-              transition: "background 0.15s",
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={selected.includes(id)}
-              onChange={() => toggle(id)}
-              disabled={savingOrder || !!savingModelFor}
-              style={{ accentColor: "var(--primary)" }}
-            />
-            <span>{DEFAULT_AI_LABELS[id]}</span>
-            {selected.includes(id) && (
-              <span className="help" style={{ marginLeft: "auto" }}>
-                #{selected.indexOf(id) + 1}
-              </span>
-            )}
-          </label>
-        ))}
-      </div>
-      {selected.length > 0 && (
-        <div style={{ marginTop: "1rem" }}>
-          <h4 style={{ margin: "0 0 0.4rem 0" }}>Fallback model per provider</h4>
-          <p className="help" style={{ marginBottom: "0.5rem" }}>
-            Each fallback provider can use its own model.
-          </p>
-          {selected.map((id) => (
-            <div key={"fallback-model-" + id} className="field">
-              <div className="field-row">
-                <label className="label" htmlFor={"fallback-model-" + id}>
-                  {DEFAULT_AI_LABELS[id]}
-                </label>
-                <span className="help">default: {defaults[id] ?? "—"}</span>
+      <div className="provider-cards">
+        {flow.providers.map((entry) => {
+          const id = entry.provider as MainProviderId;
+          const isKnownClaudePreset = CLAUDE_MODEL_PRESETS.some((p) => p.value === (models[id] ?? ""));
+          const claudePresetValue = isKnownClaudePreset
+            ? (models[id] ?? "")
+            : ((models[id] ?? "").trim() ? CLAUDE_CUSTOM_MODEL : "");
+          return (
+            <div key={"flow-provider-" + id} className="provider-card">
+              <div className="provider-card-header">
+                <ProviderLogo logoKey={id} size={36} />
+                <div className="provider-card-title-wrap">
+                  <span className="provider-card-title">
+                    {entry.position}. {entry.label}
+                  </span>
+                  {entry.connected ? <span className="status-ok">Connected</span> : <span className="status-pending">Not connected</span>}
+                </div>
               </div>
-              <div className="actions" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
-                {id === "ollama" && availableModels.ollama.length > 0 && (
-                  <select
-                    id={"fallback-model-select-" + id}
-                    value={resolveOllamaSelectValue(models[id] ?? "", availableModels.ollama)}
-                    onChange={(e) => {
-                      const picked = e.target.value;
-                      if (picked === OLLAMA_CUSTOM_MODEL) return;
-                      const next = picked === OLLAMA_DEFAULT_MODEL ? "" : picked;
-                      void saveProviderModel(id, next);
-                    }}
-                    className="select"
-                    style={{ maxWidth: 420, flex: "1 1 220px" }}
-                  >
-                    <option value={OLLAMA_DEFAULT_MODEL}>Use provider default</option>
-                    {availableModels.ollama.map((name) => (
-                      <option key={name} value={name}>
-                        {name}
-                      </option>
-                    ))}
-                    <option value={OLLAMA_CUSTOM_MODEL}>Custom model/tag (manual input below)</option>
-                  </select>
-                )}
-                <input
-                  id={"fallback-model-" + id}
-                  type="text"
-                  placeholder={
-                    id === "openrouter"
-                      ? "main-model, fallback1, fallback2 (comma-separated)"
-                      : id === "ollama"
-                        ? "Custom Ollama model/tag (optional)"
-                      : (defaults[id] ?? "Optional model override")
-                  }
-                  value={models[id] ?? ""}
-                  onChange={(e) => setModels((m) => ({ ...m, [id]: e.target.value }))}
-                  onBlur={() => void saveProviderModel(id)}
-                  className="input"
-                  style={{ maxWidth: 420, flex: "1 1 220px" }}
-                />
+              <div className="field-row">
+                <span className="help">
+                  {entry.auto_disabled
+                    ? formatProviderDisableReason(entry.disabled_reason)
+                    : entry.enabled
+                      ? "Enabled"
+                      : "Disabled"}
+                </span>
                 <button
                   type="button"
-                  onClick={() => void saveProviderModel(id)}
-                  disabled={!!savingModelFor}
+                  onClick={() => void toggleProvider(id, !entry.enabled || entry.auto_disabled)}
+                  disabled={!!savingProvider || !entry.connected}
                   className="btn btn-secondary"
                 >
-                  {savingModelFor === id ? "Saving…" : "Save model"}
+                  {savingProvider === id
+                    ? "Saving…"
+                    : (!entry.enabled || entry.auto_disabled)
+                      ? "Enable"
+                      : "Disable"}
                 </button>
               </div>
+              <div className="field">
+                <div className="field-row">
+                  <label className="label" htmlFor={"flow-model-" + id}>Model</label>
+                  <span className="help">default: {defaults[id] ?? entry.default_model ?? "—"}</span>
+                </div>
+                <div className="actions settings-inline-controls settings-actions-wrap">
+                  {id === "claude" && (
+                    <select
+                      id={"flow-claude-select-" + id}
+                      value={claudePresetValue}
+                      onChange={(e) => {
+                        const picked = e.target.value;
+                        if (picked === CLAUDE_CUSTOM_MODEL) return;
+                        void saveProviderModel(id, picked);
+                      }}
+                      className="select settings-input-lg settings-input-flex-wide"
+                    >
+                      {CLAUDE_MODEL_PRESETS.map((preset) => (
+                        <option key={preset.value || "__default__"} value={preset.value}>
+                          {preset.label}
+                        </option>
+                      ))}
+                      <option value={CLAUDE_CUSTOM_MODEL}>Custom model ID (manual input below)</option>
+                    </select>
+                  )}
+                  {id === "ollama" && availableModels.ollama.length > 0 && (
+                    <select
+                      id={"flow-ollama-select-" + id}
+                      value={resolveOllamaSelectValue(models[id] ?? "", availableModels.ollama)}
+                      onChange={(e) => {
+                        const picked = e.target.value;
+                        if (picked === OLLAMA_CUSTOM_MODEL) return;
+                        const next = picked === OLLAMA_DEFAULT_MODEL ? "" : picked;
+                        void saveProviderModel(id, next);
+                      }}
+                      className="select settings-input-lg settings-input-flex-wide"
+                    >
+                      <option value={OLLAMA_DEFAULT_MODEL}>Use provider default</option>
+                      {availableModels.ollama.map((name) => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                      <option value={OLLAMA_CUSTOM_MODEL}>Custom model/tag (manual input below)</option>
+                    </select>
+                  )}
+                  {id === "openrouter" && (
+                    <select
+                      id={"flow-openrouter-select-" + id}
+                      value={resolveOpenRouterSelectValue(models[id] ?? "", OPENROUTER_MODEL_PRESETS.map((p) => p.value))}
+                      onChange={(e) => {
+                        const picked = e.target.value;
+                        if (picked === OPENROUTER_CUSTOM_MODEL) return;
+                        void saveProviderModel(id, picked);
+                      }}
+                      className="select settings-input-lg settings-input-flex-wide"
+                    >
+                      {OPENROUTER_MODEL_PRESETS.map((preset) => (
+                        <option key={preset.value} value={preset.value}>
+                          {preset.label}
+                        </option>
+                      ))}
+                      <option value={OPENROUTER_CUSTOM_MODEL}>Custom model ID (advanced)</option>
+                    </select>
+                  )}
+                  <input
+                    id={"flow-model-" + id}
+                    type="text"
+                    placeholder={
+                      id === "openrouter"
+                        ? "Kimi/Trinity only (comma-separated)"
+                        : id === "ollama"
+                          ? "Custom Ollama model/tag (optional)"
+                          : (defaults[id] ?? "Optional model override")
+                    }
+                    value={models[id] ?? ""}
+                    onChange={(e) => setModels((m) => ({ ...m, [id]: e.target.value }))}
+                    onBlur={() => void saveProviderModel(id)}
+                    className="input settings-input-lg settings-input-flex-wide"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void saveProviderModel(id)}
+                    disabled={!!savingModelFor || !entry.connected}
+                    className="btn btn-secondary"
+                  >
+                    {savingModelFor === id ? "Saving…" : "Save model"}
+                  </button>
+                </div>
+              </div>
             </div>
-          ))}
-        </div>
-      )}
+          );
+        })}
+      </div>
       {msg && (
-        <p
-          className="help"
-          style={{ marginTop: "0.5rem", color: msg.startsWith("Failed") ? "var(--error)" : "var(--success)" }}
-        >
+        <p className={msg.startsWith("Failed") ? "help settings-help-gap-sm settings-status-error" : "help settings-help-gap-sm settings-status-success"}>
           {msg}
         </p>
       )}
@@ -865,22 +964,22 @@ function SpotifySetup({ keysStatus, onSaved }: { keysStatus: Record<string, bool
   return (
     <div>
       {setup && (
-        <div className="alert" style={{ marginBottom: "1rem" }}>
-          <p style={{ marginTop: 0, marginBottom: "0.5rem" }}>
+        <div className="alert settings-alert-bottom">
+          <p className="settings-inline-links">
             <a href={setup.dashboard_url} target="_blank" rel="noreferrer" className="link">Spotify Developer Dashboard</a>
             {" · "}
             <a href={setup.docs_url} target="_blank" rel="noreferrer" className="link">Web API docs</a>
           </p>
-          <ol style={{ margin: 0, paddingLeft: "1.25rem" }} className="help">
+          <ol className="help settings-steps-list">
             {setup.steps.map((step, i) => (
               <li
                 key={i}
-                style={{ marginBottom: "0.35rem" }}
+                className="settings-steps-item"
                 dangerouslySetInnerHTML={{ __html: step.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>") }}
               />
             ))}
             {spotifyConnected !== true && setup.connect_url && (
-              <li style={{ marginBottom: "0.35rem" }}>
+              <li className="settings-steps-item">
                 To play on your devices (phone, speaker, etc.), connect your Spotify account once:{" "}
                 <a href={setup.connect_url} className="link">Connect Spotify</a>
               </li>
@@ -899,8 +998,7 @@ function SpotifySetup({ keysStatus, onSaved }: { keysStatus: Record<string, bool
           placeholder={idSet ? "Leave blank to keep current" : "Paste Client ID"}
           value={clientId}
           onChange={(e) => setClientId(e.target.value)}
-          className="input"
-          style={{ maxWidth: 420 }}
+          className="input settings-input-lg"
         />
       </div>
       <div className="field">
@@ -914,8 +1012,7 @@ function SpotifySetup({ keysStatus, onSaved }: { keysStatus: Record<string, bool
           placeholder={secretSet ? "Leave blank to keep current" : "Paste Client secret"}
           value={clientSecret}
           onChange={(e) => setClientSecret(e.target.value)}
-          className="input"
-          style={{ maxWidth: 420 }}
+          className="input settings-input-lg"
         />
       </div>
       <div className="actions">
@@ -924,9 +1021,9 @@ function SpotifySetup({ keysStatus, onSaved }: { keysStatus: Record<string, bool
         </button>
         <TestSpotifyButton />
       </div>
-      {msg && <div className="alert" style={{ marginTop: "0.75rem" }}>{msg}</div>}
-      <div style={{ marginTop: "1rem" }}>
-        <p className="help" style={{ marginBottom: "0.5rem" }}>
+      {msg && <div className="alert settings-alert-top">{msg}</div>}
+      <div className="settings-block-top">
+        <p className="help settings-help-bottom-sm">
           {spotifyConnected === true ? (
             <span className="status-ok">Spotify connected for playback. You can say &quot;play X on Spotify&quot; in Chat and choose a device.</span>
           ) : (
@@ -980,221 +1077,224 @@ export default function Settings() {
   };
 
   return (
-    <div>
+    <div className="settings-page">
       <h1 className="page-title">Settings</h1>
-      <p className="help" style={{ marginBottom: "1rem" }}>
+      <p className="help settings-page-intro">
         Organized by setup phase so you can do first-time setup quickly, then tune integrations and maintenance settings.
       </p>
 
-      <div className="settings-jump-links">
-        <a href="#settings-core" className="settings-jump-link">1. Core setup</a>
-        <a href="#settings-integrations" className="settings-jump-link">2. Integrations</a>
-        <a href="#settings-system" className="settings-jump-link">3. System help</a>
-      </div>
+      <div className="settings-layout">
+        <aside className="settings-sidebar">
+          <div className="settings-nav-card">
+            <p className="settings-nav-title">Jump to section</p>
+            <div className="settings-jump-links">
+              <a href="#settings-core" className="settings-jump-link">1. Core setup</a>
+              <a href="#settings-integrations" className="settings-jump-link">2. Integrations</a>
+              <a href="#settings-system" className="settings-jump-link">3. System help</a>
+            </div>
+          </div>
+        </aside>
 
-      <div className="settings-group" id="settings-core">
-        <div className="settings-group-head">
-          <h2 className="settings-group-title">1. Core setup</h2>
-          <p className="help">Connect providers and choose how Asta thinks across chat and channels.</p>
-        </div>
-        <div className="accordion">
-          <details open>
-            <summary>
-              <span>API keys</span>
-              <span className="acc-meta">Providers & channels</span>
-            </summary>
-            <div className="acc-body">
-              <p className="help" style={{ marginBottom: "1rem" }}>
-                Keys are stored in your local database (<code>backend/asta.db</code>) and are never committed to git. Restart the backend if you change the Telegram token.
-              </p>
-              <RestartBackendButton />
+        <div className="settings-main">
+          <div className="settings-group" id="settings-core">
+            <div className="settings-group-head">
+              <h2 className="settings-group-title">1. Core setup</h2>
+              <p className="help">Connect providers and choose how Asta thinks across chat and channels.</p>
+            </div>
+            <div className="accordion">
+              <details open>
+                <summary>
+                  <span>API keys</span>
+                  <span className="acc-meta">Providers & channels</span>
+                </summary>
+                <div className="acc-body">
+                  <p className="help settings-help-bottom">
+                    Keys are stored in your local database (<code>backend/asta.db</code>) and are never committed to git. Restart the backend if you change the Telegram token.
+                  </p>
+                  <RestartBackendButton />
 
-              <h3 className="settings-section-title">AI providers</h3>
-              <div className="provider-cards">
-                {AI_PROVIDER_ENTRIES.map((entry) => (
-                  <div key={entry.id} className="provider-card">
-                    <div className="provider-card-header">
-                      <ProviderLogo logoKey={entry.logoKey} size={44} />
-                      <div className="provider-card-title-wrap">
-                        <span className="provider-card-title">{entry.name}</span>
-                        {entry.keys.every((k) => keysStatus[k.key]) && (
-                          <span className="status-ok">All set</span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="provider-card-fields">
-                      {entry.keys.map(({ key: keyName, label }) => (
-                        <div key={keyName} className="field">
-                          <div className="field-row">
-                            <label className="label" htmlFor={keyName}>{label}</label>
-                            {keysStatus[keyName] && <span className="status-ok">Set</span>}
-                          </div>
-                          <div className="actions" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
-                            <input
-                              id={keyName}
-                              type="password"
-                              placeholder={keysStatus[keyName] ? "Leave blank to keep current" : "Paste key"}
-                              value={keys[keyName] ?? ""}
-                              onChange={(e) => setKeys((k) => ({ ...k, [keyName]: e.target.value }))}
-                              className="input"
-                              style={{ flex: "1 1 200px", minWidth: 0 }}
-                            />
-                            {entry.testKey === keyName && <TestGroqButton />}
+                  <h3 className="settings-section-title">AI providers</h3>
+                  <div className="provider-cards">
+                    {AI_PROVIDER_ENTRIES.map((entry) => (
+                      <div key={entry.id} className="provider-card">
+                        <div className="provider-card-header">
+                          <ProviderLogo logoKey={entry.logoKey} size={44} />
+                          <div className="provider-card-title-wrap">
+                            <span className="provider-card-title">{entry.name}</span>
+                            {entry.keys.every((k) => keysStatus[k.key]) && (
+                              <span className="status-ok">All set</span>
+                            )}
                           </div>
                         </div>
-                      ))}
-                    </div>
-                    <div className="actions" style={{ marginTop: "0.5rem" }}>
-                      <button type="button" onClick={handleSaveKeys} disabled={saving} className="btn btn-primary">
-                        {saving ? "Saving…" : "Save"}
-                      </button>
-                    </div>
-                    <p className="help provider-card-get-key">
-                      Get your API key: <a href={entry.getKeyUrl} target="_blank" rel="noreferrer" className="link">{entry.getKeyUrl}</a>
-                    </p>
-                  </div>
-                ))}
-              </div>
-
-              <h3 className="settings-section-title">Channels & extras</h3>
-              <div className="provider-cards provider-cards--small">
-                {OTHER_KEYS.map((entry) => (
-                  <div key={entry.id} className="provider-card">
-                    <div className="provider-card-header">
-                      <ProviderLogo logoKey={entry.logoKey} size={36} />
-                      <div className="provider-card-title-wrap">
-                        <span className="provider-card-title">{entry.name}</span>
-                        {keysStatus[entry.key] && <span className="status-ok">Set</span>}
+                        <div className="provider-card-fields">
+                          {entry.keys.map(({ key: keyName, label }) => (
+                            <div key={keyName} className="field">
+                              <div className="field-row">
+                                <label className="label" htmlFor={keyName}>{label}</label>
+                                {keysStatus[keyName] && <span className="status-ok">Set</span>}
+                              </div>
+                              <div className="actions settings-inline-controls settings-actions-wrap">
+                                <input
+                                  id={keyName}
+                                  type="password"
+                                  placeholder={keysStatus[keyName] ? "Leave blank to keep current" : "Paste key"}
+                                  value={keys[keyName] ?? ""}
+                                  onChange={(e) => setKeys((k) => ({ ...k, [keyName]: e.target.value }))}
+                                  className="input settings-input-flex"
+                                />
+                                {entry.testKey === keyName && <TestGroqButton />}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="actions settings-actions-top-sm">
+                          <button type="button" onClick={handleSaveKeys} disabled={saving} className="btn btn-primary">
+                            {saving ? "Saving…" : "Save"}
+                          </button>
+                        </div>
+                        <p className="help provider-card-get-key">
+                          Get your API key: <a href={entry.getKeyUrl} target="_blank" rel="noreferrer" className="link">{entry.getKeyUrl}</a>
+                        </p>
                       </div>
-                    </div>
-                    <div className="provider-card-fields">
-                      <input
-                        id={entry.key}
-                        type="password"
-                        placeholder={keysStatus[entry.key] ? "Leave blank to keep current" : "Paste key"}
-                        value={keys[entry.key] ?? ""}
-                        onChange={(e) => setKeys((k) => ({ ...k, [entry.key]: e.target.value }))}
-                        className="input"
-                        style={{ width: "100%" }}
-                      />
-                    </div>
-                    <div className="actions" style={{ marginTop: "0.5rem" }}>
-                      <button type="button" onClick={handleSaveKeys} disabled={saving} className="btn btn-primary">
-                        {saving ? "Saving…" : "Save"}
-                      </button>
-                    </div>
-                    <p className="help provider-card-get-key">
-                      Get your API key: <a href={entry.getKeyUrl} target="_blank" rel="noreferrer" className="link">{entry.getKeyUrl}</a>
-                    </p>
+                    ))}
                   </div>
-                ))}
-              </div>
 
-              <div className="actions" style={{ marginTop: "1rem" }}>
-                <button type="button" onClick={handleSaveKeys} disabled={saving} className="btn btn-primary">
-                  {saving ? "Saving…" : "Save all API keys"}
-                </button>
-              </div>
-              {message && (
-                <div className={message.startsWith("Error:") ? "alert alert-error" : "alert"} style={{ marginTop: "0.75rem" }}>
-                  {message}
+                  <h3 className="settings-section-title">Channels & extras</h3>
+                  <div className="provider-cards provider-cards--small">
+                    {OTHER_KEYS.map((entry) => (
+                      <div key={entry.id} className="provider-card">
+                        <div className="provider-card-header">
+                          <ProviderLogo logoKey={entry.logoKey} size={36} />
+                          <div className="provider-card-title-wrap">
+                            <span className="provider-card-title">{entry.name}</span>
+                            {keysStatus[entry.key] && <span className="status-ok">Set</span>}
+                          </div>
+                        </div>
+                        <div className="provider-card-fields">
+                          <input
+                            id={entry.key}
+                            type="password"
+                            placeholder={keysStatus[entry.key] ? "Leave blank to keep current" : "Paste key"}
+                            value={keys[entry.key] ?? ""}
+                            onChange={(e) => setKeys((k) => ({ ...k, [entry.key]: e.target.value }))}
+                            className="input"
+                          />
+                        </div>
+                        <div className="actions settings-actions-top-sm">
+                          <button type="button" onClick={handleSaveKeys} disabled={saving} className="btn btn-primary">
+                            {saving ? "Saving…" : "Save"}
+                          </button>
+                        </div>
+                        <p className="help provider-card-get-key">
+                          Get your API key: <a href={entry.getKeyUrl} target="_blank" rel="noreferrer" className="link">{entry.getKeyUrl}</a>
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="actions settings-actions-top">
+                    <button type="button" onClick={handleSaveKeys} disabled={saving} className="btn btn-primary">
+                      {saving ? "Saving…" : "Save all API keys"}
+                    </button>
+                  </div>
+                  {message && <div className={message.startsWith("Error:") ? "alert alert-error settings-alert-top" : "alert settings-alert-top"}>{message}</div>}
                 </div>
-              )}
+              </details>
+
+              <details>
+                <summary>
+                  <span>Default AI</span>
+                  <span className="acc-meta">Used across chat + channels</span>
+                </summary>
+                <div className="acc-body">
+                  <p className="help">Asta uses this provider by default for Chat, WhatsApp, and Telegram.</p>
+                  <DefaultAiSelect />
+                  <h3 className="settings-subhead settings-subhead-gap">Provider priority (fixed)</h3>
+                  <FallbackProviderSelect />
+                </div>
+              </details>
             </div>
-          </details>
+          </div>
 
-          <details>
-            <summary>
-              <span>Default AI</span>
-              <span className="acc-meta">Used across chat + channels</span>
-            </summary>
-            <div className="acc-body">
-              <p className="help">Asta uses this provider by default for Chat, WhatsApp, and Telegram.</p>
-              <DefaultAiSelect />
-              <h3 style={{ marginTop: "1.25rem", marginBottom: "0.25rem" }}>Fallback providers</h3>
-              <FallbackProviderSelect />
+          <div className="settings-group" id="settings-integrations">
+            <div className="settings-group-head">
+              <h2 className="settings-group-title">2. Integrations</h2>
+              <p className="help">Connect optional services and automation flows.</p>
             </div>
-          </details>
-        </div>
-      </div>
+            <div className="accordion">
+              <details>
+                <summary>
+                  <span>Spotify</span>
+                  <span className="acc-meta">Search + playback</span>
+                </summary>
+                <div className="acc-body">
+                  <p className="help">
+                    Set your Spotify app credentials so Asta can search songs and (optionally) control playback on your devices.
+                  </p>
+                  <SpotifySetup keysStatus={keysStatus} onSaved={() => api.getSettingsKeys().then(setKeysStatus)} />
+                </div>
+              </details>
 
-      <div className="settings-group" id="settings-integrations">
-        <div className="settings-group-head">
-          <h2 className="settings-group-title">2. Integrations</h2>
-          <p className="help">Connect optional services and automation flows.</p>
-        </div>
-        <div className="accordion">
-          <details>
-            <summary>
-              <span>Spotify</span>
-              <span className="acc-meta">Search + playback</span>
-            </summary>
-            <div className="acc-body">
-              <p className="help">
-                Set your Spotify app credentials so Asta can search songs and (optionally) control playback on your devices.
-              </p>
-              <SpotifySetup keysStatus={keysStatus} onSaved={() => api.getSettingsKeys().then(setKeysStatus)} />
+              <AutoUpdaterSettings
+                cronJobs={cronJobs}
+                onSave={() => api.getCronJobs().then((r) => setCronJobs(r.cron_jobs || []))}
+                saving={autoUpdaterSaving}
+                setSaving={setAutoUpdaterSaving}
+                message={autoUpdaterMessage}
+                setMessage={setAutoUpdaterMessage}
+              />
             </div>
-          </details>
+          </div>
 
-          <AutoUpdaterSettings
-            cronJobs={cronJobs}
-            onSave={() => api.getCronJobs().then((r) => setCronJobs(r.cron_jobs || []))}
-            saving={autoUpdaterSaving}
-            setSaving={setAutoUpdaterSaving}
-            message={autoUpdaterMessage}
-            setMessage={setAutoUpdaterMessage}
-          />
-        </div>
-      </div>
-
-      <div className="settings-group" id="settings-system">
-        <div className="settings-group-head">
-          <h2 className="settings-group-title">3. System help</h2>
-          <p className="help">Troubleshooting and quick reference.</p>
-        </div>
-        <div className="accordion">
-          <details>
-            <summary>
-              <span>Run the API</span>
-              <span className="acc-meta">When “API off” shows</span>
-            </summary>
-            <div className="acc-body">
-              <p className="help">Start the backend from the project root (default port: 8010):</p>
-              <pre className="file-preview" style={{ maxWidth: 820 }}>
-                {`# Linux / macOS
+          <div className="settings-group" id="settings-system">
+            <div className="settings-group-head">
+              <h2 className="settings-group-title">3. System help</h2>
+              <p className="help">Troubleshooting and quick reference.</p>
+            </div>
+            <div className="accordion">
+              <details>
+                <summary>
+                  <span>Run the API</span>
+                  <span className="acc-meta">When “API off” shows</span>
+                </summary>
+                <div className="acc-body">
+                  <p className="help">Start the backend from the project root (default port: 8010):</p>
+                  <pre className="file-preview settings-command-block">
+                    {`# Linux / macOS
 ./asta.sh start
 
 # Or manually:
 cd backend && source .venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8010`}
-              </pre>
-              <p className="help">
-                API is <strong>http://localhost:8010</strong> (or the URL in <code>VITE_API_URL</code>); panel is{" "}
-                <strong>http://localhost:5173</strong>.
-              </p>
+                  </pre>
+                  <p className="help">
+                    API is <strong>http://localhost:8010</strong> (or the URL in <code>VITE_API_URL</code>); panel is{" "}
+                    <strong>http://localhost:5173</strong>.
+                  </p>
+                </div>
+              </details>
+
+              <details>
+                <summary>
+                  <span>About providers & files</span>
+                  <span className="acc-meta">Quick reference</span>
+                </summary>
+                <div className="acc-body">
+                  <h3 className="settings-subhead settings-subhead-first">AI providers</h3>
+                  <p className="help">
+                    Available for Asta: {providers.join(", ")}. Ollama needs no key; set <code>OLLAMA_BASE_URL</code> in <code>backend/.env</code> if needed.
+                  </p>
+
+                  <h3 className="settings-subhead">Files</h3>
+                  <p className="help">
+                    <code>ASTA_ALLOWED_PATHS</code> in <code>backend/.env</code> controls which directories the panel/AI can read.
+                  </p>
+
+                  <h3 className="settings-subhead">Audio notes</h3>
+                  <p className="help">Transcription runs locally (faster-whisper). Formatting uses your default AI.</p>
+                </div>
+              </details>
             </div>
-          </details>
-
-          <details>
-            <summary>
-              <span>About providers & files</span>
-              <span className="acc-meta">Quick reference</span>
-            </summary>
-            <div className="acc-body">
-              <h3 style={{ marginTop: 0 }}>AI providers</h3>
-              <p className="help">
-                Available for Asta: {providers.join(", ")}. Ollama needs no key; set <code>OLLAMA_BASE_URL</code> in <code>backend/.env</code> if needed.
-              </p>
-
-              <h3>Files</h3>
-              <p className="help">
-                <code>ASTA_ALLOWED_PATHS</code> in <code>backend/.env</code> controls which directories the panel/AI can read.
-              </p>
-
-              <h3>Audio notes</h3>
-              <p className="help">Transcription runs locally (faster-whisper). Formatting uses your default AI.</p>
-            </div>
-          </details>
+          </div>
         </div>
       </div>
     </div>

@@ -1444,35 +1444,69 @@ textarea:focus {
   border-radius: var(--radius-sm);
 }
 
-/* ─── Accordions (Settings) ──────────────────────────────────────────────── */
-.accordion {
+/* ─── Settings page ──────────────────────────────────────────────────────── */
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+.settings-page-intro {
+  margin-bottom: 0.6rem;
+  max-width: 76ch;
+}
+.settings-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 260px) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+.settings-sidebar {
+  position: sticky;
+  top: 1rem;
+}
+.settings-nav-card {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
-  overflow: hidden;
+  padding: 0.9rem;
+  box-shadow: var(--shadow);
+}
+.settings-nav-title {
+  margin: 0 0 0.5rem 0;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  font-weight: 700;
 }
 .settings-jump-links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin: 0 0 1rem;
+  display: grid;
+  gap: 0.45rem;
 }
 .settings-jump-link {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0.35rem 0.7rem;
-  font-size: 0.85rem;
+  border-radius: var(--radius-sm);
+  padding: 0.45rem 0.65rem;
+  font-size: 0.86rem;
   color: var(--text);
   background: var(--surface);
   text-decoration: none;
+  font-weight: 600;
+  transition: background 0.16s, border-color 0.16s;
 }
 .settings-jump-link:hover {
   background: var(--surface-hover);
+  border-color: #cbd5e1;
+}
+.settings-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1.15rem;
 }
 .settings-group {
-  margin-bottom: 1.15rem;
+  scroll-margin-top: 1rem;
 }
 .settings-group-head {
   margin-bottom: 0.6rem;
@@ -1483,6 +1517,13 @@ textarea:focus {
   font-weight: 800;
   letter-spacing: 0.01em;
   color: var(--text);
+}
+
+.accordion {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
 }
 .accordion details {
   border-top: 1px solid var(--border);
@@ -1498,11 +1539,20 @@ textarea:focus {
   color: var(--text);
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 0.75rem;
 }
 .accordion summary::-webkit-details-marker {
   display: none;
+}
+.accordion summary::after {
+  content: "▾";
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.9rem;
+  transition: transform 0.18s ease;
+}
+.accordion details[open] > summary::after {
+  transform: rotate(180deg);
 }
 .accordion summary:hover {
   background: var(--surface-hover);
@@ -1511,6 +1561,7 @@ textarea:focus {
   padding: 0 1.1rem 1.1rem 1.1rem;
 }
 .acc-meta {
+  margin-left: auto;
   font-weight: 600;
   font-size: 0.85rem;
   color: var(--muted);
@@ -1536,7 +1587,6 @@ textarea:focus {
 .provider-cards--small {
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
 }
-
 .provider-card {
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1572,9 +1622,168 @@ textarea:focus {
   margin-bottom: 0;
   font-size: 0.85rem;
 }
+
+.settings-loading {
+  color: var(--muted);
+}
+.settings-input-provider {
+  max-width: 320px;
+}
+.settings-input-sm {
+  max-width: 220px;
+}
+.settings-input-md {
+  max-width: 280px;
+}
+.settings-input-lg {
+  max-width: 420px;
+}
+.settings-full-width {
+  width: 100%;
+}
+.settings-input-block {
+  margin-bottom: 0.5rem;
+}
+.settings-input-flex {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.settings-input-flex-wide {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.settings-inline-controls {
+  gap: 0.5rem;
+  align-items: center;
+}
+.settings-actions-wrap {
+  flex-wrap: wrap;
+}
+.settings-actions-top-sm {
+  margin-top: 0.5rem;
+}
+.settings-actions-top {
+  margin-top: 1rem;
+}
+.settings-alert-top {
+  margin-top: 0.75rem;
+}
+.settings-alert-bottom {
+  margin-bottom: 1rem;
+}
+.settings-help-gap-xs {
+  margin-top: 0.35rem;
+}
+.settings-help-gap-sm {
+  margin-top: 0.5rem;
+}
+.settings-help-bottom {
+  margin-bottom: 1rem;
+}
+.settings-help-bottom-sm {
+  margin-bottom: 0.5rem;
+}
+.settings-block-top {
+  margin-top: 1rem;
+}
+.settings-field-tight {
+  margin-bottom: 0.5rem;
+}
+.settings-checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.settings-checkbox-row input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+.settings-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.settings-check-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  padding: 0.35rem 0.5rem;
+  border-radius: 6px;
+  transition: background 0.15s;
+}
+.settings-check-item:hover {
+  background: var(--surface-hover);
+}
+.settings-check-item.is-selected {
+  background: var(--accent-soft);
+}
+.settings-check-item input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+.settings-check-order {
+  margin-left: auto;
+}
+.settings-status-success {
+  color: var(--success);
+}
+.settings-status-error {
+  color: var(--error);
+}
+.settings-subhead {
+  margin: 1rem 0 0.4rem 0;
+  font-size: 0.95rem;
+}
+.settings-subhead-gap {
+  margin-top: 1.25rem;
+  margin-bottom: 0.25rem;
+}
+.settings-subhead-first {
+  margin-top: 0;
+}
+.settings-inline-links {
+  margin: 0 0 0.5rem 0;
+}
+.settings-steps-list {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+.settings-steps-item {
+  margin-bottom: 0.35rem;
+}
+.settings-command-block {
+  max-width: 820px;
+}
+
+@media (max-width: 1180px) {
+  .settings-layout {
+    grid-template-columns: 1fr;
+    gap: 0.85rem;
+  }
+  .settings-sidebar {
+    position: static;
+  }
+  .settings-jump-links {
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+}
+@media (max-width: 900px) {
+  .provider-cards {
+    grid-template-columns: 1fr;
+  }
+}
 @media (max-width: 640px) {
-  .settings-jump-link {
+  .accordion summary {
+    flex-wrap: wrap;
+  }
+  .acc-meta {
     width: 100%;
+    margin-left: 0;
+  }
+  .settings-jump-links {
+    grid-template-columns: 1fr;
+  }
+  .settings-jump-link {
     justify-content: center;
   }
 }

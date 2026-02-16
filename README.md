@@ -82,23 +82,27 @@ If the panel shows "API off", start the backend first or use **Settings -> Run t
 ## Core Features
 
 - **Dashboard**: system overview — Brain (AI providers), Body (CPU/RAM/disk + model), Eyes (vision), Channels, Notes, Schedule (reminders + cron), Capabilities (skills count).
+- **Responsive dashboard layout**: medium/smaller screens now use adaptive card/vitals breakpoints for readable panel cards and metrics.
 - **Chat**: provider routing + automatic skill execution.
 - **Reasoning controls**: per-user **Thinking level** (`off/minimal/low/medium/high/xhigh`) and **Reasoning visibility** (`off/on/stream`) in Settings and Telegram commands. Stream mode emits live reasoning status from provider deltas on OpenAI/Groq/OpenRouter paths.
+- **Strict final mode**: optional `final_mode=strict` in Settings to show only text inside `<final>...</final>` blocks (OpenClaw-style enforcement).
+- **Web live streaming**: Chat UI uses `POST /api/chat/stream` (SSE) for real-time `assistant` and `reasoning` updates.
+- **OpenClaw-style main provider flow**: fixed priority chain `Claude -> Ollama -> OpenRouter`, with per-provider runtime enable/disable controls and auto-disable on billing/auth failures.
 - **Hybrid vision pipeline**: Telegram image turns run through a low-cost vision model first (default: OpenRouter Nemotron free), then your main agent model handles the final reply/tool flow using the extracted vision notes.
 - **Tool-first execution**: structured tools for exec/files/reminders/cron, OpenClaw-style `process` background session management, and single-user subagent orchestration (`sessions_spawn/list/history/send/stop`).
 - **Subagent control UX**: deterministic `/subagents` command flow (`list/spawn/info/send/stop`, optional `--wait` on send) plus conservative auto-spawn for explicit long/background requests (toggle: `ASTA_SUBAGENTS_AUTO_SPAWN`).
 - **Files**: local knowledge files + allowed paths. User context (who you are) lives in **workspace/USER.md**.
-- **Learning**: "learn about X for Y minutes" with retrievable context.
-- **Cron**: list, add, update, and remove recurring jobs (e.g. daily auto-updater). Settings → Auto-updater for schedule.
+- **Learning**: "learn about X for Y minutes" (also: "research/study/become an expert on X") with retrievable context.
+- **Cron**: list, add, update, remove, run now, and inspect recent run history for recurring jobs (e.g. daily auto-updater). Settings → Auto-updater for schedule.
 - **Audio Notes**: upload/voice transcription and summary (faster-whisper).
 - **Channels**: Telegram + WhatsApp (Beta) integrations in one place.
-- **Settings/Skills**: key management, default model, toggles, and backend controls.
-- **Vision controls in Settings**: configure screenshot preprocessing, vision provider order, and OpenRouter vision model without editing `.env`.
+- **Settings/Skills**: key management, fixed main-provider flow, model policy controls, toggles, and backend controls.
+- **Vision controls in Settings**: preprocess toggle with fixed model `nvidia/nemotron-nano-12b-v2-vl:free` for UI consistency.
 
 ## Channel Setup
 
 - Telegram: set `TELEGRAM_BOT_TOKEN` in `backend/.env` or configure it in **Channels**.
-- Telegram bot commands: `/status`, `/exec_mode`, `/allow`, `/allowlist`, `/approvals`, `/approve`, `/deny`, `/think` (aliases: `/thinking`, `/t`), `/reasoning`, `/subagents`.
+- Telegram bot commands: `/status`, `/exec_mode`, `/allow`, `/allowlist`, `/approvals` (inline `Once/Always/Deny` actions, with automatic post-approval continuation), `/think` (aliases: `/thinking`, `/t`), `/reasoning`, `/subagents`.
 - WhatsApp (Beta): run `services/whatsapp` (see `services/whatsapp/README.md`), scan QR in **Channels**, and set `ASTA_WHATSAPP_BRIDGE_URL`.
 - Vision input is currently supported on **Telegram photos** (web image upload is not implemented yet).
 - Optional debugging: set `ASTA_SHOW_TOOL_TRACE=true` and `ASTA_TOOL_TRACE_CHANNELS=web` to append `Tools used: ...` on replies (Telegram footer is suppressed because it already shows proactive skill-status pings).

@@ -22,34 +22,119 @@ logger = logging.getLogger(__name__)
 CRON_JOB_PREFIX = "cron_"
 
 
-def _fire_cron_job_sync(cron_job_id: int) -> None:
+def _fire_cron_job_sync(
+    cron_job_id: int,
+    trigger: str = "schedule",
+    run_mode: str = "due",
+) -> None:
     """Called by scheduler (sync). Run async fire."""
-    asyncio.run(_fire_cron_job_async(cron_job_id))
+    asyncio.run(_fire_cron_job_async(cron_job_id, trigger=trigger, run_mode=run_mode))
 
 
-async def _fire_cron_job_async(cron_job_id: int) -> None:
+async def _fire_cron_job_async(
+    cron_job_id: int,
+    *,
+    trigger: str = "schedule",
+    run_mode: str = "due",
+) -> dict[str, object]:
     """Load cron job, run message through handler, send reply to user."""
     db = get_db()
     await db.connect()
+    trigger_norm = (trigger or "schedule").strip().lower() or "schedule"
+    mode_norm = (run_mode or "due").strip().lower() or "due"
+    run_status = "unknown"
+    run_output = ""
+    run_error = ""
+
     job = await db.get_cron_job(cron_job_id)
-    if not job or not job.get("enabled", 1):
-        return
+    if not job:
+        return {
+            "ok": False,
+            "id": int(cron_job_id),
+            "status": "missing",
+            "trigger": trigger_norm,
+            "run_mode": mode_norm,
+        }
     user_id = job.get("user_id") or "default"
+    if not job.get("enabled", 1):
+        await db.add_cron_job_run(
+            cron_job_id=int(cron_job_id),
+            user_id=str(user_id),
+            trigger=trigger_norm,
+            run_mode=mode_norm,
+            status="disabled",
+            output="Cron job is disabled.",
+        )
+        return {
+            "ok": False,
+            "id": int(cron_job_id),
+            "status": "disabled",
+            "trigger": trigger_norm,
+            "run_mode": mode_norm,
+        }
     channel = job.get("channel") or "web"
     channel_target = (job.get("channel_target") or "").strip()
     message = (job.get("message") or "").strip()
     cron_expr = (job.get("cron_expr") or "").strip()
     if not message:
-        return
+        await db.add_cron_job_run(
+            cron_job_id=int(cron_job_id),
+            user_id=str(user_id),
+            trigger=trigger_norm,
+            run_mode=mode_norm,
+            status="skipped",
+            output="Cron message is empty.",
+        )
+        return {
+            "ok": False,
+            "id": int(cron_job_id),
+            "status": "skipped",
+            "trigger": trigger_norm,
+            "run_mode": mode_norm,
+        }
     if is_one_shot_cron_expr(cron_expr):
         # One-shot reminders should not call handle_message again.
         try:
             await send_notification(channel, channel_target, _format_reminder_message(message))
         except Exception as e:
             logger.exception("One-shot reminder job %s failed: %s", cron_job_id, e)
-            return
+            run_status = "error"
+            run_error = str(e)
+            await db.add_cron_job_run(
+                cron_job_id=int(cron_job_id),
+                user_id=str(user_id),
+                trigger=trigger_norm,
+                run_mode=mode_norm,
+                status=run_status,
+                error=run_error,
+            )
+            return {
+                "ok": False,
+                "id": int(cron_job_id),
+                "status": run_status,
+                "error": run_error[:300],
+                "trigger": trigger_norm,
+                "run_mode": mode_norm,
+            }
         await db.mark_reminder_sent(encode_one_shot_reminder_id(cron_job_id))
-        return
+        run_status = "sent"
+        run_output = _format_reminder_message(message)
+        await db.add_cron_job_run(
+            cron_job_id=int(cron_job_id),
+            user_id=str(user_id),
+            trigger=trigger_norm,
+            run_mode=mode_norm,
+            status=run_status,
+            output=run_output,
+        )
+        return {
+            "ok": True,
+            "id": int(cron_job_id),
+            "status": run_status,
+            "output": run_output[:300],
+            "trigger": trigger_norm,
+            "run_mode": mode_norm,
+        }
     try:
         from app.handler import handle_message
         reply = await handle_message(
@@ -61,10 +146,32 @@ async def _fire_cron_job_async(cron_job_id: int) -> None:
         )
         if reply and channel_target and channel in ("telegram", "whatsapp"):
             await send_notification(channel, channel_target, reply)
+        run_status = "ok"
+        run_output = (reply or "").strip()
     except Exception as e:
         logger.exception("Cron job %s failed: %s", cron_job_id, e)
+        run_status = "error"
+        run_error = str(e)
         if channel_target and channel in ("telegram", "whatsapp"):
             await send_notification(channel, channel_target, f"Cron job failed: {str(e)[:300]}")
+    await db.add_cron_job_run(
+        cron_job_id=int(cron_job_id),
+        user_id=str(user_id),
+        trigger=trigger_norm,
+        run_mode=mode_norm,
+        status=run_status,
+        output=run_output,
+        error=run_error,
+    )
+    return {
+        "ok": run_status == "ok",
+        "id": int(cron_job_id),
+        "status": run_status,
+        "output": run_output[:300] if run_output else "",
+        "error": run_error[:300] if run_error else "",
+        "trigger": trigger_norm,
+        "run_mode": mode_norm,
+    }
 
 
 def _parse_iso_utc(value: str) -> datetime | None:
@@ -114,10 +221,19 @@ def add_cron_job_to_scheduler(sch: BackgroundScheduler, job_id: int, cron_expr: 
         _fire_cron_job_sync,
         trigger,
         id=job_id_str,
-        args=[job_id],
+        args=[job_id, "schedule", "due"],
         replace_existing=True,
     )
     logger.info("Scheduled cron job %s: %s (tz=%s)", job_id, cron_expr, tz_str or "local")
+
+
+async def run_cron_job_now(cron_job_id: int, *, run_mode: str = "force") -> dict[str, object]:
+    """Run a cron job immediately (manual trigger) and return execution summary."""
+    return await _fire_cron_job_async(
+        int(cron_job_id),
+        trigger="manual",
+        run_mode=(run_mode or "force"),
+    )
 
 
 async def reload_cron_jobs() -> None:

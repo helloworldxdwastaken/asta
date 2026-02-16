@@ -15,10 +15,30 @@ from pydantic import BaseModel
 from app.config import get_settings, set_env_value
 from app.db import get_db
 from app.exec_tool import get_effective_exec_bins, resolve_executable
+from app.model_policy import (
+    OPENROUTER_DEFAULT_MODEL_CHAIN,
+    OPENROUTER_RECOMMENDED_MODELS,
+    classify_openrouter_model_csv,
+)
+from app.provider_flow import (
+    DEFAULT_MAIN_PROVIDER,
+    MAIN_PROVIDER_CHAIN,
+    normalize_main_provider,
+)
+from app.ollama_catalog import (
+    ollama_list_tool_models,
+    resolve_ollama_model_name,
+)
 from app.whatsapp_bridge import get_whatsapp_bridge_status
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+MAIN_PROVIDER_LABELS = {
+    "claude": "Claude",
+    "ollama": "Ollama",
+    "openrouter": "OpenRouter",
+}
 
 
 async def _ollama_reachable() -> bool:
@@ -38,27 +58,8 @@ async def _ollama_reachable() -> bool:
 
 
 async def _ollama_list_models() -> list[str]:
-    """Return list of Ollama model names (e.g. ['llama3.2', 'mistral']). Empty if Ollama unreachable."""
-    base = (get_settings().ollama_base_url or "").strip() or "http://localhost:11434"
-    base = base.rstrip("/")
-    try:
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            r = await client.get(f"{base}/api/tags")
-            if r.status_code != 200:
-                return []
-            data = r.json()
-            models = data.get("models") if isinstance(data, dict) else []
-            if not isinstance(models, list):
-                return []
-            names = []
-            for m in models:
-                if isinstance(m, dict) and m.get("name"):
-                    names.append(str(m["name"]).strip())
-                elif isinstance(m, dict) and m.get("model"):
-                    names.append(str(m["model"]).strip())
-            return sorted(names)
-    except Exception:
-        return []
+    """Return tool-capable Ollama model names. Empty if Ollama unreachable or none expose tools capability."""
+    return await ollama_list_tool_models()
 
 
 async def _spotify_configured(db) -> bool:
@@ -73,7 +74,7 @@ SKILLS = [
     {"id": "files", "name": "Files", "description": "Local file access and summaries"},
     {"id": "drive", "name": "Google Drive", "description": "Drive files and summaries"},
     {"id": "rag", "name": "Learning (RAG)", "description": "Learned knowledge and documents"},
-    {"id": "learn", "name": "Learn about topic", "description": "Say 'learn about X for 30 min' to have Asta learn and store a topic in RAG."},
+    {"id": "learn", "name": "Learn about topic", "description": "Say 'learn about X for 30 min' (or 'research/study/become an expert on X') to have Asta learn and store a topic in RAG."},
     {"id": "time", "name": "Time", "description": "Current time (12h AM/PM). Location is used for your timezone when set."},
     {"id": "weather", "name": "Weather", "description": "Current weather and forecast (today, tomorrow). Set your location once so Asta can answer."},
     {"id": "google_search", "name": "Google search", "description": "Search the web for current information"},
@@ -82,7 +83,7 @@ SKILLS = [
     {"id": "reminders", "name": "Reminders", "description": "Wake me up or remind me at a time. Set your location so times are in your timezone. E.g. 'Wake me up tomorrow at 7am' or 'Remind me at 6pm to call mom'."},
     {"id": "audio_notes", "name": "Audio notes", "description": "Upload audio (meetings, calls, voice memos); Asta transcribes and formats as meeting notes, action items, or conversation summary. No API key for transcription (runs locally)."},
     {"id": "silly_gif", "name": "Silly GIF", "description": "Occasionally replies with a relevant GIF in friendly chats. Requires Giphy API key."},
-    {"id": "self_awareness", "name": "Self Awareness", "description": "When asked about Asta (features, docs, how to use): injects README + docs/*.md and workspace context so the model answers from real docs. User context comes from workspace/USER.md."},
+    {"id": "self_awareness", "name": "Self Awareness", "description": "When asked about Asta (features, docs, how to use): injects README + CHANGELOG + docs/*.md and workspace context so the model answers from real docs. User context comes from workspace/USER.md."},
     {"id": "server_status", "name": "Server Status", "description": "Monitor system metrics like CPU, RAM, Disk and Uptime. Ask 'server status' or '/status'."},
 ]
 
@@ -99,7 +100,7 @@ class MoodIn(BaseModel):
 
 
 class DefaultAiIn(BaseModel):
-    provider: str  # groq | google | claude | ollama | openrouter
+    provider: str  # claude | ollama | openrouter
 
 
 class ThinkingIn(BaseModel):
@@ -108,6 +109,10 @@ class ThinkingIn(BaseModel):
 
 class ReasoningIn(BaseModel):
     reasoning_mode: str  # off | on | stream
+
+
+class FinalModeIn(BaseModel):
+    final_mode: str  # off | strict
 
 
 class VisionSettingsIn(BaseModel):
@@ -120,18 +125,20 @@ class VisionSettingsIn(BaseModel):
 async def get_default_ai(user_id: str = "default"):
     db = get_db()
     await db.connect()
-    provider = await db.get_user_default_ai(user_id)
+    provider = normalize_main_provider(await db.get_user_default_ai(user_id))
     return {"provider": provider}
 
 
 @router.put("/settings/default-ai")
 async def set_default_ai(body: DefaultAiIn, user_id: str = "default"):
-    if body.provider not in ("groq", "google", "claude", "ollama", "openai", "openrouter"):
-        return {"error": "provider must be groq, google, claude, ollama, openai, or openrouter"}
+    provider = normalize_main_provider(body.provider)
+    if provider != (body.provider or "").strip().lower():
+        return {"error": f"provider must be one of: {', '.join(MAIN_PROVIDER_CHAIN)}"}
     db = get_db()
     await db.connect()
-    await db.set_user_default_ai(user_id, body.provider)
-    return {"provider": body.provider}
+    await db.set_user_default_ai(user_id, provider)
+    await db.set_provider_runtime_enabled(user_id, provider, True)
+    return {"provider": provider}
 
 
 @router.get("/settings/thinking")
@@ -176,6 +183,27 @@ async def set_reasoning(body: ReasoningIn, user_id: str = "default"):
     return {"reasoning_mode": mode}
 
 
+@router.get("/settings/final-mode")
+@router.get("/api/settings/final-mode")
+async def get_final_mode(user_id: str = "default"):
+    db = get_db()
+    await db.connect()
+    mode = await db.get_user_final_mode(user_id)
+    return {"final_mode": mode}
+
+
+@router.put("/settings/final-mode")
+@router.put("/api/settings/final-mode")
+async def set_final_mode(body: FinalModeIn, user_id: str = "default"):
+    mode = (body.final_mode or "").strip().lower()
+    if mode not in ("off", "strict"):
+        raise HTTPException(status_code=400, detail="final_mode must be off or strict")
+    db = get_db()
+    await db.connect()
+    await db.set_user_final_mode(user_id, mode)
+    return {"final_mode": mode}
+
+
 @router.get("/settings/vision")
 @router.get("/api/settings/vision")
 async def get_vision_settings():
@@ -216,6 +244,75 @@ async def set_vision_settings(body: VisionSettingsIn):
     }
 
 
+class ProviderEnabledIn(BaseModel):
+    provider: str
+    enabled: bool
+
+
+@router.get("/settings/provider-flow")
+@router.get("/api/settings/provider-flow")
+async def get_provider_flow(user_id: str = "default"):
+    """Return fixed provider priority, connection status, and runtime enable/disable state."""
+    db = get_db()
+    await db.connect()
+    default_provider = normalize_main_provider(await db.get_user_default_ai(user_id))
+    runtime_states = await db.get_provider_runtime_states(user_id, MAIN_PROVIDER_CHAIN)
+    models = await db.get_all_provider_models(user_id)
+    connected_map = {
+        "claude": bool((await db.get_stored_api_key("anthropic_api_key") or "").strip()),
+        "openrouter": bool((await db.get_stored_api_key("openrouter_api_key") or "").strip()),
+        "ollama": await _ollama_reachable(),
+    }
+    providers = []
+    for idx, provider in enumerate(MAIN_PROVIDER_CHAIN, start=1):
+        state = runtime_states.get(provider) or {}
+        enabled = bool(state.get("enabled", True))
+        auto_disabled = bool(state.get("auto_disabled", False))
+        disabled_reason = str(state.get("disabled_reason") or "").strip()
+        connected = bool(connected_map.get(provider, False))
+        providers.append(
+            {
+                "provider": provider,
+                "label": MAIN_PROVIDER_LABELS.get(provider, provider.title()),
+                "position": idx,
+                "connected": connected,
+                "enabled": enabled,
+                "auto_disabled": auto_disabled,
+                "disabled_reason": disabled_reason,
+                "active": bool(connected and enabled and not auto_disabled),
+                "model": str(models.get(provider) or ""),
+                "default_model": str(DEFAULT_MODELS.get(provider) or ""),
+            }
+        )
+    return {
+        "default_provider": default_provider,
+        "order": list(MAIN_PROVIDER_CHAIN),
+        "providers": providers,
+    }
+
+
+@router.put("/settings/provider-flow/provider-enabled")
+@router.put("/api/settings/provider-flow/provider-enabled")
+async def set_provider_enabled(body: ProviderEnabledIn, user_id: str = "default"):
+    provider = normalize_main_provider(body.provider)
+    if provider != (body.provider or "").strip().lower():
+        raise HTTPException(
+            status_code=400,
+            detail=f"provider must be one of: {', '.join(MAIN_PROVIDER_CHAIN)}",
+        )
+    db = get_db()
+    await db.connect()
+    await db.set_provider_runtime_enabled(user_id, provider, bool(body.enabled))
+    states = await db.get_provider_runtime_states(user_id, [provider])
+    state = states.get(provider) or {}
+    return {
+        "provider": provider,
+        "enabled": bool(state.get("enabled", True)),
+        "auto_disabled": bool(state.get("auto_disabled", False)),
+        "disabled_reason": str(state.get("disabled_reason") or "").strip(),
+    }
+
+
 class FallbackProvidersIn(BaseModel):
     providers: str  # comma-separated, e.g. "google,openai" or "" to disable
 
@@ -223,27 +320,31 @@ class FallbackProvidersIn(BaseModel):
 @router.get("/settings/fallback")
 @router.get("/api/settings/fallback")
 async def get_fallback_providers(user_id: str = "default"):
-    """Get configured fallback providers (comma-separated). Empty = auto-detect from key availability."""
+    """Get fixed fallback order (primary removed from claude->ollama->openrouter chain)."""
     db = get_db()
     await db.connect()
-    providers = await db.get_user_fallback_providers(user_id)
-    return {"providers": providers}
+    primary = normalize_main_provider(await db.get_user_default_ai(user_id))
+    order = [p for p in MAIN_PROVIDER_CHAIN if p != primary]
+    return {"providers": ",".join(order)}
 
 
 @router.put("/settings/fallback")
 @router.put("/api/settings/fallback")
 async def set_fallback_providers(body: FallbackProvidersIn, user_id: str = "default"):
-    """Set fallback provider order (comma-separated, e.g. 'google,openai'). Empty = auto-detect."""
-    valid = {"groq", "google", "claude", "ollama", "openai", "openrouter"}
-    if body.providers.strip():
-        names = [n.strip() for n in body.providers.split(",") if n.strip()]
-        bad = [n for n in names if n not in valid]
-        if bad:
-            return {"error": f"Unknown provider(s): {', '.join(bad)}. Valid: {', '.join(sorted(valid))}"}
-    db = get_db()
-    await db.connect()
-    await db.set_user_fallback_providers(user_id, body.providers.strip())
-    return {"providers": body.providers.strip()}
+    """Fallback order is fixed for now; this endpoint is retained for compatibility."""
+    primary = DEFAULT_MAIN_PROVIDER
+    try:
+        db = get_db()
+        await db.connect()
+        primary = normalize_main_provider(await db.get_user_default_ai(user_id))
+    except Exception:
+        pass
+    order = [p for p in MAIN_PROVIDER_CHAIN if p != primary]
+    return {
+        "providers": ",".join(order),
+        "locked": True,
+        "message": "Fallback order is fixed (claude -> ollama -> openrouter).",
+    }
 
 
 # Default models per provider (used when user has not set a custom model)
@@ -251,9 +352,9 @@ DEFAULT_MODELS = {
     "groq": "llama-3.3-70b-versatile",
     "google": "gemini-1.5-flash",
     "claude": "claude-3-5-sonnet-20241022",
-    "ollama": "llama3.2",
+    "ollama": "auto (tool-capable local model)",
     "openai": "gpt-4o-mini",
-    "openrouter": "arcee-ai/trinity-large-preview:free",
+    "openrouter": OPENROUTER_DEFAULT_MODEL_CHAIN,
 }
 
 
@@ -276,11 +377,11 @@ async def get_models(user_id: str = "default"):
 @router.get("/settings/available-models")
 @router.get("/api/settings/available-models")
 async def get_available_models():
-    """List available models per provider (e.g. Ollama local models). For dashboard Brain section."""
+    """List available tool-capable models per provider used by Settings/Dashboard pickers."""
     ollama_models = await _ollama_list_models()
     return {
         "ollama": ollama_models,
-        # Other providers use API keys; we don't list their model catalogs here
+        "openrouter": list(OPENROUTER_RECOMMENDED_MODELS),
     }
 
 
@@ -295,10 +396,60 @@ async def set_model(body: ModelIn, user_id: str = "default"):
     """Set which model to use for a provider. Leave model empty to use provider default."""
     if body.provider not in ("groq", "google", "claude", "ollama", "openai", "openrouter"):
         return {"error": "provider must be groq, google, claude, ollama, openai, or openrouter"}
+    model_value = (body.model or "").strip()
+
+    if body.provider == "openrouter" and model_value:
+        allowed, rejected = classify_openrouter_model_csv(model_value)
+        if rejected:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "OpenRouter model policy only allows Kimi/Trinity models for tool reliability. "
+                    f"Rejected: {', '.join(rejected)}. "
+                    f"Allowed families: {', '.join(OPENROUTER_RECOMMENDED_MODELS)}"
+                ),
+            )
+        if not allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "No allowed OpenRouter models provided. "
+                    f"Use one of: {', '.join(OPENROUTER_RECOMMENDED_MODELS)}"
+                ),
+            )
+        model_value = ",".join(allowed)
+
+    if body.provider == "ollama" and model_value:
+        if "," in model_value:
+            raise HTTPException(
+                status_code=400,
+                detail="Ollama model must be a single local model name (no comma-separated list).",
+            )
+        tool_models = await _ollama_list_models()
+        if not tool_models:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "No tool-capable Ollama models detected. "
+                    "Pull one that supports tools (e.g. gpt-oss:20b, llama3.3, qwen2.5-coder:32b)."
+                ),
+            )
+        resolved = resolve_ollama_model_name(model_value, tool_models)
+        if resolved not in tool_models:
+            preview = ", ".join(tool_models[:8])
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Ollama model '{model_value}' is not tool-capable on this machine. "
+                    f"Detected tool-capable models: {preview}"
+                ),
+            )
+        model_value = resolved
+
     db = get_db()
     await db.connect()
-    await db.set_user_provider_model(user_id, body.provider, body.model.strip())
-    return {"provider": body.provider, "model": body.model.strip() or "(default)"}
+    await db.set_user_provider_model(user_id, body.provider, model_value)
+    return {"provider": body.provider, "model": model_value or "(default)"}
 
 
 @router.get("/settings/mood")
@@ -335,6 +486,7 @@ async def get_status(user_id: str = "default"):
     security = await collect_security_warnings(db, user_id=user_id)
     thinking_level = await db.get_user_thinking_level(user_id)
     reasoning_mode = await db.get_user_reasoning_mode(user_id)
+    final_mode = await db.get_user_final_mode(user_id)
     apis = {
         "groq": api_status.get("groq_api_key", False),
         "gemini": api_status.get("gemini_api_key", False) or api_status.get("google_ai_key", False),
@@ -398,6 +550,7 @@ async def get_status(user_id: str = "default"):
         "security": security,
         "thinking": {"level": thinking_level},
         "reasoning": {"mode": reasoning_mode},
+        "final": {"mode": final_mode},
         "channels": {
             "telegram": {
                 "configured": bool(api_status.get("telegram_bot_token") or s.telegram_bot_token),
@@ -545,9 +698,11 @@ async def set_whatsapp_policy(body: WhatsAppPolicyIn):
 
 @router.get("/settings/test-key")
 @router.get("/api/settings/test-key")
-async def test_api_key(provider: str = "groq"):
+async def test_api_key(provider: str = "groq", user_id: str = "default"):
     """Test a provider's API key with a minimal request. Returns the real error if it fails."""
     from app.keys import get_api_key
+    db = get_db()
+    await db.connect()
 
     if provider == "spotify":
         cid = (await get_api_key("spotify_client_id")) or ""
@@ -610,18 +765,53 @@ async def test_api_key(provider: str = "groq"):
             from openai import AsyncOpenAI
             client = AsyncOpenAI(api_key=key, base_url="https://openrouter.ai/api/v1")
             r = await client.chat.completions.create(
-                model="arcee-ai/trinity-large-preview:free",
+                model=OPENROUTER_RECOMMENDED_MODELS[-1],
                 messages=[{"role": "user", "content": "Say OK"}],
                 max_tokens=10,
             )
             if r.choices and r.choices[0].message.content:
+                await db.clear_provider_auto_disabled(user_id, "openrouter")
                 return {"ok": True, "message": "OpenRouter key works."}
             return {"ok": True}
         except Exception as e:
             msg = str(e).strip() or repr(e)
             return {"ok": False, "error": msg[:500]}
 
-    return {"ok": False, "error": f"Test not implemented for {provider}. Use groq, openai, openrouter, or spotify."}
+    if provider == "claude":
+        key = await get_api_key("anthropic_api_key")
+        if not key:
+            return {"ok": False, "error": "No Anthropic API key set. Add one in Settings and save first."}
+        try:
+            from anthropic import AsyncAnthropic
+
+            client = AsyncAnthropic(api_key=key)
+            r = await client.messages.create(
+                model="claude-3-5-haiku-20241022",
+                max_tokens=12,
+                messages=[{"role": "user", "content": "Reply with OK"}],
+            )
+            text = ""
+            for block in (getattr(r, "content", None) or []):
+                if getattr(block, "type", "") == "text":
+                    text = (getattr(block, "text", "") or "").strip()
+                    if text:
+                        break
+            if text:
+                await db.clear_provider_auto_disabled(user_id, "claude")
+                return {"ok": True, "message": "Claude key works."}
+            return {"ok": True}
+        except Exception as e:
+            msg = str(e).strip() or repr(e)
+            return {"ok": False, "error": msg[:500]}
+
+    if provider == "ollama":
+        ok = await _ollama_reachable()
+        if not ok:
+            return {"ok": False, "error": "Ollama is not reachable. Start Ollama and verify OLLAMA_BASE_URL."}
+        await db.clear_provider_auto_disabled(user_id, "ollama")
+        return {"ok": True, "message": "Ollama is reachable."}
+
+    return {"ok": False, "error": f"Test not implemented for {provider}. Use claude, ollama, groq, openai, openrouter, or spotify."}
 
 
 class SkillToggleIn(BaseModel):

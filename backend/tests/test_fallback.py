@@ -54,16 +54,15 @@ async def test_primary_success():
 
 @pytest.mark.asyncio
 async def test_primary_auth_failure():
-    """Auth failure on primary should NOT fallback."""
+    """Auth failure on primary should fallback."""
     primary = MockProvider("primary", error="Auth failed", error_type=ProviderError.AUTH)
     fallback = MockProvider("fallback", response="Fallback")
     
     # We need to mock get_provider to return our fallback
     with unittest.mock.patch("app.providers.registry.get_provider", return_value=fallback):
         resp, used = await chat_with_fallback(primary, [], ["fallback"])
-    assert resp.error == ProviderError.AUTH
-    assert resp.content == ""
-    assert used is None
+    assert resp.content == "Fallback"
+    assert used is not None and used.name == "fallback"
 
 @pytest.mark.asyncio
 async def test_primary_transient_failure_with_fallback():
@@ -101,6 +100,40 @@ class _NonStreamProvider:
 
     async def chat(self, messages, **kwargs):
         return ProviderResponse(content=self._content)
+
+
+class _RuntimeStateDB:
+    def __init__(self, *, states=None):
+        self.states = states or {}
+        self.auto_disabled: dict[str, str] = {}
+        self.cleared: list[str] = []
+
+    async def get_provider_runtime_states(self, user_id: str, providers):
+        out = {}
+        for p in providers:
+            out[p] = self.states.get(
+                p,
+                {"enabled": True, "auto_disabled": False, "disabled_reason": ""},
+            )
+        return out
+
+    async def mark_provider_auto_disabled(self, user_id: str, provider: str, reason: str):
+        self.auto_disabled[provider] = reason
+        self.states[provider] = {
+            "enabled": True,
+            "auto_disabled": True,
+            "disabled_reason": reason,
+        }
+
+    async def clear_provider_auto_disabled(self, user_id: str, provider: str):
+        self.cleared.append(provider)
+        state = self.states.get(
+            provider,
+            {"enabled": True, "auto_disabled": False, "disabled_reason": ""},
+        )
+        state["auto_disabled"] = False
+        state["disabled_reason"] = ""
+        self.states[provider] = state
 
 
 @pytest.mark.asyncio
@@ -142,3 +175,51 @@ async def test_stream_primary_failure_uses_fallback_provider():
     assert resp.error is None
     assert used is not None and used.name == "fallback"
     assert [c.args[0] for c in on_delta.await_args_list] == ["Fallback stream"]
+
+
+@pytest.mark.asyncio
+async def test_auth_failure_falls_back_and_auto_disables_provider():
+    primary = MockProvider(
+        "claude",
+        error="Your credit balance is too low. Please go to Plans & Billing.",
+        error_type=ProviderError.AUTH,
+    )
+    fallback = MockProvider("openrouter", response="Fallback Success")
+    runtime_db = _RuntimeStateDB()
+
+    with unittest.mock.patch("app.providers.registry.get_provider", return_value=fallback):
+        resp, used = await chat_with_fallback(
+            primary,
+            [],
+            ["openrouter"],
+            _runtime_db=runtime_db,
+            _runtime_user_id="default",
+        )
+
+    assert resp.content == "Fallback Success"
+    assert used is not None and used.name == "openrouter"
+    assert runtime_db.auto_disabled.get("claude") == "billing"
+
+
+@pytest.mark.asyncio
+async def test_disabled_primary_skips_to_fallback():
+    primary = MockProvider("claude", response="primary should be skipped")
+    fallback = MockProvider("openrouter", response="Fallback Success")
+    runtime_db = _RuntimeStateDB(
+        states={
+            "claude": {"enabled": False, "auto_disabled": False, "disabled_reason": ""},
+            "openrouter": {"enabled": True, "auto_disabled": False, "disabled_reason": ""},
+        }
+    )
+
+    with unittest.mock.patch("app.providers.registry.get_provider", return_value=fallback):
+        resp, used = await chat_with_fallback(
+            primary,
+            [],
+            ["openrouter"],
+            _runtime_db=runtime_db,
+            _runtime_user_id="default",
+        )
+
+    assert resp.content == "Fallback Success"
+    assert used is not None and used.name == "openrouter"

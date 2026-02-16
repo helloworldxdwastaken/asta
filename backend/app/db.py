@@ -7,8 +7,11 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from app.provider_flow import DEFAULT_MAIN_PROVIDER, MAIN_PROVIDER_CHAIN
+
 DB_PATH = os.environ.get("ASTA_DB_PATH", str(Path(__file__).resolve().parent.parent / "asta.db"))
 THINK_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh")
+FINAL_MODES = ("off", "strict")
 
 # One-shot reminders are stored as cron jobs with an "@at <ISO-UTC>" expression.
 ONE_SHOT_CRON_PREFIX = "@at "
@@ -105,7 +108,7 @@ class Db:
     async def _init_schema(self) -> None:
         if not self._conn:
             return
-        await self._conn.executescript("""
+        await self._conn.executescript(f"""
             CREATE TABLE IF NOT EXISTS conversations (
                 id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
@@ -143,9 +146,10 @@ class Db:
             CREATE TABLE IF NOT EXISTS user_settings (
                 user_id TEXT PRIMARY KEY,
                 mood TEXT NOT NULL DEFAULT 'normal',
-                default_ai_provider TEXT NOT NULL DEFAULT 'openrouter',
+                default_ai_provider TEXT NOT NULL DEFAULT '{DEFAULT_MAIN_PROVIDER}',
                 thinking_level TEXT NOT NULL DEFAULT 'off',
                 reasoning_mode TEXT NOT NULL DEFAULT 'off',
+                final_mode TEXT NOT NULL DEFAULT 'off',
                 updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS api_keys (
@@ -165,6 +169,17 @@ class Db:
                 model TEXT NOT NULL,
                 PRIMARY KEY (user_id, provider)
             );
+            CREATE TABLE IF NOT EXISTS provider_runtime_state (
+                user_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                auto_disabled INTEGER NOT NULL DEFAULT 0,
+                disabled_reason TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, provider)
+            );
+            CREATE INDEX IF NOT EXISTS idx_provider_runtime_state_user
+                ON provider_runtime_state(user_id, provider);
             CREATE TABLE IF NOT EXISTS user_location (
                 user_id TEXT PRIMARY KEY,
                 location_name TEXT NOT NULL,
@@ -251,6 +266,21 @@ class Db:
                 UNIQUE (user_id, name)
             );
             CREATE INDEX IF NOT EXISTS idx_cron_jobs_enabled ON cron_jobs(user_id, enabled);
+            CREATE TABLE IF NOT EXISTS cron_job_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cron_job_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                trigger TEXT NOT NULL DEFAULT 'schedule',
+                run_mode TEXT NOT NULL DEFAULT 'due',
+                status TEXT NOT NULL,
+                output TEXT,
+                error TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_cron_job_runs_job_created
+                ON cron_job_runs(cron_job_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_cron_job_runs_user_created
+                ON cron_job_runs(user_id, created_at DESC);
             CREATE TABLE IF NOT EXISTS subagent_runs (
                 run_id TEXT PRIMARY KEY,
                 user_id TEXT NOT NULL,
@@ -283,7 +313,7 @@ class Db:
         if "default_ai_provider" not in columns:
             try:
                 await self._conn.execute(
-                    "ALTER TABLE user_settings ADD COLUMN default_ai_provider TEXT NOT NULL DEFAULT 'openrouter'"
+                    f"ALTER TABLE user_settings ADD COLUMN default_ai_provider TEXT NOT NULL DEFAULT '{DEFAULT_MAIN_PROVIDER}'"
                 )
                 await self._conn.commit()
             except Exception as e:
@@ -322,6 +352,14 @@ class Db:
                 await self._conn.commit()
             except Exception as e:
                 self.logger.exception("Failed to add reasoning_mode column: %s", e)
+        if "final_mode" not in columns:
+            try:
+                await self._conn.execute(
+                    "ALTER TABLE user_settings ADD COLUMN final_mode TEXT NOT NULL DEFAULT 'off'"
+                )
+                await self._conn.commit()
+            except Exception as e:
+                self.logger.exception("Failed to add final_mode column: %s", e)
         # Subagent runs table migrations (for older installs).
         try:
             cursor = await self._conn.execute("PRAGMA table_info(subagent_runs)")
@@ -542,7 +580,7 @@ class Db:
         if not self._conn:
             await self.connect()
         await self._conn.execute(
-            """INSERT INTO user_settings (user_id, mood, default_ai_provider, updated_at) VALUES (?, ?, 'openrouter', datetime('now'))
+            f"""INSERT INTO user_settings (user_id, mood, default_ai_provider, updated_at) VALUES (?, ?, '{DEFAULT_MAIN_PROVIDER}', datetime('now'))
                ON CONFLICT(user_id) DO UPDATE SET mood = ?, updated_at = datetime('now')""",
             (user_id, mood, mood),
         )
@@ -556,16 +594,16 @@ class Db:
                 "SELECT default_ai_provider FROM user_settings WHERE user_id = ?", (user_id,)
             )
             row = await cursor.fetchone()
-            return (row["default_ai_provider"] or "openrouter") if row else "openrouter"
+            return (row["default_ai_provider"] or DEFAULT_MAIN_PROVIDER) if row else DEFAULT_MAIN_PROVIDER
         except Exception as e:
             self.logger.exception("Failed to get user default AI: %s", e)
-            return "openrouter"
+            return DEFAULT_MAIN_PROVIDER
 
     async def set_user_default_ai(self, user_id: str, provider: str) -> None:
         if not self._conn:
             await self.connect()
         await self._conn.execute(
-            """INSERT INTO user_settings (user_id, mood, default_ai_provider, updated_at) VALUES (?, 'normal', ?, datetime('now'))
+            f"""INSERT INTO user_settings (user_id, mood, default_ai_provider, updated_at) VALUES (?, 'normal', ?, datetime('now'))
                ON CONFLICT(user_id) DO UPDATE SET default_ai_provider = ?, updated_at = datetime('now')""",
             (user_id, provider, provider),
         )
@@ -596,8 +634,8 @@ class Db:
         if normalized not in THINK_LEVELS:
             normalized = "off"
         await self._conn.execute(
-            """INSERT INTO user_settings (user_id, mood, default_ai_provider, thinking_level, updated_at)
-               VALUES (?, 'normal', 'openrouter', ?, datetime('now'))
+            f"""INSERT INTO user_settings (user_id, mood, default_ai_provider, thinking_level, updated_at)
+               VALUES (?, 'normal', '{DEFAULT_MAIN_PROVIDER}', ?, datetime('now'))
                ON CONFLICT(user_id) DO UPDATE SET thinking_level = ?, updated_at = datetime('now')""",
             (user_id, normalized, normalized),
         )
@@ -628,9 +666,41 @@ class Db:
         if normalized not in ("off", "on", "stream"):
             normalized = "off"
         await self._conn.execute(
-            """INSERT INTO user_settings (user_id, mood, default_ai_provider, reasoning_mode, updated_at)
-               VALUES (?, 'normal', 'openrouter', ?, datetime('now'))
+            f"""INSERT INTO user_settings (user_id, mood, default_ai_provider, reasoning_mode, updated_at)
+               VALUES (?, 'normal', '{DEFAULT_MAIN_PROVIDER}', ?, datetime('now'))
                ON CONFLICT(user_id) DO UPDATE SET reasoning_mode = ?, updated_at = datetime('now')""",
+            (user_id, normalized, normalized),
+        )
+        await self._conn.commit()
+
+    async def get_user_final_mode(self, user_id: str) -> str:
+        if not self._conn:
+            await self.connect()
+        try:
+            cursor = await self._conn.execute(
+                "SELECT final_mode FROM user_settings WHERE user_id = ?", (user_id,)
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return "off"
+            mode = (row["final_mode"] or "off").strip().lower()
+            if mode not in FINAL_MODES:
+                return "off"
+            return mode
+        except Exception as e:
+            self.logger.exception("Failed to get user final mode: %s", e)
+            return "off"
+
+    async def set_user_final_mode(self, user_id: str, mode: str) -> None:
+        if not self._conn:
+            await self.connect()
+        normalized = (mode or "off").strip().lower()
+        if normalized not in FINAL_MODES:
+            normalized = "off"
+        await self._conn.execute(
+            f"""INSERT INTO user_settings (user_id, mood, default_ai_provider, final_mode, updated_at)
+               VALUES (?, 'normal', '{DEFAULT_MAIN_PROVIDER}', ?, datetime('now'))
+               ON CONFLICT(user_id) DO UPDATE SET final_mode = ?, updated_at = datetime('now')""",
             (user_id, normalized, normalized),
         )
         await self._conn.commit()
@@ -1142,6 +1212,56 @@ class Db:
         await self._conn.commit()
         return cursor.rowcount > 0
 
+    async def add_cron_job_run(
+        self,
+        *,
+        cron_job_id: int,
+        user_id: str,
+        trigger: str,
+        run_mode: str,
+        status: str,
+        output: str | None = None,
+        error: str | None = None,
+    ) -> int:
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute(
+            """INSERT INTO cron_job_runs
+               (cron_job_id, user_id, trigger, run_mode, status, output, error, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+            (
+                int(cron_job_id),
+                (user_id or "default").strip() or "default",
+                (trigger or "schedule").strip() or "schedule",
+                (run_mode or "due").strip() or "due",
+                (status or "unknown").strip() or "unknown",
+                (output or "").strip()[:4000] or None,
+                (error or "").strip()[:2000] or None,
+            ),
+        )
+        await self._conn.commit()
+        return int(cursor.lastrowid or 0)
+
+    async def get_cron_job_runs(
+        self,
+        *,
+        user_id: str,
+        cron_job_id: int,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        if not self._conn:
+            await self.connect()
+        lim = max(1, min(int(limit or 20), 100))
+        cursor = await self._conn.execute(
+            """SELECT id, cron_job_id, user_id, trigger, run_mode, status, output, error, created_at
+               FROM cron_job_runs
+               WHERE user_id = ? AND cron_job_id = ?
+               ORDER BY id DESC
+               LIMIT ?""",
+            ((user_id or "default").strip() or "default", int(cron_job_id), lim),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
     async def update_reminder(
         self,
         reminder_id: int,
@@ -1371,8 +1491,8 @@ class Db:
         if not self._conn:
             await self.connect()
         await self._conn.execute(
-            """INSERT INTO user_settings (user_id, mood, default_ai_provider, pending_location_request, updated_at)
-               VALUES (?, 'normal', 'openrouter', datetime('now'), datetime('now'))
+            f"""INSERT INTO user_settings (user_id, mood, default_ai_provider, pending_location_request, updated_at)
+               VALUES (?, 'normal', '{DEFAULT_MAIN_PROVIDER}', datetime('now'), datetime('now'))
                ON CONFLICT(user_id) DO UPDATE SET pending_location_request = datetime('now'), updated_at = datetime('now')""",
             (user_id,),
         )
@@ -1416,10 +1536,131 @@ class Db:
         if not self._conn:
             await self.connect()
         await self._conn.execute(
-            """INSERT INTO user_settings (user_id, mood, default_ai_provider, fallback_providers, updated_at)
-               VALUES (?, 'normal', 'openrouter', ?, datetime('now'))
+            f"""INSERT INTO user_settings (user_id, mood, default_ai_provider, fallback_providers, updated_at)
+               VALUES (?, 'normal', '{DEFAULT_MAIN_PROVIDER}', ?, datetime('now'))
                ON CONFLICT(user_id) DO UPDATE SET fallback_providers = ?, updated_at = datetime('now')""",
             (user_id, providers_csv, providers_csv),
+        )
+        await self._conn.commit()
+
+    async def get_provider_runtime_states(
+        self,
+        user_id: str,
+        providers: list[str] | tuple[str, ...] | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """Get runtime states for providers (enabled/manual + auto-disabled)."""
+        if not self._conn:
+            await self.connect()
+
+        requested = [str(p or "").strip().lower() for p in (providers or MAIN_PROVIDER_CHAIN) if str(p or "").strip()]
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for provider in requested:
+            if provider in seen:
+                continue
+            seen.add(provider)
+            deduped.append(provider)
+        if not deduped:
+            return {}
+
+        placeholders = ",".join("?" for _ in deduped)
+        cursor = await self._conn.execute(
+            f"""
+            SELECT provider, enabled, auto_disabled, disabled_reason, updated_at
+            FROM provider_runtime_state
+            WHERE user_id = ? AND provider IN ({placeholders})
+            """,
+            (user_id, *deduped),
+        )
+        rows = await cursor.fetchall()
+        found = {str(row["provider"] or "").strip().lower(): row for row in rows}
+        out: dict[str, dict[str, Any]] = {}
+        for provider in deduped:
+            row = found.get(provider)
+            out[provider] = {
+                "enabled": bool(row["enabled"]) if row else True,
+                "auto_disabled": bool(row["auto_disabled"]) if row else False,
+                "disabled_reason": str(row["disabled_reason"] or "").strip() if row else "",
+                "updated_at": str(row["updated_at"] or "").strip() if row else "",
+            }
+        return out
+
+    async def set_provider_runtime_enabled(
+        self,
+        user_id: str,
+        provider: str,
+        enabled: bool,
+    ) -> None:
+        if not self._conn:
+            await self.connect()
+        provider_key = str(provider or "").strip().lower()
+        if not provider_key:
+            return
+        await self._conn.execute(
+            """
+            INSERT INTO provider_runtime_state (
+                user_id, provider, enabled, auto_disabled, disabled_reason, updated_at
+            ) VALUES (?, ?, ?, 0, '', datetime('now'))
+            ON CONFLICT(user_id, provider) DO UPDATE SET
+                enabled = ?,
+                auto_disabled = CASE WHEN ? = 1 THEN 0 ELSE auto_disabled END,
+                disabled_reason = CASE WHEN ? = 1 THEN '' ELSE disabled_reason END,
+                updated_at = datetime('now')
+            """,
+            (
+                user_id,
+                provider_key,
+                1 if enabled else 0,
+                1 if enabled else 0,
+                1 if enabled else 0,
+                1 if enabled else 0,
+            ),
+        )
+        await self._conn.commit()
+
+    async def mark_provider_auto_disabled(
+        self,
+        user_id: str,
+        provider: str,
+        reason: str,
+    ) -> None:
+        if not self._conn:
+            await self.connect()
+        provider_key = str(provider or "").strip().lower()
+        if not provider_key:
+            return
+        reason_text = str(reason or "").strip().lower() or "error"
+        await self._conn.execute(
+            """
+            INSERT INTO provider_runtime_state (
+                user_id, provider, enabled, auto_disabled, disabled_reason, updated_at
+            ) VALUES (?, ?, 1, 1, ?, datetime('now'))
+            ON CONFLICT(user_id, provider) DO UPDATE SET
+                auto_disabled = 1,
+                disabled_reason = ?,
+                updated_at = datetime('now')
+            """,
+            (user_id, provider_key, reason_text, reason_text),
+        )
+        await self._conn.commit()
+
+    async def clear_provider_auto_disabled(self, user_id: str, provider: str) -> None:
+        if not self._conn:
+            await self.connect()
+        provider_key = str(provider or "").strip().lower()
+        if not provider_key:
+            return
+        await self._conn.execute(
+            """
+            INSERT INTO provider_runtime_state (
+                user_id, provider, enabled, auto_disabled, disabled_reason, updated_at
+            ) VALUES (?, ?, 1, 0, '', datetime('now'))
+            ON CONFLICT(user_id, provider) DO UPDATE SET
+                auto_disabled = 0,
+                disabled_reason = '',
+                updated_at = datetime('now')
+            """,
+            (user_id, provider_key),
         )
         await self._conn.commit()
 

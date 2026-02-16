@@ -1,18 +1,35 @@
-"""Parse 'learn about X for Y' / 'learn about X' and duration-only replies (e.g. '30 min')."""
+"""Parse learning intents and duration-only replies.
+
+Supported intent forms include:
+- "learn about X [for Y]"
+- "become an expert on X [for Y]"
+- "study X [for Y]"
+- "research X [for Y]"
+"""
 from __future__ import annotations
 import re
 from typing import Any
 
-# "learn about next.js for 30 minutes", "learn about coffee for 2 hours"
-RE_LEARN_ABOUT_WITH_DURATION = re.compile(
-    r"learn\s+about\s+(.+?)\s+for\s+(\d+)\s*(min(?:ute)?s?|hr?s?|hours?)\b",
+# Optional polite prefixes, then supported learn verbs.
+# Examples:
+# - "learn about next.js for 30 minutes"
+# - "can you research coffee for 2 hours?"
+# - "please become an expert on kubernetes"
+_LEARN_PREFIX = r"(?:please\s+)?(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|i\s+want\s+you\s+to\s+)?"
+_LEARN_VERB = r"(?:learn\s+about|become\s+(?:an?\s+)?expert\s+on|be\s+(?:an?\s+)?expert\s+on|study|research)"
+
+# Intent with duration: "<verb> <topic> for <N> <unit>"
+RE_LEARN_INTENT_WITH_DURATION = re.compile(
+    rf"^\s*{_LEARN_PREFIX}{_LEARN_VERB}\s+(.+?)\s+for\s+(\d+)\s*(min(?:ute)?s?|hr?s?|hours?)\s*[?.!]*\s*$",
     re.I,
 )
-# "learn about next.js", "learn about X" (no duration)
-RE_LEARN_ABOUT_TOPIC_ONLY = re.compile(
-    r"learn\s+about\s+(.+?)$",
+
+# Intent without duration: "<verb> <topic>"
+RE_LEARN_INTENT_TOPIC_ONLY = re.compile(
+    rf"^\s*{_LEARN_PREFIX}{_LEARN_VERB}\s+(.+?)\s*[?.!]*\s*$",
     re.I,
 )
+
 # Duration-only reply: "30 min", "2 hours", "1 hr"
 RE_DURATION_ONLY = re.compile(
     r"^(\d+)\s*(min(?:ute)?s?|hr?s?|hours?)\s*$",
@@ -27,10 +44,20 @@ def _parse_duration_minutes(num: int, unit: str) -> int:
     return num
 
 
+def _normalize_topic(raw: str) -> str:
+    topic = (raw or "").strip()
+    topic = re.sub(r"\s+", " ", topic)
+    # Remove trailing punctuation while keeping meaningful symbols inside topic names.
+    topic = topic.rstrip("?.!,;:")
+    return topic.strip()
+
+
 def parse_learn_about(text: str) -> dict[str, Any] | None:
     """
-    If message is 'learn about X for Y', return {topic, duration_minutes, ask_duration: False}.
-    If message is 'learn about X' (no duration), return {topic, ask_duration: True}.
+    If message is a supported learn intent with duration, return
+    {topic, duration_minutes, ask_duration: False}.
+    If message is a supported learn intent without duration, return
+    {topic, ask_duration: True}.
     Otherwise return None.
     """
     t = (text or "").strip()
@@ -38,9 +65,9 @@ def parse_learn_about(text: str) -> dict[str, Any] | None:
         return None
 
     # With duration first
-    m = RE_LEARN_ABOUT_WITH_DURATION.search(t)
+    m = RE_LEARN_INTENT_WITH_DURATION.match(t)
     if m:
-        topic = (m.group(1) or "").strip()
+        topic = _normalize_topic(m.group(1) or "")
         if not topic:
             return None
         num, unit = int(m.group(2)), (m.group(3) or "").strip()
@@ -52,9 +79,9 @@ def parse_learn_about(text: str) -> dict[str, Any] | None:
         return {"topic": topic, "duration_minutes": duration_minutes, "ask_duration": False}
 
     # Topic only
-    m = RE_LEARN_ABOUT_TOPIC_ONLY.search(t)
+    m = RE_LEARN_INTENT_TOPIC_ONLY.match(t)
     if m:
-        topic = (m.group(1) or "").strip()
+        topic = _normalize_topic(m.group(1) or "")
         if not topic:
             return None
         return {"topic": topic, "ask_duration": True}
