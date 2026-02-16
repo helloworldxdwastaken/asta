@@ -15,7 +15,7 @@ export type Status = {
   apis: Record<string, boolean>;
   integrations: Record<string, boolean>;
   thinking?: {
-    level: "off" | "low" | "medium" | "high";
+    level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
   };
   reasoning?: {
     mode: "off" | "on" | "stream";
@@ -59,6 +59,7 @@ export type Skill = {
   id: string;
   name: string;
   description: string;
+  source?: "builtin" | "workspace" | string;
   enabled: boolean;
   available: boolean;
   /** When not available: "Connect" | "Configure paths" | "Set API key" etc. */
@@ -207,9 +208,9 @@ export const api = {
       body: JSON.stringify({ provider }),
     }),
   getThinking: () =>
-    req<{ thinking_level: "off" | "low" | "medium" | "high" }>("/settings/thinking"),
-  setThinking: (thinking_level: "off" | "low" | "medium" | "high") =>
-    req<{ thinking_level: "off" | "low" | "medium" | "high" }>("/settings/thinking", {
+    req<{ thinking_level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" }>("/settings/thinking"),
+  setThinking: (thinking_level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh") =>
+    req<{ thinking_level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" }>("/settings/thinking", {
       method: "PUT",
       body: JSON.stringify({ thinking_level }),
     }),
@@ -298,8 +299,8 @@ export const api = {
     req<{ cron_jobs: CronJob[] }>(`/cron?user_id=${encodeURIComponent(userId)}`),
   deleteCronJob: (jobId: number) =>
     req<{ ok: boolean; id: number }>(`/cron/${jobId}`, { method: "DELETE" }),
-  updateCronJob: (jobId: number, body: { cron_expr?: string; tz?: string; message?: string }) =>
-    req<{ ok: boolean; id: number; cron_expr: string; tz: string | null }>(`/cron/${jobId}`, {
+  updateCronJob: (jobId: number, body: { name?: string; cron_expr?: string; tz?: string; message?: string }) =>
+    req<{ ok: boolean; id: number; name?: string; cron_expr: string; tz: string | null }>(`/cron/${jobId}`, {
       method: "PUT",
       body: JSON.stringify(body),
     }),

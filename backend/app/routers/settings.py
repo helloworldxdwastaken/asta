@@ -1,5 +1,6 @@
 """User settings (mood, API keys), status, skills, and notifications list."""
 import io
+import logging
 import os
 import re
 import shutil
@@ -17,6 +18,7 @@ from app.exec_tool import get_effective_exec_bins, resolve_executable
 from app.whatsapp_bridge import get_whatsapp_bridge_status
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 async def _ollama_reachable() -> bool:
@@ -101,7 +103,7 @@ class DefaultAiIn(BaseModel):
 
 
 class ThinkingIn(BaseModel):
-    thinking_level: str  # off | low | medium | high
+    thinking_level: str  # off | minimal | low | medium | high | xhigh
 
 
 class ReasoningIn(BaseModel):
@@ -145,8 +147,8 @@ async def get_thinking(user_id: str = "default"):
 @router.put("/api/settings/thinking")
 async def set_thinking(body: ThinkingIn, user_id: str = "default"):
     level = (body.thinking_level or "").strip().lower()
-    if level not in ("off", "low", "medium", "high"):
-        raise HTTPException(status_code=400, detail="thinking_level must be off, low, medium, or high")
+    if level not in ("off", "minimal", "low", "medium", "high", "xhigh"):
+        raise HTTPException(status_code=400, detail="thinking_level must be off, minimal, low, medium, high, or xhigh")
     db = get_db()
     await db.connect()
     await db.set_user_thinking_level(user_id, level)
@@ -632,18 +634,30 @@ def _get_all_skill_defs():
     from app.workspace import discover_workspace_skills
     out = []
     for s in SKILLS:
-        out.append({**s, "install_cmd": None, "install_label": None, "required_bins": []})
+        out.append({**s, "source": "builtin", "install_cmd": None, "install_label": None, "required_bins": []})
     for r in discover_workspace_skills():
         out.append({
             "id": r.name,
             "name": r.name.replace("-", " ").replace("_", " ").title(),
             "description": r.description or "Workspace skill (SKILL.md).",
+            "source": "workspace",
             "install_cmd": getattr(r, "install_cmd", None),
             "install_label": getattr(r, "install_label", None),
             "required_bins": list(getattr(r, "required_bins", ())),
             "supported_os": list(getattr(r, "supported_os", ())),
         })
-    return out
+    deduped: list[dict] = []
+    seen_ids: set[str] = set()
+    for sk in out:
+        sid = str(sk.get("id") or "").strip().lower()
+        if not sid:
+            continue
+        if sid in seen_ids:
+            logger.warning("Duplicate skill id '%s' in skill catalog; keeping first entry only.", sid)
+            continue
+        seen_ids.add(sid)
+        deduped.append(sk)
+    return deduped
 
 
 @router.get("/settings/skills")

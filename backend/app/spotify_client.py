@@ -1,6 +1,7 @@
 """Spotify skill: search tracks (Client Credentials); playback via user OAuth (devices, play)."""
 from __future__ import annotations
 import logging
+import re
 import time
 from typing import Any
 from urllib.parse import urlencode
@@ -15,6 +16,8 @@ DEVICES_URL = "https://api.spotify.com/v1/me/player/devices"
 PLAY_URL = "https://api.spotify.com/v1/me/player/play"
 NEXT_URL = "https://api.spotify.com/v1/me/player/next"
 VOLUME_URL = "https://api.spotify.com/v1/me/player/volume"
+CURRENTLY_PLAYING_URL = "https://api.spotify.com/v1/me/player/currently-playing"
+PLAYLISTS_URL = "https://api.spotify.com/v1/me/playlists"
 
 
 def _is_music_search(text: str) -> bool:
@@ -302,6 +305,117 @@ def extract_playlist_uri(text: str) -> str | None:
         if playlist_id:
             return f"spotify:playlist:{playlist_id}"
     return None
+
+
+def playlist_name_from_message(text: str) -> str | None:
+    """Extract playlist name from phrases like 'play my playlist latino'."""
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    m = re.match(
+        r"^\s*(?:hey\s+|ok\s+|okay\s+|please\s+)?play\s+(?:my\s+|the\s+)?playlist\s+(.+?)\s*$",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    if not m:
+        return None
+    name = (m.group(1) or "").strip()
+    for suffix in (" on spotify", " in spotify", " on spotify.", " in spotify."):
+        if name.lower().endswith(suffix):
+            name = name[: -len(suffix)].strip()
+    return name or None
+
+
+def _normalize_playlist_match(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (value or "").lower())
+
+
+def find_playlist_uri_by_name(query: str, playlists: list[dict[str, Any]]) -> tuple[str | None, str | None]:
+    """Find best playlist URI by exact/substr match (case/punct-insensitive)."""
+    qn = _normalize_playlist_match(query)
+    if not qn:
+        return None, None
+    for p in playlists:
+        name = str(p.get("name") or "")
+        if _normalize_playlist_match(name) == qn:
+            return str(p.get("uri") or "") or None, name
+    for p in playlists:
+        name = str(p.get("name") or "")
+        if qn in _normalize_playlist_match(name):
+            return str(p.get("uri") or "") or None, name
+    return None, None
+
+
+async def list_user_playlists(user_id: str, max_results: int = 50) -> list[dict[str, Any]]:
+    """List user playlists. Returns [{name, uri, owner, tracks_total}, ...]."""
+    token = await get_user_access_token(user_id)
+    if not token:
+        return []
+    limit = max(1, min(int(max_results or 50), 50))
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                PLAYLISTS_URL,
+                params={"limit": limit},
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10.0,
+            )
+            r.raise_for_status()
+            data = r.json()
+        items = data.get("items") or []
+        out: list[dict[str, Any]] = []
+        for item in items:
+            uri = (item.get("uri") or "").strip()
+            if not uri:
+                continue
+            out.append(
+                {
+                    "name": (item.get("name") or "").strip(),
+                    "uri": uri,
+                    "owner": ((item.get("owner") or {}).get("display_name") or "").strip(),
+                    "tracks_total": int(((item.get("tracks") or {}).get("total") or 0)),
+                }
+            )
+        return out
+    except Exception as e:
+        logger.warning("Spotify list playlists failed: %s", e)
+        return []
+
+
+async def get_currently_playing(user_id: str) -> dict[str, Any] | None:
+    """Get currently playing track metadata for the user.
+
+    Returns None when user is not connected or request fails.
+    Returns {"is_playing": bool, "track": str|None, "artist": str|None, "album": str|None}.
+    """
+    token = await get_user_access_token(user_id)
+    if not token:
+        return None
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                CURRENTLY_PLAYING_URL,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10.0,
+            )
+            if r.status_code == 204:
+                return {"is_playing": False, "track": None, "artist": None, "album": None}
+            r.raise_for_status()
+            data = r.json()
+        item = data.get("item") if isinstance(data, dict) else None
+        if not item:
+            return {"is_playing": bool(data.get("is_playing")) if isinstance(data, dict) else False, "track": None, "artist": None, "album": None}
+        artists = [a.get("name") for a in (item.get("artists") or []) if a.get("name")]
+        artist = ", ".join(artists) if artists else None
+        return {
+            "is_playing": bool(data.get("is_playing")),
+            "track": (item.get("name") or None),
+            "artist": artist,
+            "album": ((item.get("album") or {}).get("name") or None),
+        }
+    except Exception as e:
+        logger.warning("Spotify currently playing failed: %s", e)
+        return None
 
 
 def parse_volume_percent(text: str) -> int | None:

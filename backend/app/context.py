@@ -78,6 +78,7 @@ async def build_context(
             "[REMINDERS] Use the reminders tool for one-time reminders. "
             "Use action='add' with natural text (e.g. 'remind me in 30 min to call mom', 'wake me up tomorrow at 7am'). "
             "Use action='list' or action='status' when the user asks what reminders exist. "
+            "Use action='update' with id (+ text/run_at/message) when user asks to edit one. "
             "Use action='remove' with id when user asks to delete one."
         )
         parts.append("")

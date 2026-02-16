@@ -1451,6 +1451,39 @@ textarea:focus {
   background: var(--surface);
   overflow: hidden;
 }
+.settings-jump-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0 0 1rem;
+}
+.settings-jump-link {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  background: var(--surface);
+  text-decoration: none;
+}
+.settings-jump-link:hover {
+  background: var(--surface-hover);
+}
+.settings-group {
+  margin-bottom: 1.15rem;
+}
+.settings-group-head {
+  margin-bottom: 0.6rem;
+}
+.settings-group-title {
+  margin: 0 0 0.2rem;
+  font-size: 1rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  color: var(--text);
+}
 .accordion details {
   border-top: 1px solid var(--border);
 }
@@ -1538,6 +1571,12 @@ textarea:focus {
   margin-top: 0.25rem;
   margin-bottom: 0;
   font-size: 0.85rem;
+}
+@media (max-width: 640px) {
+  .settings-jump-link {
+    width: 100%;
+    justify-content: center;
+  }
 }
 
 /* ─── Progress bar ───────────────────────────────────────────────────────── */

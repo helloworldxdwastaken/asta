@@ -19,6 +19,7 @@ class CronAddIn(BaseModel):
 
 
 class CronUpdateIn(BaseModel):
+    name: str | None = None
     cron_expr: str | None = None
     tz: str | None = None
     message: str | None = None
@@ -43,6 +44,11 @@ async def add_cron(body: CronAddIn, user_id: str = "default"):
     message = (body.message or "").strip()
     if not name or not cron_expr or not message:
         raise HTTPException(400, "name, cron_expr, and message are required")
+    from app.db import validate_cron_expression
+
+    is_valid, error_msg = validate_cron_expression(cron_expr, body.tz)
+    if not is_valid:
+        raise HTTPException(400, f"Invalid cron expression: {error_msg}")
     db = get_db()
     await db.connect()
     job_id = await db.add_cron_job(
@@ -69,10 +75,21 @@ async def update_cron(job_id: int, body: CronUpdateIn):
     job = await db.get_cron_job(job_id)
     if not job:
         raise HTTPException(404, "Cron job not found")
+    name = (body.name or "").strip() if body.name is not None else None
     cron_expr = (body.cron_expr or "").strip() or None
     tz = (body.tz or "").strip() if body.tz is not None else None
     message = (body.message or "").strip() if body.message is not None else None
-    await db.update_cron_job(job_id, cron_expr=cron_expr, tz=tz, message=message)
+
+    if cron_expr is not None:
+        from app.db import validate_cron_expression
+
+        is_valid, error_msg = validate_cron_expression(cron_expr, tz)
+        if not is_valid:
+            raise HTTPException(400, f"Invalid cron expression: {error_msg}")
+
+    ok = await db.update_cron_job(job_id, name=name, cron_expr=cron_expr, tz=tz, message=message)
+    if not ok:
+        raise HTTPException(409, "Could not update cron job (duplicate name or job not found)")
     # Reschedule: remove old, add new with updated expr/tz
     sch = get_scheduler()
     sid = f"{CRON_JOB_PREFIX}{job_id}"
@@ -83,7 +100,7 @@ async def update_cron(job_id: int, body: CronUpdateIn):
     tz_str = (updated.get("tz") or "").strip() or None
     if expr:
         add_cron_job_to_scheduler(sch, job_id, expr, tz_str)
-    return {"ok": True, "id": job_id, "cron_expr": expr, "tz": tz_str}
+    return {"ok": True, "id": job_id, "name": updated.get("name"), "cron_expr": expr, "tz": tz_str}
 
 
 @router.delete("/cron/{job_id:int}")

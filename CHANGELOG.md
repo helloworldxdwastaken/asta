@@ -4,16 +4,23 @@ All notable changes to Asta are documented here.
 
 ## [Unreleased]
 
+No entries yet.
+
+---
+
+## [1.3.10] - 2026-02-16
+
 ### Added
 
 - **Thinking + reasoning controls** — Added persisted per-user AI controls:
-  - `thinking_level`: `off | low | medium | high`
+  - `thinking_level`: `off | minimal | low | medium | high | xhigh`
   - `reasoning_mode`: `off | on | stream`
   Exposed in Settings API/UI and wired into handler/provider flow.
 - **Telegram controls for reasoning/thinking** — Added bot commands and inline pickers:
-  - `/thinking` (and `/thinking <level>`)
+  - `/think` (aliases: `/thinking`, `/t`)
   - `/reasoning` (and `/reasoning <mode>`)
   Registered in Telegram bot menu.
+- **Live stream fallback path** — Added `chat_with_fallback_stream` and provider `chat_stream` support (OpenAI, Groq, OpenRouter) so stream mode can consume model deltas directly instead of only post-generation rendering.
 - **Subagent command UX (single-user)** — Added deterministic `/subagents` command handling (`list/spawn/info/send/stop/help`) in core handler, plus Telegram `/subagents` command registration/menu entry.
 - **Subagent auto-spawn policy (single-user)** — Added conservative deterministic auto-spawn for explicit background requests and clearly complex long multi-step prompts, with env toggle `ASTA_SUBAGENTS_AUTO_SPAWN`.
 - **Subagent send wait mode** — Added wait support for follow-up messages (`sessions_send.timeoutSeconds` and `/subagents send ... --wait <seconds>`), returning immediate reply/timeout status when requested.
@@ -22,9 +29,11 @@ All notable changes to Asta are documented here.
 
 ### Changed
 
+- **Reasoning stream behavior** — `reasoning_mode=stream` now emits incremental status updates from live provider text deltas (OpenAI/Groq/OpenRouter), with post-generation fallback only when no live deltas were emitted.
+- **Reasoning extraction robustness** — Replaced simple regex stripping with code-aware parsing for `<think>/<thinking>` and `<final>` tags so fenced/inline code snippets are preserved while hidden reasoning is sanitized.
 - **Tool-trace UX by channel** — Telegram replies no longer append the `Tools used: ...` footer even when tracing is enabled (Telegram already shows proactive skill-status pings). Web trace behavior remains available.
 - **Tool-trace defaults** — Default trace channels now target web (`ASTA_TOOL_TRACE_CHANNELS=web`).
-- **Docs alignment pass** — Updated README + INSTALL + SPEC + WORKSPACE to reflect implemented behavior and new commands/settings.
+- **Docs alignment pass** — Updated README + INSTALL + SPEC + WORKSPACE + ERRORS to reflect implemented behavior and command/settings surface.
 - **Reminder scheduling internals aligned to cron path** — One-shot reminders now use the cron scheduler path (`@at <ISO-UTC>` entries) for execution, with startup migration of legacy pending reminder rows.
 - **Subagent run summaries** — Improved `/subagents list` and `/subagents info` output with richer status/meta fields (model/thinking/timestamps).
 - **Vision provider config surface** — Added env settings for vision preprocessing behavior and provider/model selection:
@@ -34,8 +43,39 @@ All notable changes to Asta are documented here.
 
 ### Fixed
 
-- **Stale changelog reference** — Removed reference to deleted `docs/OPENCLAW-EXEC-NOTES.md` and pointed to current spec documentation.
 - **Reminder remove/list consistency** — Reminder delete/list/status flows now operate on the same one-shot scheduler source, reducing cases where a removed reminder still appeared pending.
+- **Stream-mode tool recall safety** — Tool-loop recalls now use `chat_stream` only when the provider actually supports it, avoiding stream-path crashes with non-stream-capable providers.
+- **Stale changelog reference** — Removed reference to deleted `docs/OPENCLAW-EXEC-NOTES.md` and pointed to current spec documentation.
+
+### Tests
+
+- Added/updated reasoning stream tests for incremental status updates and think-only leak prevention.
+- Added stream fallback/provider tests for `chat_with_fallback_stream`, including non-stream provider compatibility behavior.
+
+---
+
+## [1.3.9] - 2026-02-15
+
+### Added
+
+- **Telegram thinking aliases** — Added `/think` and `/t` command handlers alongside `/thinking` for parity with OpenClaw-style command usage.
+- **Skills source labels in API/UI** — Skills payload now includes `source` (`builtin` or `workspace`) and the Skills page shows this label to clarify similarly named capabilities.
+
+### Changed
+
+- **Thinking levels expanded** — Standardized thinking levels to `off|minimal|low|medium|high|xhigh` across Settings API/UI, Telegram controls, inline directives, subagent overrides, and provider mapping.
+- **Inline thinking command parsing** — OpenClaw-style directives now parse in mixed text (not only command-only messages), with normalized aliases (`on -> low`, `med -> medium`, `extra-high -> xhigh`).
+- **Documentation alignment pass** — Updated README, INSTALL, WORKSPACE, ERRORS, and SPEC to reflect current thinking levels, Telegram command aliases, workspace user context path, and current release version.
+
+### Fixed
+
+- **Skill catalog duplicate IDs** — Backend skill aggregation now dedupes colliding IDs (built-in/workspace and duplicate workspace IDs), preventing duplicate/missing skill cards caused by ID collisions.
+- **Skills page safety guard** — Frontend now dedupes incoming skill IDs before rendering as an extra protection against malformed payloads.
+
+### Tests
+
+- Added regression tests for backend skill dedupe in settings catalog and runtime registry.
+- Added Telegram thinking command tests for text/help rendering and alias registration.
 
 ---
 

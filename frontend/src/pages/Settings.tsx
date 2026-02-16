@@ -275,7 +275,7 @@ function resolveOllamaSelectValue(model: string, ollamaList: string[]): string {
 function DefaultAiSelect() {
   const [provider, setProvider] = useState("");
   const [model, setModel] = useState("");
-  const [thinkingLevel, setThinkingLevel] = useState<"off" | "low" | "medium" | "high">("off");
+  const [thinkingLevel, setThinkingLevel] = useState<"off" | "minimal" | "low" | "medium" | "high" | "xhigh">("off");
   const [reasoningMode, setReasoningMode] = useState<"off" | "on" | "stream">("off");
   const [visionSettings, setVisionSettings] = useState<VisionSettings>({
     preprocess: true,
@@ -342,7 +342,7 @@ function DefaultAiSelect() {
     setSavingModel(true);
     api.setModel(provider, model.trim()).finally(() => setSavingModel(false));
   };
-  const saveThinking = (level: "off" | "low" | "medium" | "high") => {
+  const saveThinking = (level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh") => {
     setThinkingLevel(level);
     setSavingThinking(true);
     api.setThinking(level).finally(() => setSavingThinking(false));
@@ -422,19 +422,21 @@ function DefaultAiSelect() {
           <select
             id="thinking-level-select"
             value={thinkingLevel}
-            onChange={(e) => saveThinking(e.target.value as "off" | "low" | "medium" | "high")}
+            onChange={(e) => saveThinking(e.target.value as "off" | "minimal" | "low" | "medium" | "high" | "xhigh")}
             className="select"
             style={{ maxWidth: 220 }}
           >
             <option value="off">Off</option>
+            <option value="minimal">Minimal</option>
             <option value="low">Low</option>
             <option value="medium">Medium</option>
             <option value="high">High</option>
+            <option value="xhigh">XHigh</option>
           </select>
           {savingThinking && <span className="help">Saving…</span>}
         </div>
         <p className="help" style={{ marginTop: "0.35rem" }}>
-          Higher levels spend more effort before replying, especially for tool-heavy tasks.
+          Higher levels spend more effort before replying, especially for tool-heavy tasks. `minimal` is a lightweight nudge; `xhigh` is the deepest mode.
         </p>
       </div>
       <div className="field">
@@ -980,189 +982,220 @@ export default function Settings() {
   return (
     <div>
       <h1 className="page-title">Settings</h1>
+      <p className="help" style={{ marginBottom: "1rem" }}>
+        Organized by setup phase so you can do first-time setup quickly, then tune integrations and maintenance settings.
+      </p>
 
-      <div className="accordion">
-        <details open>
-          <summary>
-            <span>API keys</span>
-            <span className="acc-meta">Providers & channels</span>
-          </summary>
-          <div className="acc-body">
-            <p className="help" style={{ marginBottom: "1rem" }}>
-              Keys are stored in your local database (<code>backend/asta.db</code>) and are never committed to git. Restart the backend if you change the Telegram token.
-            </p>
-            <RestartBackendButton />
+      <div className="settings-jump-links">
+        <a href="#settings-core" className="settings-jump-link">1. Core setup</a>
+        <a href="#settings-integrations" className="settings-jump-link">2. Integrations</a>
+        <a href="#settings-system" className="settings-jump-link">3. System help</a>
+      </div>
 
-            <h3 className="settings-section-title">AI providers</h3>
-            <div className="provider-cards">
-              {AI_PROVIDER_ENTRIES.map((entry) => (
-                <div key={entry.id} className="provider-card">
-                  <div className="provider-card-header">
-                    <ProviderLogo logoKey={entry.logoKey} size={44} />
-                    <div className="provider-card-title-wrap">
-                      <span className="provider-card-title">{entry.name}</span>
-                      {entry.keys.every((k) => keysStatus[k.key]) && (
-                        <span className="status-ok">All set</span>
-                      )}
-                    </div>
-                  </div>
-                  <div className="provider-card-fields">
-                    {entry.keys.map(({ key: keyName, label }) => (
-                      <div key={keyName} className="field">
-                        <div className="field-row">
-                          <label className="label" htmlFor={keyName}>{label}</label>
-                          {keysStatus[keyName] && <span className="status-ok">Set</span>}
-                        </div>
-                        <div className="actions" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
-                          <input
-                            id={keyName}
-                            type="password"
-                            placeholder={keysStatus[keyName] ? "Leave blank to keep current" : "Paste key"}
-                            value={keys[keyName] ?? ""}
-                            onChange={(e) => setKeys((k) => ({ ...k, [keyName]: e.target.value }))}
-                            className="input"
-                            style={{ flex: "1 1 200px", minWidth: 0 }}
-                          />
-                          {entry.testKey === keyName && <TestGroqButton />}
-                        </div>
+      <div className="settings-group" id="settings-core">
+        <div className="settings-group-head">
+          <h2 className="settings-group-title">1. Core setup</h2>
+          <p className="help">Connect providers and choose how Asta thinks across chat and channels.</p>
+        </div>
+        <div className="accordion">
+          <details open>
+            <summary>
+              <span>API keys</span>
+              <span className="acc-meta">Providers & channels</span>
+            </summary>
+            <div className="acc-body">
+              <p className="help" style={{ marginBottom: "1rem" }}>
+                Keys are stored in your local database (<code>backend/asta.db</code>) and are never committed to git. Restart the backend if you change the Telegram token.
+              </p>
+              <RestartBackendButton />
+
+              <h3 className="settings-section-title">AI providers</h3>
+              <div className="provider-cards">
+                {AI_PROVIDER_ENTRIES.map((entry) => (
+                  <div key={entry.id} className="provider-card">
+                    <div className="provider-card-header">
+                      <ProviderLogo logoKey={entry.logoKey} size={44} />
+                      <div className="provider-card-title-wrap">
+                        <span className="provider-card-title">{entry.name}</span>
+                        {entry.keys.every((k) => keysStatus[k.key]) && (
+                          <span className="status-ok">All set</span>
+                        )}
                       </div>
-                    ))}
-                  </div>
-                  <div className="actions" style={{ marginTop: "0.5rem" }}>
-                    <button type="button" onClick={handleSaveKeys} disabled={saving} className="btn btn-primary">
-                      {saving ? "Saving…" : "Save"}
-                    </button>
-                  </div>
-                  <p className="help provider-card-get-key">
-                    Get your API key: <a href={entry.getKeyUrl} target="_blank" rel="noreferrer" className="link">{entry.getKeyUrl}</a>
-                  </p>
-                </div>
-              ))}
-            </div>
-
-            <h3 className="settings-section-title">Channels & extras</h3>
-            <div className="provider-cards provider-cards--small">
-              {OTHER_KEYS.map((entry) => (
-                <div key={entry.id} className="provider-card">
-                  <div className="provider-card-header">
-                    <ProviderLogo logoKey={entry.logoKey} size={36} />
-                    <div className="provider-card-title-wrap">
-                      <span className="provider-card-title">{entry.name}</span>
-                      {keysStatus[entry.key] && <span className="status-ok">Set</span>}
                     </div>
+                    <div className="provider-card-fields">
+                      {entry.keys.map(({ key: keyName, label }) => (
+                        <div key={keyName} className="field">
+                          <div className="field-row">
+                            <label className="label" htmlFor={keyName}>{label}</label>
+                            {keysStatus[keyName] && <span className="status-ok">Set</span>}
+                          </div>
+                          <div className="actions" style={{ flexWrap: "wrap", gap: "0.5rem" }}>
+                            <input
+                              id={keyName}
+                              type="password"
+                              placeholder={keysStatus[keyName] ? "Leave blank to keep current" : "Paste key"}
+                              value={keys[keyName] ?? ""}
+                              onChange={(e) => setKeys((k) => ({ ...k, [keyName]: e.target.value }))}
+                              className="input"
+                              style={{ flex: "1 1 200px", minWidth: 0 }}
+                            />
+                            {entry.testKey === keyName && <TestGroqButton />}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="actions" style={{ marginTop: "0.5rem" }}>
+                      <button type="button" onClick={handleSaveKeys} disabled={saving} className="btn btn-primary">
+                        {saving ? "Saving…" : "Save"}
+                      </button>
+                    </div>
+                    <p className="help provider-card-get-key">
+                      Get your API key: <a href={entry.getKeyUrl} target="_blank" rel="noreferrer" className="link">{entry.getKeyUrl}</a>
+                    </p>
                   </div>
-                  <div className="provider-card-fields">
-                    <input
-                      id={entry.key}
-                      type="password"
-                      placeholder={keysStatus[entry.key] ? "Leave blank to keep current" : "Paste key"}
-                      value={keys[entry.key] ?? ""}
-                      onChange={(e) => setKeys((k) => ({ ...k, [entry.key]: e.target.value }))}
-                      className="input"
-                      style={{ width: "100%" }}
-                    />
-                  </div>
-                  <div className="actions" style={{ marginTop: "0.5rem" }}>
-                    <button type="button" onClick={handleSaveKeys} disabled={saving} className="btn btn-primary">
-                      {saving ? "Saving…" : "Save"}
-                    </button>
-                  </div>
-                  <p className="help provider-card-get-key">
-                    Get your API key: <a href={entry.getKeyUrl} target="_blank" rel="noreferrer" className="link">{entry.getKeyUrl}</a>
-                  </p>
-                </div>
-              ))}
-            </div>
-
-            <div className="actions" style={{ marginTop: "1rem" }}>
-              <button type="button" onClick={handleSaveKeys} disabled={saving} className="btn btn-primary">
-                {saving ? "Saving…" : "Save all API keys"}
-              </button>
-            </div>
-            {message && (
-              <div className={message.startsWith("Error:") ? "alert alert-error" : "alert"} style={{ marginTop: "0.75rem" }}>
-                {message}
+                ))}
               </div>
-            )}
-          </div>
-        </details>
 
-        <details>
-          <summary>
-            <span>Default AI</span>
-            <span className="acc-meta">Used across chat + channels</span>
-          </summary>
-          <div className="acc-body">
-            <p className="help">Asta uses this provider by default for Chat, WhatsApp, and Telegram.</p>
-            <DefaultAiSelect />
-            <h3 style={{ marginTop: "1.25rem", marginBottom: "0.25rem" }}>Fallback providers</h3>
-            <FallbackProviderSelect />
-          </div>
-        </details>
+              <h3 className="settings-section-title">Channels & extras</h3>
+              <div className="provider-cards provider-cards--small">
+                {OTHER_KEYS.map((entry) => (
+                  <div key={entry.id} className="provider-card">
+                    <div className="provider-card-header">
+                      <ProviderLogo logoKey={entry.logoKey} size={36} />
+                      <div className="provider-card-title-wrap">
+                        <span className="provider-card-title">{entry.name}</span>
+                        {keysStatus[entry.key] && <span className="status-ok">Set</span>}
+                      </div>
+                    </div>
+                    <div className="provider-card-fields">
+                      <input
+                        id={entry.key}
+                        type="password"
+                        placeholder={keysStatus[entry.key] ? "Leave blank to keep current" : "Paste key"}
+                        value={keys[entry.key] ?? ""}
+                        onChange={(e) => setKeys((k) => ({ ...k, [entry.key]: e.target.value }))}
+                        className="input"
+                        style={{ width: "100%" }}
+                      />
+                    </div>
+                    <div className="actions" style={{ marginTop: "0.5rem" }}>
+                      <button type="button" onClick={handleSaveKeys} disabled={saving} className="btn btn-primary">
+                        {saving ? "Saving…" : "Save"}
+                      </button>
+                    </div>
+                    <p className="help provider-card-get-key">
+                      Get your API key: <a href={entry.getKeyUrl} target="_blank" rel="noreferrer" className="link">{entry.getKeyUrl}</a>
+                    </p>
+                  </div>
+                ))}
+              </div>
 
-        <details>
-          <summary>
-            <span>Spotify</span>
-            <span className="acc-meta">Search + playback</span>
-          </summary>
-          <div className="acc-body">
-            <p className="help">
-              Set your Spotify app credentials so Asta can search songs and (optionally) control playback on your devices.
-            </p>
-            <SpotifySetup keysStatus={keysStatus} onSaved={() => api.getSettingsKeys().then(setKeysStatus)} />
-          </div>
-        </details>
+              <div className="actions" style={{ marginTop: "1rem" }}>
+                <button type="button" onClick={handleSaveKeys} disabled={saving} className="btn btn-primary">
+                  {saving ? "Saving…" : "Save all API keys"}
+                </button>
+              </div>
+              {message && (
+                <div className={message.startsWith("Error:") ? "alert alert-error" : "alert"} style={{ marginTop: "0.75rem" }}>
+                  {message}
+                </div>
+              )}
+            </div>
+          </details>
 
-        <AutoUpdaterSettings
-          cronJobs={cronJobs}
-          onSave={() => api.getCronJobs().then((r) => setCronJobs(r.cron_jobs || []))}
-          saving={autoUpdaterSaving}
-          setSaving={setAutoUpdaterSaving}
-          message={autoUpdaterMessage}
-          setMessage={setAutoUpdaterMessage}
-        />
+          <details>
+            <summary>
+              <span>Default AI</span>
+              <span className="acc-meta">Used across chat + channels</span>
+            </summary>
+            <div className="acc-body">
+              <p className="help">Asta uses this provider by default for Chat, WhatsApp, and Telegram.</p>
+              <DefaultAiSelect />
+              <h3 style={{ marginTop: "1.25rem", marginBottom: "0.25rem" }}>Fallback providers</h3>
+              <FallbackProviderSelect />
+            </div>
+          </details>
+        </div>
+      </div>
 
-        <details>
-          <summary>
-            <span>Run the API</span>
-            <span className="acc-meta">When “API off” shows</span>
-          </summary>
-          <div className="acc-body">
-            <p className="help">Start the backend from the project root (default port: 8010):</p>
-            <pre className="file-preview" style={{ maxWidth: 820 }}>
-              {`# Linux / macOS
+      <div className="settings-group" id="settings-integrations">
+        <div className="settings-group-head">
+          <h2 className="settings-group-title">2. Integrations</h2>
+          <p className="help">Connect optional services and automation flows.</p>
+        </div>
+        <div className="accordion">
+          <details>
+            <summary>
+              <span>Spotify</span>
+              <span className="acc-meta">Search + playback</span>
+            </summary>
+            <div className="acc-body">
+              <p className="help">
+                Set your Spotify app credentials so Asta can search songs and (optionally) control playback on your devices.
+              </p>
+              <SpotifySetup keysStatus={keysStatus} onSaved={() => api.getSettingsKeys().then(setKeysStatus)} />
+            </div>
+          </details>
+
+          <AutoUpdaterSettings
+            cronJobs={cronJobs}
+            onSave={() => api.getCronJobs().then((r) => setCronJobs(r.cron_jobs || []))}
+            saving={autoUpdaterSaving}
+            setSaving={setAutoUpdaterSaving}
+            message={autoUpdaterMessage}
+            setMessage={setAutoUpdaterMessage}
+          />
+        </div>
+      </div>
+
+      <div className="settings-group" id="settings-system">
+        <div className="settings-group-head">
+          <h2 className="settings-group-title">3. System help</h2>
+          <p className="help">Troubleshooting and quick reference.</p>
+        </div>
+        <div className="accordion">
+          <details>
+            <summary>
+              <span>Run the API</span>
+              <span className="acc-meta">When “API off” shows</span>
+            </summary>
+            <div className="acc-body">
+              <p className="help">Start the backend from the project root (default port: 8010):</p>
+              <pre className="file-preview" style={{ maxWidth: 820 }}>
+                {`# Linux / macOS
 ./asta.sh start
 
 # Or manually:
 cd backend && source .venv/bin/activate && uvicorn app.main:app --host 0.0.0.0 --port 8010`}
-            </pre>
-            <p className="help">
-              API is <strong>http://localhost:8010</strong> (or the URL in <code>VITE_API_URL</code>); panel is{" "}
-              <strong>http://localhost:5173</strong>.
-            </p>
-          </div>
-        </details>
+              </pre>
+              <p className="help">
+                API is <strong>http://localhost:8010</strong> (or the URL in <code>VITE_API_URL</code>); panel is{" "}
+                <strong>http://localhost:5173</strong>.
+              </p>
+            </div>
+          </details>
 
-        <details>
-          <summary>
-            <span>About providers & files</span>
-            <span className="acc-meta">Quick reference</span>
-          </summary>
-          <div className="acc-body">
-            <h3 style={{ marginTop: 0 }}>AI providers</h3>
-            <p className="help">
-              Available for Asta: {providers.join(", ")}. Ollama needs no key; set <code>OLLAMA_BASE_URL</code> in <code>backend/.env</code> if needed.
-            </p>
+          <details>
+            <summary>
+              <span>About providers & files</span>
+              <span className="acc-meta">Quick reference</span>
+            </summary>
+            <div className="acc-body">
+              <h3 style={{ marginTop: 0 }}>AI providers</h3>
+              <p className="help">
+                Available for Asta: {providers.join(", ")}. Ollama needs no key; set <code>OLLAMA_BASE_URL</code> in <code>backend/.env</code> if needed.
+              </p>
 
-            <h3>Files</h3>
-            <p className="help">
-              <code>ASTA_ALLOWED_PATHS</code> in <code>backend/.env</code> controls which directories the panel/AI can read.
-            </p>
+              <h3>Files</h3>
+              <p className="help">
+                <code>ASTA_ALLOWED_PATHS</code> in <code>backend/.env</code> controls which directories the panel/AI can read.
+              </p>
 
-            <h3>Audio notes</h3>
-            <p className="help">Transcription runs locally (faster-whisper). Formatting uses your default AI.</p>
-          </div>
-        </details>
+              <h3>Audio notes</h3>
+              <p className="help">Transcription runs locally (faster-whisper). Formatting uses your default AI.</p>
+            </div>
+          </details>
+        </div>
       </div>
     </div>
   );

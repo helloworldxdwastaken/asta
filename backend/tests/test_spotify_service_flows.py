@@ -141,3 +141,86 @@ async def test_spotify_search_injects_results_context_for_llm(monkeypatch):
     assert out is None
     assert extra.get("spotify_results")
     assert extra["spotify_results"][0]["name"] == "One More Time"
+
+
+@pytest.mark.asyncio
+async def test_spotify_now_playing_returns_current_track(monkeypatch):
+    db = FakeSpotifyDb()
+    monkeypatch.setattr(spotify_service, "get_db", lambda: db)
+    monkeypatch.setattr(
+        spotify_service,
+        "get_currently_playing",
+        _async_return(
+            {
+                "is_playing": True,
+                "track": "Despacito",
+                "artist": "Luis Fonsi",
+                "album": "VIDA",
+            }
+        ),
+    )
+
+    out = await spotify_service.SpotifyService.handle_message(
+        user_id="default",
+        text="what song is playing now?",
+        extra_context={},
+    )
+    assert out == "Now playing: Despacito by Luis Fonsi."
+
+
+@pytest.mark.asyncio
+async def test_spotify_play_my_playlist_by_name(monkeypatch):
+    db = FakeSpotifyDb()
+    monkeypatch.setattr(spotify_service, "get_db", lambda: db)
+    monkeypatch.setattr(spotify_service, "get_user_access_token", _async_return("token"))
+    monkeypatch.setattr(
+        spotify_service,
+        "list_user_playlists",
+        _async_return([{"name": "Latino", "uri": "spotify:playlist:abc"}]),
+    )
+    monkeypatch.setattr(
+        spotify_service,
+        "find_playlist_uri_by_name",
+        lambda q, playlists: ("spotify:playlist:abc", "Latino"),
+    )
+    monkeypatch.setattr(
+        spotify_service,
+        "list_user_devices",
+        _async_return([{"id": "d1", "name": "Phone"}]),
+    )
+    monkeypatch.setattr(spotify_service, "start_playback", _async_return(True))
+
+    out = await spotify_service.SpotifyService.handle_message(
+        user_id="default",
+        text="play my playlist latino",
+        extra_context={},
+    )
+
+    assert out == "Playing playlist Latino on Phone."
+
+
+@pytest.mark.asyncio
+async def test_pending_playlist_uri_uses_context_playback(monkeypatch):
+    db = FakeSpotifyDb()
+    db.pending = {
+        "track_uri": "spotify:playlist:abc123",
+        "devices_json": json.dumps([{"id": "d1", "name": "Phone"}]),
+    }
+    monkeypatch.setattr(spotify_service, "get_db", lambda: db)
+    seen: dict = {}
+
+    async def _start_capture(*args, **kwargs):
+        seen.update(kwargs)
+        return True
+
+    monkeypatch.setattr(spotify_service, "start_playback", _start_capture)
+
+    out = await spotify_service.SpotifyService.handle_message(
+        user_id="default",
+        text="1",
+        extra_context={},
+    )
+
+    assert out == "Playing on Phone."
+    assert seen.get("context_uri") == "spotify:playlist:abc123"
+    assert seen.get("track_uri") is None

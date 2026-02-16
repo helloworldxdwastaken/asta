@@ -3,7 +3,14 @@ Inspired by OpenClaw's model-fallback.ts — adapted for Asta's Python stack.
 """
 from __future__ import annotations
 import logging
-from app.providers.base import BaseProvider, Message, ProviderResponse, ProviderError
+from app.providers.base import (
+    BaseProvider,
+    Message,
+    ProviderResponse,
+    ProviderError,
+    TextDeltaCallback,
+    emit_text_delta,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -142,4 +149,89 @@ async def chat_with_fallback(
         last_response = fb_response
 
     logger.error("All providers exhausted. Last error: %s", last_response.error_message)
+    return (last_response, None)
+
+
+async def chat_with_fallback_stream(
+    primary: BaseProvider,
+    messages: list[Message],
+    fallback_names: list[str],
+    *,
+    on_text_delta: TextDeltaCallback | None = None,
+    **kwargs,
+) -> tuple[ProviderResponse, BaseProvider | None]:
+    """Streaming variant of chat_with_fallback.
+
+    Attempts live streaming on providers that implement chat_stream, while preserving
+    the same fallback/error behavior as chat_with_fallback.
+    """
+    from app.providers.registry import get_provider
+
+    async def _call_stream_capable(p, msgs, cb, **call_kwargs) -> ProviderResponse:
+        if hasattr(p, "chat_stream"):
+            return await p.chat_stream(msgs, on_text_delta=cb, **call_kwargs)
+        out = await p.chat(msgs, **call_kwargs)
+        if out.content:
+            await emit_text_delta(cb, out.content)
+        return out
+
+    try:
+        response = await _call_stream_capable(primary, messages, on_text_delta, **kwargs)
+    except Exception as e:
+        logger.error(f"Primary provider {primary.name} stream exception: {e}")
+        response = ProviderResponse(
+            content="",
+            error=ProviderError.TRANSIENT,
+            error_message=str(e)
+        )
+
+    if not response.error:
+        return (response, primary)
+
+    if response.error == ProviderError.AUTH:
+        return (response, None)
+    if not fallback_names:
+        return (response, None)
+
+    logger.warning(
+        "Primary provider %s (stream) failed (%s: %s), trying %d fallback(s)",
+        primary.name, response.error.value, response.error_message, len(fallback_names),
+    )
+
+    last_response = response
+    for i, fb_name in enumerate(fallback_names):
+        fb_provider = get_provider(fb_name)
+        if not fb_provider:
+            logger.warning("Fallback provider '%s' not found, skipping", fb_name)
+            continue
+        fb_model = kwargs.get("_fallback_models", {}).get(fb_name)
+        fb_kwargs = {**kwargs}
+        if fb_model:
+            fb_kwargs["model"] = fb_model
+        else:
+            fb_kwargs.pop("model", None)
+        try:
+            fb_response = await _call_stream_capable(
+                fb_provider,
+                messages,
+                on_text_delta,
+                **fb_kwargs,
+            )
+        except Exception as e:
+            fb_response = ProviderResponse(
+                content="",
+                error=ProviderError.TRANSIENT,
+                error_message=f"{fb_name} exception: {str(e)}"
+            )
+        if not fb_response.error:
+            logger.info("Fallback %s (stream) succeeded (attempt %d/%d)", fb_name, i + 1, len(fallback_names))
+            return (fb_response, fb_provider)
+        if fb_response.error == ProviderError.AUTH:
+            logger.warning("Fallback %s: auth error, skipping to next", fb_name)
+            last_response = fb_response
+            continue
+        logger.warning("Fallback %s failed (%s), trying next", fb_name, fb_response.error.value)
+        last_response = fb_response
+
+    logger.error("All providers exhausted (stream). Last error: %s", last_response.error_message)
     return (last_response, None)

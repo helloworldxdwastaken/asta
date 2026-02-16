@@ -17,7 +17,24 @@ function SkillCard({
   return (
     <div className="skill-card">
       <div className="skill-card-header">
-        <span className="skill-card-name">{skill.name}</span>
+        <span className="skill-card-name">
+          {skill.name}
+          {skill.source && (
+            <span
+              style={{
+                marginLeft: "0.5rem",
+                fontSize: "0.72rem",
+                fontWeight: 600,
+                padding: "0.1rem 0.4rem",
+                borderRadius: "999px",
+                border: "1px solid var(--border)",
+                color: "var(--text-secondary)",
+              }}
+            >
+              {skill.source === "workspace" ? "Workspace" : "Built-in"}
+            </span>
+          )}
+        </span>
         <label className="toggle-wrap">
           <input
             type="checkbox"
@@ -83,7 +100,18 @@ export default function Skills() {
     setError(null);
     api
       .getSkills()
-      .then((r) => setSkills(r.skills))
+      .then((r) => {
+        // Guard against accidental duplicate ids from backend payloads.
+        const seen = new Set<string>();
+        const unique: Skill[] = [];
+        for (const sk of r.skills || []) {
+          const sid = (sk.id || "").trim().toLowerCase();
+          if (!sid || seen.has(sid)) continue;
+          seen.add(sid);
+          unique.push(sk);
+        }
+        setSkills(unique);
+      })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
   };

@@ -32,6 +32,7 @@ Quick reference for errors you might see and how to fix them.
 | **invalid or expired API key** | Key wrong or expired | Update the key in Settings → API keys or `backend/.env`, then restart. |
 | **Client error 404 for Ollama** | Ollama not running or wrong URL | Start Ollama (`ollama serve`) or set correct `OLLAMA_BASE_URL` in `backend/.env`. |
 | **Image reply says it only sees `image/jpeg` / generic image placeholder** | Vision preprocessor/provider path is not configured (or no vision-capable key available). | Add at least one vision-capable key (OpenRouter, Claude, or OpenAI). Keep `ASTA_VISION_PREPROCESS=true` (default). If using OpenRouter vision, ensure `OPENROUTER_API_KEY` is set and optionally set `ASTA_VISION_OPENROUTER_MODEL`. |
+| **`/reasoning stream` does not show live updates** | Provider path does not emit streaming deltas (or stream mode is off). | Use `reasoning_mode=stream` and a streaming-capable provider path (OpenAI, Groq, or OpenRouter). Claude/Google/Ollama paths can fall back to post-generation reasoning rendering. |
 
 ---
 
@@ -92,7 +93,7 @@ Quick reference for errors you might see and how to fix them.
 |-------|-------|----------|
 | **No allowed paths configured** | `ASTA_ALLOWED_PATHS` empty | Add comma-separated directories in `backend/.env`, e.g. `ASTA_ALLOWED_PATHS=/home/you/docs,/home/you/notes`. |
 | **Path not in allowed list** | File/folder outside allowed paths | Add the parent directory to `ASTA_ALLOWED_PATHS` or use a path inside it. |
-| **User.md not found / empty** | File not created yet | It’s created on first backend start. Or run `asta install` which creates `data/User.md`. |
+| **USER.md not found / empty** | File not created yet | Use `workspace/USER.md` (workspace context). It is created automatically on first backend start, or create it manually in the workspace root. |
 
 ---
 

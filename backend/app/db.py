@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 DB_PATH = os.environ.get("ASTA_DB_PATH", str(Path(__file__).resolve().parent.parent / "asta.db"))
+THINK_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh")
 
 # One-shot reminders are stored as cron jobs with an "@at <ISO-UTC>" expression.
 ONE_SHOT_CRON_PREFIX = "@at "
@@ -581,7 +582,7 @@ class Db:
             if not row:
                 return "off"
             level = (row["thinking_level"] or "off").strip().lower()
-            if level not in ("off", "low", "medium", "high"):
+            if level not in THINK_LEVELS:
                 return "off"
             return level
         except Exception as e:
@@ -592,7 +593,7 @@ class Db:
         if not self._conn:
             await self.connect()
         normalized = (level or "off").strip().lower()
-        if normalized not in ("off", "low", "medium", "high"):
+        if normalized not in THINK_LEVELS:
             normalized = "off"
         await self._conn.execute(
             """INSERT INTO user_settings (user_id, mood, default_ai_provider, thinking_level, updated_at)
@@ -1091,12 +1092,19 @@ class Db:
         cron_expr: str | None = None,
         tz: str | None = None,
         message: str | None = None,
+        name: str | None = None,
     ) -> bool:
         """Update an existing cron job by id. Only non-None fields are updated."""
         if not self._conn:
             await self.connect()
         updates = []
         params = []
+        if name is not None:
+            name_norm = name.strip()
+            if not name_norm:
+                return False
+            updates.append("name = ?")
+            params.append(name_norm)
         if cron_expr is not None:
             updates.append("cron_expr = ?")
             params.append(cron_expr.strip())
@@ -1109,12 +1117,16 @@ class Db:
         if not updates:
             return True
         params.append(job_id)
-        await self._conn.execute(
-            f"UPDATE cron_jobs SET {', '.join(updates)} WHERE id = ?",
-            tuple(params),
-        )
-        await self._conn.commit()
-        return True
+        try:
+            cursor = await self._conn.execute(
+                f"UPDATE cron_jobs SET {', '.join(updates)} WHERE id = ?",
+                tuple(params),
+            )
+            await self._conn.commit()
+            return cursor.rowcount > 0
+        except aiosqlite.IntegrityError:
+            # Likely UNIQUE(user_id, name) conflict on rename.
+            return False
 
     async def delete_cron_job(self, job_id: int) -> bool:
         if not self._conn:
@@ -1127,6 +1139,71 @@ class Db:
         if not self._conn:
             await self.connect()
         cursor = await self._conn.execute("DELETE FROM cron_jobs WHERE user_id = ? AND name = ?", (user_id, name.strip()))
+        await self._conn.commit()
+        return cursor.rowcount > 0
+
+    async def update_reminder(
+        self,
+        reminder_id: int,
+        user_id: str,
+        *,
+        message: str | None = None,
+        run_at: str | None = None,
+    ) -> bool:
+        """Update pending reminder fields by id.
+
+        One-shot reminders are backed by cron_jobs (@at). Legacy pending reminders
+        are kept for backward compatibility.
+        """
+        if not self._conn:
+            await self.connect()
+
+        one_shot_id = decode_one_shot_reminder_id(reminder_id)
+        if one_shot_id is not None:
+            updates = []
+            params: list[Any] = []
+            if message is not None:
+                updates.append("message = ?")
+                params.append(message.strip() or "Reminder")
+            if run_at is not None:
+                run_at_norm = normalize_iso_utc(run_at)
+                if not run_at_norm:
+                    return False
+                updates.append("cron_expr = ?")
+                params.append(run_at_to_one_shot_cron_expr(run_at_norm))
+            if not updates:
+                return True
+            params.extend([one_shot_id, user_id])
+            cursor = await self._conn.execute(
+                f"""UPDATE cron_jobs
+                    SET {', '.join(updates)}
+                    WHERE id = ? AND user_id = ? AND lower(trim(cron_expr)) LIKE '@at %'""",
+                tuple(params),
+            )
+            await self._conn.commit()
+            return cursor.rowcount > 0
+
+        # Backward compatibility: support direct legacy reminder rows.
+        updates = []
+        params = []
+        if message is not None:
+            updates.append("message = ?")
+            params.append(message.strip() or "Reminder")
+        if run_at is not None:
+            run_at_norm = normalize_iso_utc(run_at)
+            if not run_at_norm:
+                return False
+            updates.append("run_at = ?")
+            params.append(run_at_norm)
+        if not updates:
+            return True
+        params.extend([reminder_id, user_id])
+        cursor = await self._conn.execute(
+            f"""UPDATE reminders
+                SET {', '.join(updates)}
+                WHERE id = ? AND user_id = ? AND status = 'pending'""",
+            tuple(params),
+        )
         await self._conn.commit()
         return cursor.rowcount > 0
 

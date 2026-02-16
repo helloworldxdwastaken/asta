@@ -19,7 +19,7 @@ _RUN_TASKS: dict[str, asyncio.Task] = {}
 _ARCHIVE_TASKS: dict[str, asyncio.Task] = {}
 _TASKS_LOCK = asyncio.Lock()  # Guards _RUN_TASKS and _ARCHIVE_TASKS access
 _ALLOWED_CLEANUP = {"keep", "delete"}
-_ALLOWED_THINKING = {"off", "low", "medium", "high"}
+_ALLOWED_THINKING = {"off", "minimal", "low", "medium", "high", "xhigh"}
 
 
 def get_subagent_tools_openai_def() -> list[dict]:
@@ -47,7 +47,7 @@ def get_subagent_tools_openai_def() -> list[dict]:
                         "model": {"type": "string", "description": "Optional model override for this subagent run."},
                         "thinking": {
                             "type": "string",
-                            "enum": ["off", "low", "medium", "high"],
+                            "enum": ["off", "minimal", "low", "medium", "high", "xhigh"],
                             "description": "Optional thinking override for this subagent run.",
                         },
                         "runTimeoutSeconds": {"type": "integer", "minimum": 0},
@@ -425,7 +425,7 @@ async def spawn_subagent_run(
         cleanup = "keep"
     thinking_norm = _normalize_thinking(thinking_override)
     if thinking_norm == "__invalid__":
-        return {"status": "error", "error": "thinking must be one of: off, low, medium, high"}
+        return {"status": "error", "error": "thinking must be one of: off, minimal, low, medium, high, xhigh"}
     thinking_override = thinking_norm or None
 
     db = get_db()

@@ -317,7 +317,7 @@ def _get_spotify_section(extra: dict) -> list[str]:
     else:
         # No Spotify flow data (e.g. user asked "what's playing?"). Do not use exec for Spotify.
         parts.append("--- Spotify ---")
-        parts.append("Spotify (search, play) is via Settings → Spotify. For 'what song is playing' or 'now playing': Asta does not fetch currently playing track; tell the user to check the Spotify app. Do NOT run a shell command for Spotify.")
+        parts.append("Spotify (search/play/control) is via Settings → Spotify. For 'what song is playing' / 'now playing', use Spotify APIs (not shell commands). Do NOT run a shell command for Spotify.")
         parts.append("")
     return parts
 

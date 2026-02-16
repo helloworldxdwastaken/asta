@@ -6,6 +6,7 @@ from typing import Awaitable, Callable
 
 from app.audio_transcribe import transcribe_audio
 from app.db import get_db
+from app.providers.base import ProviderResponse
 from app.providers.registry import get_provider
 
 logger = logging.getLogger(__name__)
@@ -66,11 +67,17 @@ async def process_audio_to_notes(
     ]
     await _progress("formatting")
     try:
-        formatted = await provider.chat(messages, model=user_model or None)
+        chat_resp = await provider.chat(messages, model=user_model or None)
     except Exception as e:
         logger.exception("AI format failed: %s", e)
         return {"transcript": transcript, "formatted": f"Formatting failed: {e}"}
-    formatted = (formatted or "").strip()
+    if isinstance(chat_resp, ProviderResponse):
+        if chat_resp.error:
+            err = (chat_resp.error_message or str(chat_resp.error) or "Unknown provider error").strip()
+            return {"transcript": transcript, "formatted": f"Formatting failed: {err}"}
+        formatted = (chat_resp.content or "").strip()
+    else:
+        formatted = str(chat_resp or "").strip()
 
     # Save as "meeting" when instruction is meeting notes (so user can ask "last meeting?" later)
     if _is_meeting_instruction(instruction) and formatted and transcript != "(no speech detected)":

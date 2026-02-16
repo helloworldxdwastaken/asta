@@ -90,6 +90,50 @@ async def test_cron_list_is_deterministic_from_db():
 
 
 @pytest.mark.asyncio
+async def test_pending_tasks_phrase_triggers_schedule_overview_fallback():
+    db = get_db()
+    await db.connect()
+    user_id = "test-pending-tasks-overview"
+    await _cleanup_user_scheduler_data(db, user_id)
+    await db.set_skill_enabled(user_id, "reminders", True)
+
+    reminder_id = await db.add_reminder(
+        user_id,
+        "web",
+        "",
+        "drink water",
+        "2099-01-01T09:00:00Z",
+    )
+    await db.add_cron_job(
+        user_id,
+        "Daily Auto-Update",
+        "0 4 * * *",
+        "run updates",
+        channel="web",
+        channel_target="",
+    )
+
+    with (
+        patch("app.handler.get_provider", return_value=_DummyProvider()),
+        patch("app.compaction.compact_history", side_effect=_fake_compact_history),
+        patch("app.providers.fallback.chat_with_fallback", side_effect=_fake_chat_with_fallback),
+    ):
+        reply = await handle_message(
+            user_id=user_id,
+            channel="web",
+            text="Do I have any pending tasks?",
+            provider_name="openai",
+        )
+
+    assert "pending reminder" in reply.lower()
+    assert f"[id {reminder_id}]" in reply
+    assert "cron job(s)" in reply
+    assert "didn't get a reply back" not in reply.lower()
+
+    await _cleanup_user_scheduler_data(db, user_id)
+
+
+@pytest.mark.asyncio
 async def test_plain_remove_after_reminder_context_removes_pending_reminder():
     db = get_db()
     await db.connect()
@@ -145,6 +189,77 @@ async def test_plain_remove_after_reminder_context_removes_pending_reminder():
     assert pending == []
     cron_jobs = await db.get_cron_jobs(user_id)
     assert len(cron_jobs) == 1
+    await _cleanup_user_scheduler_data(db, user_id)
+
+
+@pytest.mark.asyncio
+async def test_update_cron_name_fallback_is_deterministic():
+    db = get_db()
+    await db.connect()
+    user_id = "test-update-cron-name-fallback"
+    await _cleanup_user_scheduler_data(db, user_id)
+
+    cron_id = await db.add_cron_job(
+        user_id,
+        "daily water reminder",
+        "30 7 * * 1,2,3,4,5",
+        "drink water",
+        channel="telegram",
+        channel_target="6168747695",
+    )
+
+    with (
+        patch("app.handler.get_provider", return_value=_DummyProvider()),
+        patch("app.compaction.compact_history", side_effect=_fake_compact_history),
+        patch("app.providers.fallback.chat_with_fallback", side_effect=_fake_chat_with_fallback),
+    ):
+        reply = await handle_message(
+            user_id=user_id,
+            channel="telegram",
+            channel_target="6168747695",
+            text="can u esit the daily water reminder ? should be called Wake up reminder",
+            provider_name="openai",
+        )
+
+    assert f"Updated cron job #{cron_id}." in reply
+    cron_rows = await db.get_cron_jobs(user_id)
+    assert any((r.get("name") or "") == "Wake up reminder" for r in cron_rows)
+    await _cleanup_user_scheduler_data(db, user_id)
+
+
+@pytest.mark.asyncio
+async def test_update_reminder_fallback_updates_pending_reminder():
+    db = get_db()
+    await db.connect()
+    user_id = "test-update-reminder-fallback"
+    await _cleanup_user_scheduler_data(db, user_id)
+    await db.set_skill_enabled(user_id, "reminders", True)
+
+    reminder_id = await db.add_reminder(
+        user_id,
+        "web",
+        "",
+        "drink water",
+        "2099-01-01T09:00:00Z",
+    )
+
+    with (
+        patch("app.handler.get_provider", return_value=_DummyProvider()),
+        patch("app.compaction.compact_history", side_effect=_fake_compact_history),
+        patch("app.providers.fallback.chat_with_fallback", side_effect=_fake_chat_with_fallback),
+    ):
+        reply = await handle_message(
+            user_id=user_id,
+            channel="web",
+            text=f"edit reminder {reminder_id} to remind me in 10 min to stretch",
+            provider_name="openai",
+        )
+
+    assert f"Updated reminder #{reminder_id}" in reply
+    pending = await db.get_pending_reminders_for_user(user_id, limit=20)
+    row = next((r for r in pending if int(r.get("id") or 0) == int(reminder_id)), None)
+    assert row is not None
+    assert "stretch" in (row.get("message") or "").lower()
     await _cleanup_user_scheduler_data(db, user_id)
 
 

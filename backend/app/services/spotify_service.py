@@ -10,7 +10,11 @@ from app.spotify_client import (
     set_volume_percent,
     list_user_devices,
     get_user_access_token,
+    get_currently_playing,
+    list_user_playlists,
+    find_playlist_uri_by_name,
     extract_playlist_uri,
+    playlist_name_from_message,
     play_query_from_message,
     spotify_search_if_configured,
     search_spotify_artists,
@@ -50,12 +54,38 @@ def _is_retry_request_valid(retry: dict[str, Any] | None) -> bool:
         return False
 
 
+def _is_now_playing_query(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    return any(
+        k in t
+        for k in (
+            "what song is playing",
+            "what's playing",
+            "what is playing",
+            "now playing",
+            "currently playing",
+            "playing now",
+        )
+    )
+
+
+async def _start_uri_on_device(user_id: str, device_id: str | None, uri: str) -> bool:
+    """Play URI on device, treating tracks vs contexts correctly."""
+    if (uri or "").startswith("spotify:track:"):
+        return await start_playback(user_id, device_id, track_uri=uri)
+    return await start_playback(user_id, device_id, context_uri=uri)
+
+
 def _has_spotify_intent(text: str, pending_play: bool, retry_request: dict[str, Any] | None = None) -> bool:
     """True only when message has explicit Spotify/music intent (not generic text)."""
     t = (text or "").strip().lower()
     if pending_play and len(text.strip()) < 40:
         return True
     if _is_retry_phrase(text) and _is_retry_request_valid(retry_request):
+        return True
+    if _is_now_playing_query(text):
         return True
     if any(k in t for k in ("skip", "next song", "next track")):
         return True
@@ -113,7 +143,7 @@ class SpotifyService:
                     return "No active Spotify devices found. Open Spotify on your phone or laptop first."
                 if len(devices) == 1:
                     dev = devices[0]
-                    ok = await start_playback(user_id, dev.get("id"), track_uri)
+                    ok = await _start_uri_on_device(user_id, dev.get("id"), track_uri)
                     if ok:
                         return "Playing on {0}.".format(dev.get("name") or "device")
                     return "Failed to play on {0}.".format(dev.get("name") or "device")
@@ -135,7 +165,7 @@ class SpotifyService:
                     return "No active Spotify devices found. Open Spotify on your phone or laptop first."
                 if len(devices) == 1:
                     dev = devices[0]
-                    ok = await start_playback(user_id, dev.get("id"), track_uri)
+                    ok = await _start_uri_on_device(user_id, dev.get("id"), track_uri)
                     if ok:
                         return f"Playing {display_name} on {dev.get('name')}."
                     return f"Failed to play on {dev.get('name')}."
@@ -167,7 +197,7 @@ class SpotifyService:
                             break
                 
                 if device_id:
-                    ok = await start_playback(user_id, device_id, pending["track_uri"])
+                    ok = await _start_uri_on_device(user_id, device_id, pending["track_uri"])
                     await db.clear_pending_spotify_play(user_id)
                     if ok:
                         return f"Playing on {device_name or 'device'}."
@@ -176,6 +206,23 @@ class SpotifyService:
             except (json.JSONDecodeError, ValueError, KeyError) as e:
                 logger.warning(f"Failed to parse pending spotify choice: {e}")
                 pass
+
+        # 2a. Now Playing
+        if _is_now_playing_query(text):
+            now = await get_currently_playing(user_id)
+            if now is None:
+                row = await db.get_spotify_tokens(user_id)
+                if row:
+                    return "I need to reconnect to Spotify. Please check Settings."
+                return "Spotify is not connected. Connect in Settings."
+            track = (now.get("track") or "").strip()
+            artist = (now.get("artist") or "").strip()
+            if not track:
+                return "Nothing is currently playing on Spotify."
+            who = f" by {artist}" if artist else ""
+            if now.get("is_playing"):
+                return f"Now playing: {track}{who}."
+            return f"Spotify is paused on: {track}{who}."
 
         # 2. Skip / Next
         if any(k in t_lower for k in ("skip", "next song", "next track")):
@@ -220,6 +267,26 @@ class SpotifyService:
                 else:
                     return "Spotify is not connected. Connect in Settings."
             else:
+                playlist_name = playlist_name_from_message(text)
+                if playlist_name:
+                    playlists = await list_user_playlists(user_id, max_results=50)
+                    playlist_uri, matched_name = find_playlist_uri_by_name(playlist_name, playlists)
+                    if not playlist_uri:
+                        return f"I couldn't find a playlist named '{playlist_name}'."
+                    devices = await list_user_devices(user_id)
+                    if not devices:
+                        await db.set_spotify_retry_request(user_id, f"playlist:{matched_name or playlist_name}", playlist_uri)
+                        return "No active Spotify devices found. Open Spotify on your phone or laptop first."
+                    if len(devices) == 1:
+                        dev = devices[0]
+                        ok = await _start_uri_on_device(user_id, dev.get("id"), playlist_uri)
+                        if ok:
+                            return f"Playing playlist {matched_name or playlist_name} on {dev.get('name')}."
+                        return f"Failed to play on {dev.get('name')}."
+                    await db.set_pending_spotify_play(user_id, playlist_uri, json.dumps(devices))
+                    dev_list = ", ".join([f"{i+1}. {d.get('name')}" for i, d in enumerate(devices)])
+                    return f"Found playlist {matched_name or playlist_name}. Which device?\n{dev_list}"
+
                 results = await spotify_search_if_configured(play_query)
                 track_uri = None
                 context_uri = None

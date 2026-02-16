@@ -5,6 +5,7 @@ import json
 import re
 import html
 import shlex
+from typing import Any
 from PIL import Image
 from app.context import build_context
 from app.db import get_db
@@ -117,6 +118,39 @@ _AUTO_SUBAGENT_COMPLEXITY_VERBS = (
     "test",
     "fix",
 )
+_THINK_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh")
+_REASONING_MODES = ("off", "on", "stream")
+_THINK_DIRECTIVE_PATTERN = re.compile(
+    r"(?:^|\s)/(?:thinking|think|t)(?=$|\s|:)",
+    re.IGNORECASE,
+)
+_REASONING_DIRECTIVE_PATTERN = re.compile(
+    r"(?:^|\s)/(?:reasoning|reason)(?=$|\s|:)",
+    re.IGNORECASE,
+)
+_REASONING_QUICK_TAG_RE = re.compile(
+    r"<\s*/?\s*(?:think(?:ing)?|thought|antthinking|final)\b",
+    re.IGNORECASE,
+)
+_REASONING_FINAL_TAG_RE = re.compile(
+    r"<\s*/?\s*final\b[^<>]*>",
+    re.IGNORECASE,
+)
+_REASONING_THINK_TAG_RE = re.compile(
+    r"<\s*(/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>",
+    re.IGNORECASE,
+)
+_XHIGH_MODEL_REFS = (
+    "openai/gpt-5.2",
+    "openai-codex/gpt-5.3-codex",
+    "openai-codex/gpt-5.3-codex-spark",
+    "openai-codex/gpt-5.2-codex",
+    "openai-codex/gpt-5.1-codex",
+    "github-copilot/gpt-5.2-codex",
+    "github-copilot/gpt-5.2",
+)
+_XHIGH_MODEL_SET = {ref.lower() for ref in _XHIGH_MODEL_REFS}
+_XHIGH_MODEL_IDS = {ref.split("/", 1)[1].lower() for ref in _XHIGH_MODEL_REFS if "/" in ref}
 _STATUS_PREFIX = "[[ASTA_STATUS]]"
 
 _TOOL_TRACE_GROUP = {
@@ -282,6 +316,12 @@ def _thinking_instruction(level: str) -> str:
     lv = (level or "off").strip().lower()
     if lv == "off":
         return ""
+    if lv == "minimal":
+        return (
+            "\n\n[THINKING]\n"
+            "Thinking level: minimal. Keep reasoning very brief, but still verify critical facts "
+            "and tool outputs before answering."
+        )
     if lv == "low":
         return (
             "\n\n[THINKING]\n"
@@ -300,7 +340,157 @@ def _thinking_instruction(level: str) -> str:
             "Thinking level: high. Do deeper internal planning and verification. "
             "For external-state claims (files, reminders, notes, statuses), rely on real tool results only."
         )
+    if lv == "xhigh":
+        return (
+            "\n\n[THINKING]\n"
+            "Thinking level: xhigh. Use maximum deliberate planning and strict verification. "
+            "For any external-state claim, require concrete tool evidence before asserting results."
+        )
     return ""
+
+
+def _normalize_thinking_level(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    key = raw.strip().lower()
+    if not key:
+        return None
+    collapsed = re.sub(r"[\s_-]+", "", key)
+    if collapsed in ("xhigh", "extrahigh"):
+        return "xhigh"
+    if key in ("off",):
+        return "off"
+    if key in ("on", "enable", "enabled"):
+        return "low"
+    if key in ("min", "minimal"):
+        return "minimal"
+    if key in ("low", "thinkhard", "think-hard", "think_hard"):
+        return "low"
+    if key in ("mid", "med", "medium", "thinkharder", "think-harder", "harder"):
+        return "medium"
+    if key in ("high", "ultra", "ultrathink", "thinkhardest", "highest", "max"):
+        return "high"
+    if key in ("think",):
+        return "minimal"
+    return None
+
+
+def _normalize_reasoning_mode(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    key = raw.strip().lower()
+    if not key:
+        return None
+    if key in ("off", "false", "no", "0", "hide", "hidden", "disable", "disabled"):
+        return "off"
+    if key in ("on", "true", "yes", "1", "show", "visible", "enable", "enabled"):
+        return "on"
+    if key in ("stream", "streaming", "draft", "live"):
+        return "stream"
+    return None
+
+
+def _parse_inline_thinking_directive(text: str) -> tuple[bool, str | None, str | None, str]:
+    """Parse OpenClaw-style inline thinking directive in mixed text.
+
+    Returns (matched, normalized_level_or_none, raw_level_or_none, cleaned_text).
+    """
+    raw = (text or "")
+    m = _THINK_DIRECTIVE_PATTERN.search(raw)
+    if not m:
+        return False, None, None, raw
+    start, end = m.span()
+    i = end
+    length = len(raw)
+    while i < length and raw[i].isspace():
+        i += 1
+    if i < length and raw[i] == ":":
+        i += 1
+        while i < length and raw[i].isspace():
+            i += 1
+    arg_start = i
+    while i < length and (raw[i].isalpha() or raw[i] in "-_"):
+        i += 1
+    raw_level = (raw[arg_start:i] or "").strip().lower() or None
+    level = _normalize_thinking_level(raw_level)
+    cleaned = (raw[:start] + " " + raw[i:]).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return True, level, raw_level, cleaned
+
+
+def _parse_inline_reasoning_directive(text: str) -> tuple[bool, str | None, str | None, str]:
+    """Parse OpenClaw-style inline reasoning directive in mixed text.
+
+    Returns (matched, normalized_mode_or_none, raw_mode_or_none, cleaned_text).
+    """
+    raw = (text or "")
+    m = _REASONING_DIRECTIVE_PATTERN.search(raw)
+    if not m:
+        return False, None, None, raw
+    start, end = m.span()
+    i = end
+    length = len(raw)
+    while i < length and raw[i].isspace():
+        i += 1
+    if i < length and raw[i] == ":":
+        i += 1
+        while i < length and raw[i].isspace():
+            i += 1
+    arg_start = i
+    while i < length and (raw[i].isalpha() or raw[i] in "-_"):
+        i += 1
+    raw_mode = (raw[arg_start:i] or "").strip().lower() or None
+    mode = _normalize_reasoning_mode(raw_mode)
+    cleaned = (raw[:start] + " " + raw[i:]).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return True, mode, raw_mode, cleaned
+
+
+def _supports_xhigh_thinking(provider: str | None, model: str | None) -> bool:
+    model_key = (model or "").strip().lower()
+    if not model_key:
+        return False
+    provider_key = (provider or "").strip().lower()
+    if model_key in _XHIGH_MODEL_SET:
+        return True
+    if provider_key and f"{provider_key}/{model_key}" in _XHIGH_MODEL_SET:
+        return True
+    if model_key in _XHIGH_MODEL_IDS:
+        return True
+    # OpenRouter often carries model refs as "provider/model".
+    if "/" in model_key and model_key.split("/", 1)[1] in _XHIGH_MODEL_IDS:
+        return True
+    return False
+
+
+def _format_thinking_options(provider: str | None, model: str | None) -> str:
+    options = ["off", "minimal", "low", "medium", "high"]
+    if _supports_xhigh_thinking(provider, model):
+        options.append("xhigh")
+    return ", ".join(options)
+
+
+async def _emit_reasoning_stream_progressively(
+    *,
+    db,
+    conversation_id: str,
+    channel: str,
+    channel_target: str,
+    reasoning: str,
+) -> None:
+    lines = [line.strip() for line in (reasoning or "").splitlines() if line.strip()]
+    if not lines:
+        return
+    built: list[str] = []
+    for line in lines:
+        built.append(line)
+        await _emit_stream_status(
+            db=db,
+            conversation_id=conversation_id,
+            channel=channel,
+            channel_target=channel_target,
+            text=f"Reasoning:\n" + "\n".join(built),
+        )
 
 
 def _reasoning_instruction(mode: str) -> str:
@@ -315,18 +505,157 @@ def _reasoning_instruction(mode: str) -> str:
     )
 
 
+def _parse_fenced_code_regions(text: str) -> list[tuple[int, int]]:
+    regions: list[tuple[int, int]] = []
+    open_region: tuple[int, str, int] | None = None
+    offset = 0
+    line_pattern = re.compile(r"^( {0,3})(`{3,}|~{3,})(.*)$")
+    length = len(text)
+
+    while offset <= length:
+        next_newline = text.find("\n", offset)
+        line_end = length if next_newline == -1 else next_newline
+        line = text[offset:line_end]
+        match = line_pattern.match(line)
+        if match:
+            marker = match.group(2)
+            marker_char = marker[0]
+            marker_len = len(marker)
+            if open_region is None:
+                open_region = (offset, marker_char, marker_len)
+            elif open_region[1] == marker_char and marker_len >= open_region[2]:
+                regions.append((open_region[0], line_end))
+                open_region = None
+        if next_newline == -1:
+            break
+        offset = next_newline + 1
+
+    if open_region is not None:
+        regions.append((open_region[0], length))
+
+    regions.sort(key=lambda region: region[0])
+    return regions
+
+
+def _is_inside_code_region(index: int, regions: list[tuple[int, int]]) -> bool:
+    return any(start <= index < end for start, end in regions)
+
+
+def _parse_inline_code_regions(text: str, fenced_regions: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    regions: list[tuple[int, int]] = []
+    open_ticks = 0
+    open_start = -1
+    i = 0
+    fenced_index = 0
+    length = len(text)
+
+    while i < length:
+        while fenced_index < len(fenced_regions) and i >= fenced_regions[fenced_index][1]:
+            fenced_index += 1
+        if fenced_index < len(fenced_regions):
+            fenced_start, fenced_end = fenced_regions[fenced_index]
+            if fenced_start <= i < fenced_end:
+                i = fenced_end
+                continue
+        if text[i] != "`":
+            i += 1
+            continue
+
+        run_start = i
+        run_length = 0
+        while i < length and text[i] == "`":
+            run_length += 1
+            i += 1
+
+        if open_ticks == 0:
+            open_ticks = run_length
+            open_start = run_start
+        elif run_length == open_ticks:
+            regions.append((open_start, i))
+            open_ticks = 0
+            open_start = -1
+
+    if open_ticks > 0 and open_start >= 0:
+        regions.append((open_start, length))
+
+    regions.sort(key=lambda region: region[0])
+    return regions
+
+
+def _build_code_regions(text: str) -> list[tuple[int, int]]:
+    fenced = _parse_fenced_code_regions(text)
+    inline = _parse_inline_code_regions(text, fenced)
+    regions = fenced + inline
+    regions.sort(key=lambda region: region[0])
+    return regions
+
+
+def _strip_pattern_outside_code(
+    text: str,
+    pattern: re.Pattern[str],
+    code_regions: list[tuple[int, int]],
+) -> str:
+    if not text:
+        return text
+    output: list[str] = []
+    last_index = 0
+    for match in pattern.finditer(text):
+        index = match.start()
+        if _is_inside_code_region(index, code_regions):
+            continue
+        output.append(text[last_index:index])
+        last_index = match.end()
+    output.append(text[last_index:])
+    return "".join(output)
+
+
 def _extract_reasoning_blocks(text: str) -> tuple[str, str]:
     raw = (text or "")
     if not raw:
         return "", ""
-    blocks = re.findall(r"(?is)<(?:think|thinking)>\s*(.*?)\s*</(?:think|thinking)>", raw)
-    final_text = re.sub(r"(?is)<(?:think|thinking)>\s*.*?\s*</(?:think|thinking)>", "", raw).strip()
-    parts: list[str] = []
-    for block in blocks:
-        b = (block or "").strip()
-        if b:
-            parts.append(b)
-    return final_text, "\n\n".join(parts).strip()
+    if not _REASONING_QUICK_TAG_RE.search(raw):
+        return raw.strip(), ""
+
+    cleaned = raw
+    pre_code_regions = _build_code_regions(cleaned)
+    cleaned = _strip_pattern_outside_code(cleaned, _REASONING_FINAL_TAG_RE, pre_code_regions)
+    code_regions = _build_code_regions(cleaned)
+
+    final_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    in_thinking = False
+    last_index = 0
+    reasoning_start = 0
+
+    for match in _REASONING_THINK_TAG_RE.finditer(cleaned):
+        index = match.start()
+        if _is_inside_code_region(index, code_regions):
+            continue
+        is_close = bool(match.group(1))
+
+        if not in_thinking:
+            final_parts.append(cleaned[last_index:index])
+            if not is_close:
+                in_thinking = True
+                reasoning_start = match.end()
+        elif is_close:
+            reasoning = cleaned[reasoning_start:index].strip()
+            if reasoning:
+                reasoning_parts.append(reasoning)
+            in_thinking = False
+
+        last_index = match.end()
+
+    if in_thinking:
+        trailing_reasoning = cleaned[reasoning_start:].strip()
+        if trailing_reasoning:
+            reasoning_parts.append(trailing_reasoning)
+    else:
+        final_parts.append(cleaned[last_index:])
+
+    final_text = "".join(final_parts).strip()
+    reasoning_text = "\n\n".join(reasoning_parts).strip()
+    return final_text, reasoning_text
 
 
 def _looks_like_reminder_set_request(text: str) -> bool:
@@ -513,6 +842,10 @@ def _looks_like_schedule_overview_request(text: str) -> bool:
         return False
     if "schedule" in t and any(k in t for k in ("what", "have", "list", "show")):
         return True
+    if "pending" in t and any(k in t for k in ("task", "tasks", "tast")) and any(
+        k in t for k in ("what", "have", "list", "show", "do i have", "any")
+    ):
+        return True
     if "reminder" in t and "cron" in t and any(k in t for k in ("what", "have", "list", "show", "do i have")):
         return True
     if any(k in t for k in ("task", "tasks", "tast")) and "reminder" in t and any(
@@ -526,6 +859,10 @@ def _looks_like_schedule_overview_request(text: str) -> bool:
             "what task do i have",
             "do i have any task",
             "do i have any tasks",
+            "any pending task",
+            "any pending tasks",
+            "do i have any pending task",
+            "do i have any pending tasks",
             "what reminders and cron",
             "what reminders or cron",
         )
@@ -550,6 +887,83 @@ def _looks_like_remove_request(text: str) -> bool:
             "cancel ",
         )
     )
+
+
+def _looks_like_update_request(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    if re.search(r"\b(?:update|edit|change|rename|reschedule|move)\b", t):
+        return True
+    # Common typo ("esit" for "edit").
+    if "esit" in t:
+        return True
+    return False
+
+
+def _extract_new_name(text: str) -> str | None:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    patterns = (
+        r"(?:should\s+be\s+called|be\s+called)\s+(.+)$",
+        r"(?:rename(?:\s+it)?\s+to|change\s+name\s+to|name(?:\s+it)?\s+to)\s+(.+)$",
+    )
+    for pat in patterns:
+        m = re.search(pat, raw, flags=re.IGNORECASE)
+        if not m:
+            continue
+        candidate = (m.group(1) or "").strip().strip("\"'`").strip(" .?!,")
+        if candidate:
+            return candidate[:120]
+    return None
+
+
+def _extract_inline_cron_expr(text: str) -> str | None:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    m = re.search(
+        r"\b([\d\*/,\-]+\s+[\d\*/,\-]+\s+[\d\*/,\-]+\s+[\d\*/,\-]+\s+[\d\*/,\-]+)\b",
+        raw,
+    )
+    if not m:
+        return None
+    expr = (m.group(1) or "").strip()
+    return expr or None
+
+
+def _match_cron_id_by_name(text: str, cron_rows: list[dict]) -> int | None:
+    t = (text or "").strip().lower()
+    if not t:
+        return None
+    # Prefer longest-name match first to avoid substring collisions.
+    rows = sorted(
+        [r for r in cron_rows if isinstance(r, dict)],
+        key=lambda r: len(str(r.get("name") or "")),
+        reverse=True,
+    )
+    for row in rows:
+        name = (row.get("name") or "").strip().lower()
+        if not name:
+            continue
+        if name in t:
+            try:
+                return int(row.get("id") or 0)
+            except Exception:
+                return None
+    return None
+
+
+def _extract_update_payload_text(text: str) -> str | None:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    m = re.search(r"\bto\s+(.+)$", raw, flags=re.IGNORECASE)
+    if not m:
+        return None
+    candidate = (m.group(1) or "").strip().strip("\"'`").strip(" .?!,")
+    return candidate or None
 
 
 def _extract_target_id(text: str) -> int | None:
@@ -1478,19 +1892,10 @@ async def _handle_scheduler_intents(
         cron_rows = await db.get_cron_jobs(user_id)
         return _render_cron_list_text(cron_rows), _build_tool_trace_label("cron", "list/fallback")
 
-    if not _looks_like_remove_request(t):
-        return None
-    is_bare_remove = t in ("remove", "delete", "cancel")
-    has_scheduler_terms = any(k in t for k in ("reminder", "alarm", "timer", "cron", "schedule", "task"))
     pending = await _get_pending_reminder_rows(db, user_id) if reminders_enabled else []
     cron_rows = await db.get_cron_jobs(user_id)
     inferred_target = await _infer_remove_target_from_recent(db, conversation_id, text)
-    # Allow contextual deletes like "delete this" after reminder listing.
-    if not is_bare_remove and not has_scheduler_terms and not inferred_target:
-        return None
-    # Let the model/tool loop handle compound requests like "delete this reminder and add..."
-    if any(k in t for k in (" and add ", "add reminder", "set reminder", "set a reminder")):
-        return None
+    has_scheduler_terms = any(k in t for k in ("reminder", "alarm", "timer", "cron", "schedule", "task"))
 
     target: str | None = None
     if any(k in t for k in ("reminder", "alarm", "timer")):
@@ -1511,6 +1916,153 @@ async def _handle_scheduler_intents(
             target = "reminder"
         elif any(int(r.get("id") or 0) == int(target_id) for r in cron_rows):
             target = "cron"
+
+    named_cron_id = _match_cron_id_by_name(text, cron_rows)
+    if named_cron_id is not None and target_id is None:
+        target_id = named_cron_id
+        if target in (None, "cron") or (target == "reminder" and not pending):
+            target = "cron"
+
+    is_update = _looks_like_update_request(t)
+    is_remove = _looks_like_remove_request(t)
+
+    if is_update:
+        # Let the model/tool loop handle compound requests like "edit and add reminder".
+        if any(k in t for k in (" and add ", "add reminder", "set reminder", "set a reminder")):
+            return None
+        if not has_scheduler_terms and not inferred_target and target is None:
+            return None
+
+        if target == "reminder" and reminders_enabled:
+            from app.reminders_tool import run_reminders_tool
+
+            if target_id is None:
+                if len(pending) == 1:
+                    target_id = int(pending[0]["id"])
+                elif len(pending) > 1:
+                    return (
+                        "I found multiple reminders. Tell me which one to edit by id "
+                        "(e.g. 'edit reminder 2 to tomorrow 8am').\n\n"
+                        + _render_reminders_list_text(pending)
+                    ), _build_tool_trace_label("reminders", "update/fallback")
+                else:
+                    # User may call it "reminder" while referring to cron job by name.
+                    if named_cron_id is not None:
+                        target = "cron"
+                        target_id = named_cron_id
+                    else:
+                        return "You have no pending reminders to edit.", _build_tool_trace_label("reminders", "update/fallback")
+
+            if target == "reminder" and target_id is not None:
+                update_text = _extract_update_payload_text(text)
+                if not update_text:
+                    return (
+                        "Tell me what to change, for example: "
+                        "'edit reminder 2 to remind me tomorrow at 7am to wake up'."
+                    ), _build_tool_trace_label("reminders", "update/fallback")
+                out = await run_reminders_tool(
+                    {"action": "update", "id": int(target_id), "text": update_text},
+                    user_id=user_id,
+                    channel=channel,
+                    channel_target=channel_target,
+                    db=db,
+                )
+                try:
+                    data = json.loads(out)
+                except Exception:
+                    if isinstance(out, str) and out.strip().lower().startswith("error:"):
+                        return out.strip(), _build_tool_trace_label("reminders", "update/fallback")
+                    return "I could not update that reminder right now.", _build_tool_trace_label("reminders", "update/fallback")
+                if data.get("ok"):
+                    when = (data.get("run_at") or "").strip()
+                    msg = (data.get("message") or "").strip()
+                    suffix = f" ({msg})" if msg else ""
+                    return (
+                        f"Updated reminder #{int(target_id)} for {when}{suffix}."
+                        if when
+                        else f"Updated reminder #{int(target_id)}{suffix}."
+                    ), _build_tool_trace_label("reminders", "update/fallback")
+                return f"No pending reminder found with id {int(target_id)}.", _build_tool_trace_label("reminders", "update/fallback")
+
+        if target == "cron":
+            from app.cron_tool import run_cron_tool
+
+            if target_id is None:
+                if len(cron_rows) == 1:
+                    target_id = int(cron_rows[0]["id"])
+                elif len(cron_rows) > 1:
+                    return (
+                        "I found multiple cron jobs. Tell me which one to edit by id "
+                        "(e.g. 'edit cron 2 to 30 7 * * 1,2,3,4,5').\n\n"
+                        + _render_cron_list_text(cron_rows)
+                    ), _build_tool_trace_label("cron", "update/fallback")
+                else:
+                    return "You have no cron jobs to edit.", _build_tool_trace_label("cron", "update/fallback")
+
+            params: dict[str, Any] = {"action": "update", "id": int(target_id)}
+            new_name = _extract_new_name(text)
+            if new_name:
+                params["name"] = new_name
+            cron_expr = _extract_inline_cron_expr(text)
+            if cron_expr:
+                params["cron_expr"] = cron_expr
+            tz_match = re.search(
+                r"\b(?:tz|timezone)\s*(?:to|=)?\s*([A-Za-z_]+/[A-Za-z0-9_\-+]+)\b",
+                text or "",
+                flags=re.IGNORECASE,
+            )
+            if tz_match:
+                params["tz"] = (tz_match.group(1) or "").strip()
+            msg_match = re.search(
+                r"\b(?:message|msg)\s*(?:to|as|=)\s*(.+)$",
+                text or "",
+                flags=re.IGNORECASE,
+            )
+            if msg_match:
+                msg = (msg_match.group(1) or "").strip().strip("\"'`").strip(" .?!,")
+                if msg:
+                    params["message"] = msg
+            if len(params) == 2:
+                return (
+                    "Tell me what to change: name, cron expression, timezone, or message. "
+                    "Example: 'rename cron 2 to Wake up reminder' or 'edit cron 2 to 30 7 * * 1,2,3,4,5'."
+                ), _build_tool_trace_label("cron", "update/fallback")
+            out = await run_cron_tool(
+                params,
+                user_id=user_id,
+                channel=channel,
+                channel_target=channel_target,
+                db=db,
+            )
+            try:
+                data = json.loads(out)
+            except Exception:
+                if isinstance(out, str) and out.strip().lower().startswith("error:"):
+                    return out.strip(), _build_tool_trace_label("cron", "update/fallback")
+                return "I could not update that cron job right now.", _build_tool_trace_label("cron", "update/fallback")
+            if data.get("ok"):
+                job = data.get("job") if isinstance(data.get("job"), dict) else {}
+                name = (job.get("name") or "").strip()
+                expr = (job.get("cron_expr") or "").strip()
+                summary = f"Updated cron job #{int(target_id)}."
+                if name:
+                    summary += f" Name: {name}."
+                if expr:
+                    summary += f" Schedule: {expr}."
+                return summary, _build_tool_trace_label("cron", "update/fallback")
+            return f"No cron job found with id {int(target_id)}.", _build_tool_trace_label("cron", "update/fallback")
+
+        return None
+
+    if not is_remove:
+        return None
+    is_bare_remove = t in ("remove", "delete", "cancel")
+    # Allow contextual deletes like "delete this" after reminder listing.
+    if not is_bare_remove and not has_scheduler_terms and not inferred_target:
+        return None
+    # Let the model/tool loop handle compound requests like "delete this reminder and add..."
+    if any(k in t for k in (" and add ", "add reminder", "set reminder", "set a reminder")):
+        return None
 
     if target == "reminder" and reminders_enabled:
         from app.reminders_tool import run_reminders_tool
@@ -1667,6 +2219,7 @@ async def handle_message(
         except Exception as e:
             logger.warning("Image compression failed: %s", e)
 
+    raw_user_text = text
     cid = conversation_id or await db.get_or_create_conversation(user_id, channel)
     # Persist user message early so Telegram (and web) thread shows it even if handler or provider fails later
     user_content = f" [Image: {image_mime or 'image/jpeg'}] {text}" if image_bytes else text
@@ -1677,13 +2230,90 @@ async def handle_message(
     extra["mood"] = mood
     thinking_level = await db.get_user_thinking_level(user_id)
     thinking_override = (extra.get("subagent_thinking_override") or "").strip().lower()
-    if thinking_override in ("off", "low", "medium", "high"):
+    if thinking_override in _THINK_LEVELS:
         thinking_level = thinking_override
     extra["thinking_level"] = thinking_level
     reasoning_mode = await db.get_user_reasoning_mode(user_id)
     extra["reasoning_mode"] = reasoning_mode
+    reasoning_mode_norm = (reasoning_mode or "").strip().lower()
     if provider_name == "default":
         provider_name = await db.get_user_default_ai(user_id)
+
+    # OpenClaw-style inline directives:
+    # - /t <level>, /think:<level>, /thinking <level>
+    # - /reasoning <off|on|stream>, /reason <mode>
+    # - supports mixed text (e.g. "please /think high run this")
+    # - /think (query current level)
+    # - /reasoning (query current mode)
+    model_override = (extra.get("subagent_model_override") or "").strip()
+    directive_model = model_override or await db.get_user_provider_model(user_id, provider_name)
+    think_options = _format_thinking_options(provider_name, directive_model)
+
+    directive_text = text
+    think_matched, think_level, think_raw_level, think_rest = _parse_inline_thinking_directive(directive_text)
+    if think_matched:
+        directive_text = think_rest
+    reasoning_matched, reasoning_level, reasoning_raw_level, reasoning_rest = _parse_inline_reasoning_directive(directive_text)
+    if reasoning_matched:
+        directive_text = reasoning_rest
+
+    if think_matched:
+        if think_raw_level is None:
+            reply = (
+                f"Current thinking level: {thinking_level}. "
+                f"Options: {think_options}."
+            )
+            await db.add_message(cid, "assistant", reply, "script")
+            return reply
+        if think_level not in _THINK_LEVELS:
+            reply = (
+                f'Unrecognized thinking level "{think_raw_level}". '
+                f"Valid levels: {think_options}."
+            )
+            await db.add_message(cid, "assistant", reply, "script")
+            return reply
+        if think_level == "xhigh" and not _supports_xhigh_thinking(provider_name, directive_model):
+            reply = (
+                'Thinking level "xhigh" is not supported for your current model. '
+                f"Valid levels: {think_options}."
+            )
+            await db.add_message(cid, "assistant", reply, "script")
+            return reply
+        await db.set_user_thinking_level(user_id, think_level)
+        thinking_level = await db.get_user_thinking_level(user_id)
+        extra["thinking_level"] = thinking_level
+
+    if reasoning_matched:
+        if reasoning_raw_level is None:
+            reply = (
+                f"Current reasoning mode: {reasoning_mode}. "
+                "Options: off, on, stream."
+            )
+            await db.add_message(cid, "assistant", reply, "script")
+            return reply
+        if reasoning_level not in _REASONING_MODES:
+            reply = (
+                f'Unrecognized reasoning mode "{reasoning_raw_level}". '
+                "Valid levels: off, on, stream."
+            )
+            await db.add_message(cid, "assistant", reply, "script")
+            return reply
+        await db.set_user_reasoning_mode(user_id, reasoning_level)
+        reasoning_mode = await db.get_user_reasoning_mode(user_id)
+        extra["reasoning_mode"] = reasoning_mode
+        reasoning_mode_norm = (reasoning_mode or "").strip().lower()
+
+    if think_matched or reasoning_matched:
+        text = directive_text
+        if not text:
+            parts: list[str] = []
+            if think_matched and think_raw_level is not None:
+                parts.append(f"Thinking level set to {thinking_level}.")
+            if reasoning_matched and reasoning_raw_level is not None:
+                parts.append(f"Reasoning mode set to {reasoning_mode}.")
+            reply = " ".join(parts).strip() or "OK."
+            await db.add_message(cid, "assistant", reply, "script")
+            return reply
 
     # OpenClaw-style explicit subagent command UX (single-user):
     # /subagents list|spawn|info|send|stop
@@ -1907,6 +2537,11 @@ async def handle_message(
 
     # Load recent messages; skip old assistant error messages so the model doesn't repeat "check your API key"
     recent = await db.get_recent_messages(cid, limit=20)
+    if text != raw_user_text and recent:
+        last = recent[-1]
+        if isinstance(last, dict) and last.get("role") == "user" and str(last.get("content") or "") == user_content:
+            # When inline directives are stripped, avoid sending both raw and cleaned user text.
+            recent = recent[:-1]
 
     messages = [
         {"role": m["role"], "content": m["content"]}
@@ -1967,6 +2602,10 @@ async def handle_message(
     model_override = (extra.get("subagent_model_override") or "").strip()
     if model_override:
         user_model = model_override
+    if thinking_level == "xhigh" and not _supports_xhigh_thinking(provider.name, user_model):
+        # Keep stored preference intact, but downgrade unsupported runtime requests.
+        thinking_level = "high"
+        extra["thinking_level"] = thinking_level
 
     # Exec tool (Claw-style): expose based on exec security policy.
     from app.exec_tool import (
@@ -2032,7 +2671,11 @@ async def handle_message(
         tools = tools + get_subagent_tools_openai_def()
     tools = tools if tools else None
 
-    from app.providers.fallback import chat_with_fallback, get_available_fallback_providers
+    from app.providers.fallback import (
+        chat_with_fallback,
+        chat_with_fallback_stream,
+        get_available_fallback_providers,
+    )
     fallback_names = await get_available_fallback_providers(db, user_id, exclude_provider=provider.name)
     fallback_models = {}
     for fb_name in fallback_names:
@@ -2052,9 +2695,46 @@ async def handle_message(
         chat_kwargs["tools"] = tools
     allowed_tool_names = _tool_names_from_defs(tools)
 
-    response, provider_used = await chat_with_fallback(
-        provider, messages, fallback_names, **chat_kwargs
-    )
+    live_stream_reasoning_enabled = reasoning_mode_norm == "stream"
+    live_stream_reasoning_emitted = False
+
+    def _make_reasoning_delta_handler():
+        streamed_text = ""
+        streamed_reasoning = ""
+
+        async def _on_text_delta(delta_text: str) -> None:
+            nonlocal streamed_text, streamed_reasoning, live_stream_reasoning_emitted
+            if not delta_text:
+                return
+            streamed_text += delta_text
+            _, reasoning_live = _extract_reasoning_blocks(streamed_text)
+            reasoning_live = reasoning_live.strip()
+            if not reasoning_live or reasoning_live == streamed_reasoning:
+                return
+            streamed_reasoning = reasoning_live
+            live_stream_reasoning_emitted = True
+            await _emit_stream_status(
+                db=db,
+                conversation_id=cid,
+                channel=channel,
+                channel_target=channel_target,
+                text=f"Reasoning:\n{reasoning_live}",
+            )
+
+        return _on_text_delta
+
+    if live_stream_reasoning_enabled:
+        response, provider_used = await chat_with_fallback_stream(
+            provider,
+            messages,
+            fallback_names,
+            on_text_delta=_make_reasoning_delta_handler(),
+            **chat_kwargs,
+        )
+    else:
+        response, provider_used = await chat_with_fallback(
+            provider, messages, fallback_names, **chat_kwargs
+        )
     if tools and not response.tool_calls:
         parsed_calls, cleaned = _extract_textual_tool_calls(response.content or "", allowed_tool_names)
         if parsed_calls:
@@ -2460,7 +3140,14 @@ async def handle_message(
         # Give the model more time when it has to summarize large tool output (e.g. memo notes)
         if provider_used.name == "openrouter":
             tool_kwargs["timeout"] = 90
-        response = await provider_used.chat(current_messages, **tool_kwargs)
+        if live_stream_reasoning_enabled and hasattr(provider_used, "chat_stream"):
+            response = await provider_used.chat_stream(
+                current_messages,
+                on_text_delta=_make_reasoning_delta_handler(),
+                **tool_kwargs,
+            )
+        else:
+            response = await provider_used.chat(current_messages, **tool_kwargs)
         if response.error:
             break
 
@@ -2479,6 +3166,7 @@ async def handle_message(
     # OpenClaw-style preference: scheduler actions should be executed via tools.
     # If a tool-capable model skipped reminders/cron tool calls, apply deterministic fallback
     # from tool logic so we don't hallucinate list/remove outcomes.
+    scheduler_fallback_used = False
     if (
         _provider_supports_tools(provider_name)
         and not ran_reminders_tool
@@ -2497,6 +3185,7 @@ async def handle_message(
             fallback_reply, fallback_label = scheduler_fallback
             reply = fallback_reply
             used_tool_labels.append(fallback_label)
+            scheduler_fallback_used = True
 
     # OpenClaw-style guardrail: if model skipped files tool calls on a clear files-check request,
     # run deterministic listing fallback (or return a factual access error) instead of pretending.
@@ -2532,19 +3221,20 @@ async def handle_message(
     # - off: hide extracted <think> blocks
     # - on/stream: show extracted reasoning above final answer
     final_text, extracted_reasoning = _extract_reasoning_blocks(reply)
-    reasoning_mode_norm = (reasoning_mode or "").lower()
+    reasoning_mode_norm = (reasoning_mode or "").strip().lower()
     if reasoning_mode_norm == "off":
         # Never leak raw <think> blocks to user output.
         reply = final_text
     elif extracted_reasoning:
         if reasoning_mode_norm == "stream":
-            await _emit_stream_status(
-                db=db,
-                conversation_id=cid,
-                channel=channel,
-                channel_target=channel_target,
-                text=f"Reasoning:\n{extracted_reasoning}",
-            )
+            if not live_stream_reasoning_emitted:
+                await _emit_reasoning_stream_progressively(
+                    db=db,
+                    conversation_id=cid,
+                    channel=channel,
+                    channel_target=channel_target,
+                    reasoning=extracted_reasoning,
+                )
             # Stream mode emits reasoning as status; final user reply should stay clean.
             reply = final_text
         else:
@@ -2778,6 +3468,8 @@ async def handle_message(
         "reminders" in enabled
         and _provider_supports_tools(provider_name)
         and _looks_like_reminder_set_request(text)
+        and not ran_reminders_tool
+        and not scheduler_fallback_used
         and not extra.get("reminder_scheduled")
         and not reminder_tool_scheduled
     ):

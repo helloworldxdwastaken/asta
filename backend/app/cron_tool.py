@@ -127,10 +127,30 @@ async def run_cron_tool(
         job_id = params.get("id")
         if not isinstance(job_id, int) or job_id <= 0:
             return "Error: update requires integer `id`."
+        name = (params.get("name") or "").strip() or None
         cron_expr = (params.get("cron_expr") or "").strip() or None
         message = (params.get("message") or "").strip() or None
         tz = (params.get("tz") or "").strip() or None
-        await db.update_cron_job(job_id, cron_expr=cron_expr, tz=tz, message=message)
+
+        if cron_expr is not None:
+            from app.db import validate_cron_expression
+
+            is_valid, error_msg = validate_cron_expression(cron_expr, tz)
+            if not is_valid:
+                return f"Error: Invalid cron expression: {error_msg}"
+
+        ok = await db.update_cron_job(
+            job_id,
+            name=name,
+            cron_expr=cron_expr,
+            tz=tz,
+            message=message,
+        )
+        if not ok:
+            return (
+                f"Error: could not update cron job id {job_id}. "
+                "It may not exist, or the new name conflicts with another cron job."
+            )
         updated = await db.get_cron_job(job_id)
         if not updated:
             return f"Error: cron job id {job_id} not found."

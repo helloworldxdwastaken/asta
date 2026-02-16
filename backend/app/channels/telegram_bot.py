@@ -67,8 +67,19 @@ from app.config import get_settings, set_env_value
 
 logger = logging.getLogger(__name__)
 _EXEC_MODES = ("deny", "allowlist", "full")
-_THINK_LEVELS = ("off", "low", "medium", "high")
+_THINK_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh")
 _REASONING_MODES = ("off", "on", "stream")
+_XHIGH_MODEL_REFS = (
+    "openai/gpt-5.2",
+    "openai-codex/gpt-5.3-codex",
+    "openai-codex/gpt-5.3-codex-spark",
+    "openai-codex/gpt-5.2-codex",
+    "openai-codex/gpt-5.1-codex",
+    "github-copilot/gpt-5.2-codex",
+    "github-copilot/gpt-5.2",
+)
+_XHIGH_MODEL_SET = {ref.lower() for ref in _XHIGH_MODEL_REFS}
+_XHIGH_MODEL_IDS = {ref.split("/", 1)[1].lower() for ref in _XHIGH_MODEL_REFS if "/" in ref}
 _ALLOW_COMMAND_HELP = "Usage: /allow <binary> (example: /allow rg)"
 _APPROVE_COMMAND_HELP = "Usage: /approve <approval_id> [once|always]"
 _DENY_COMMAND_HELP = "Usage: /deny <approval_id>"
@@ -750,23 +761,61 @@ async def exec_mode_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.warning("Could not set exec mode from telegram callback: %s", e)
 
 
-def _thinking_markup(current: str) -> InlineKeyboardMarkup:
+def _thinking_markup(current: str, options: tuple[str, ...] | None = None) -> InlineKeyboardMarkup:
+    levels = options or tuple(_THINK_LEVELS)
     buttons = [
         InlineKeyboardButton(("✅ " if level == current else "") + level, callback_data=f"thinking:{level}")
-        for level in _THINK_LEVELS
+        for level in levels
     ]
     return InlineKeyboardMarkup([buttons])
 
 
-def _thinking_text(current: str) -> str:
+def _supports_xhigh_thinking(provider: str | None, model: str | None) -> bool:
+    model_key = (model or "").strip().lower()
+    if not model_key:
+        return False
+    provider_key = (provider or "").strip().lower()
+    if model_key in _XHIGH_MODEL_SET:
+        return True
+    if provider_key and f"{provider_key}/{model_key}" in _XHIGH_MODEL_SET:
+        return True
+    if model_key in _XHIGH_MODEL_IDS:
+        return True
+    if "/" in model_key and model_key.split("/", 1)[1] in _XHIGH_MODEL_IDS:
+        return True
+    return False
+
+
+def _thinking_options(provider: str | None, model: str | None) -> tuple[str, ...]:
+    base = ("off", "minimal", "low", "medium", "high")
+    return base + (("xhigh",) if _supports_xhigh_thinking(provider, model) else ())
+
+
+def _thinking_text(current: str, *, options: tuple[str, ...] | None = None, provider: str | None = None, model: str | None = None) -> str:
+    opts = options or tuple(_THINK_LEVELS)
+    opts_text = ", ".join(opts)
+    model_line = ""
+    if provider:
+        model_label = f"{provider}/{model}" if model else f"{provider}/(default)"
+        model_line = f"Active model: {model_label}\n"
     return (
-        "Thinking level controls how much internal effort Asta spends before replying.\n\n"
-        f"Current level: {current}\n"
-        "- off: fastest\n"
-        "- low: light extra verification\n"
-        "- medium: more planning/verification\n"
-        "- high: deepest verification for complex tasks"
+        "Thinking controls how much extra verification Asta does before replying.\n\n"
+        f"Current thinking level: {current}\n"
+        f"Options: {opts_text}\n"
+        f"{model_line}\n"
+        "Use /think <level> (aliases: /thinking, /t)\n"
+        "off=fastest, minimal/low=lighter checks, medium/high=deeper checks, xhigh=maximum (model-dependent)."
     )
+
+
+async def _get_default_provider_model() -> tuple[str, str | None]:
+    from app.db import get_db
+
+    db = get_db()
+    await db.connect()
+    provider = await db.get_user_default_ai("default")
+    model = await db.get_user_provider_model("default", provider)
+    return provider, model
 
 
 async def _set_thinking_level(level: str) -> str:
@@ -795,20 +844,28 @@ async def thinking_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("You're not authorized to use this bot.")
         return
     current = await _get_thinking_level()
+    provider, model = await _get_default_provider_model()
+    available = _thinking_options(provider, model)
     arg = ((context.args[0] if context.args else "") or "").strip().lower()
     if arg:
-        if arg not in _THINK_LEVELS:
+        if arg not in available:
             await update.message.reply_text(
-                "Invalid level. Use /thinking off, /thinking low, /thinking medium, or /thinking high."
+                f"Unrecognized level. Valid levels for {provider}/{model or '(default)'}: {', '.join(available)}."
             )
             return
         try:
             current = await _set_thinking_level(arg)
-            await update.message.reply_text(_thinking_text(current), reply_markup=_thinking_markup(current))
+            await update.message.reply_text(
+                _thinking_text(current, options=available, provider=provider, model=model),
+                reply_markup=_thinking_markup(current, options=available),
+            )
         except Exception as e:
             await update.message.reply_text(f"Could not change thinking level: {str(e)[:200]}")
         return
-    await update.message.reply_text(_thinking_text(current), reply_markup=_thinking_markup(current))
+    await update.message.reply_text(
+        _thinking_text(current, options=available, provider=provider, model=model),
+        reply_markup=_thinking_markup(current, options=available),
+    )
 
 
 async def thinking_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -820,13 +877,18 @@ async def thinking_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
     data = (query.data or "").strip()
     level = data.split(":", 1)[1].strip().lower() if ":" in data else ""
-    if level not in _THINK_LEVELS:
+    provider, model = await _get_default_provider_model()
+    available = _thinking_options(provider, model)
+    if level not in available:
         await query.answer("Invalid level", show_alert=True)
         return
     try:
         current = await _set_thinking_level(level)
         await query.answer(f"Thinking: {current}")
-        await query.edit_message_text(_thinking_text(current), reply_markup=_thinking_markup(current))
+        await query.edit_message_text(
+            _thinking_text(current, options=available, provider=provider, model=model),
+            reply_markup=_thinking_markup(current, options=available),
+        )
     except Exception as e:
         await query.answer("Failed to update thinking", show_alert=True)
         logger.warning("Could not set thinking level from telegram callback: %s", e)
@@ -846,7 +908,7 @@ def _reasoning_text(current: str) -> str:
         f"Current mode: {current}\n"
         "- off: hide reasoning blocks\n"
         "- on: show reasoning before final answer\n"
-        "- stream: same as on for now (final render only)"
+        "- stream: send incremental reasoning status updates before final answer"
     )
 
 
@@ -927,7 +989,9 @@ def build_telegram_app(token: str) -> Application:
     app.add_handler(CommandHandler("deny", deny_cmd))
     app.add_handler(CommandHandler("approvals", approvals_cmd))
     app.add_handler(CommandHandler("allowlist", allowlist_cmd))
+    app.add_handler(CommandHandler("think", thinking_cmd))
     app.add_handler(CommandHandler("thinking", thinking_cmd))
+    app.add_handler(CommandHandler("t", thinking_cmd))
     app.add_handler(CommandHandler("reasoning", reasoning_cmd))
     app.add_handler(CommandHandler("subagents", subagents_cmd))
     app.add_handler(CallbackQueryHandler(exec_mode_callback, pattern=r"^exec_mode:"))
@@ -1096,7 +1160,7 @@ async def start_telegram_bot_in_loop(app: Application) -> None:
             BotCommand("deny", "Deny pending exec command"),
             BotCommand("approvals", "List pending exec approvals"),
             BotCommand("allowlist", "Show allowed exec binaries"),
-            BotCommand("thinking", "Set thinking level (off/low/medium/high)"),
+            BotCommand("think", "Set thinking level (off/minimal/low/medium/high/xhigh)"),
             BotCommand("reasoning", "Set reasoning visibility (off/on/stream)"),
             BotCommand("subagents", "Manage subagents (list/spawn/info/send/stop)"),
         ])
