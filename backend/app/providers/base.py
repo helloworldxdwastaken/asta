@@ -24,6 +24,7 @@ class ProviderError(str, Enum):
 # Tool call (OpenClaw-style): model requested to run a tool. Handler runs it and re-calls with result.
 ToolCall = dict  # {"id": str, "type": "function", "function": {"name": str, "arguments": str}}
 TextDeltaCallback = Callable[[str], Awaitable[None] | None]
+StreamEventCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
 
 
 @dataclass
@@ -47,6 +48,14 @@ async def emit_text_delta(callback: TextDeltaCallback | None, delta: str) -> Non
     if not callback or not delta:
         return
     maybe = callback(delta)
+    if isawaitable(maybe):
+        await maybe
+
+
+async def emit_stream_event(callback: StreamEventCallback | None, payload: dict[str, Any]) -> None:
+    if not callback or not isinstance(payload, dict):
+        return
+    maybe = callback(payload)
     if isawaitable(maybe):
         await maybe
 
@@ -123,12 +132,27 @@ class BaseProvider(ABC):
         messages: list[Message],
         *,
         on_text_delta: TextDeltaCallback | None = None,
+        on_stream_event: StreamEventCallback | None = None,
         **kwargs,
     ) -> ProviderResponse:
         """Streaming variant. Default falls back to non-streaming chat."""
+        await emit_stream_event(on_stream_event, {"type": "message_start"})
         response = await self.chat(messages, **kwargs)
         if response.content:
+            await emit_stream_event(on_stream_event, {"type": "text_start"})
             await emit_text_delta(on_text_delta, response.content)
+            await emit_stream_event(
+                on_stream_event,
+                {"type": "text_delta", "delta": response.content},
+            )
+            await emit_stream_event(
+                on_stream_event,
+                {"type": "text_end", "content": response.content},
+            )
+        await emit_stream_event(
+            on_stream_event,
+            {"type": "message_end", "content": response.content or ""},
+        )
         return response
 
     @property

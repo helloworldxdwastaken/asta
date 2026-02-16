@@ -21,6 +21,8 @@ from app.services.spotify_service import SpotifyService
 from app.services.reminder_service import ReminderService
 from app.services.learning_service import LearningService
 from app.services.giphy_service import GiphyService
+from app.stream_state_machine import AssistantStreamStateMachine
+from app.thinking_capabilities import supports_xhigh_thinking
 
 logger = logging.getLogger(__name__)
 
@@ -172,17 +174,6 @@ _REASONING_THINK_TAG_RE = re.compile(
     r"<\s*(/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>",
     re.IGNORECASE,
 )
-_XHIGH_MODEL_REFS = (
-    "openai/gpt-5.2",
-    "openai-codex/gpt-5.3-codex",
-    "openai-codex/gpt-5.3-codex-spark",
-    "openai-codex/gpt-5.2-codex",
-    "openai-codex/gpt-5.1-codex",
-    "github-copilot/gpt-5.2-codex",
-    "github-copilot/gpt-5.2",
-)
-_XHIGH_MODEL_SET = {ref.lower() for ref in _XHIGH_MODEL_REFS}
-_XHIGH_MODEL_IDS = {ref.split("/", 1)[1].lower() for ref in _XHIGH_MODEL_REFS if "/" in ref}
 _STATUS_PREFIX = "[[ASTA_STATUS]]"
 
 _TOOL_TRACE_GROUP = {
@@ -300,6 +291,56 @@ async def _emit_live_stream_event(
         logger.debug("Live stream event callback failed: %s", e)
 
 
+def _longest_common_prefix_size(left: str, right: str) -> int:
+    max_len = min(len(left), len(right))
+    idx = 0
+    while idx < max_len and left[idx] == right[idx]:
+        idx += 1
+    return idx
+
+
+def _largest_suffix_prefix_overlap(left: str, right: str, *, max_scan: int = 2048) -> int:
+    """Return overlap size where suffix(left) == prefix(right)."""
+    if not left or not right:
+        return 0
+    cap = min(len(left), len(right), max_scan)
+    for size in range(cap, 0, -1):
+        if left.endswith(right[:size]):
+            return size
+    return 0
+
+
+def _merge_stream_source_text(current: str, incoming: str) -> str:
+    """Merge provider stream text while tolerating duplicated or full-content chunks.
+
+    Providers should send text deltas, but some fallbacks can emit snapshots. This keeps
+    the accumulated source text monotonic and avoids duplicate appends.
+    """
+    cur = current or ""
+    inc = incoming or ""
+    if not inc:
+        return cur
+    if not cur:
+        return inc
+
+    # Incoming is full snapshot that already includes current content.
+    if inc.startswith(cur):
+        return inc
+    # Incoming is duplicate/older subset.
+    if cur.startswith(inc) or inc in cur:
+        return cur
+
+    overlap = _largest_suffix_prefix_overlap(cur, inc)
+    if overlap > 0:
+        return cur + inc[overlap:]
+
+    # Snapshot style fallback that still contains current text somewhere.
+    if cur in inc and len(inc) >= len(cur):
+        return inc
+
+    return cur + inc
+
+
 def _compute_incremental_delta(previous: str, current: str) -> str:
     prev = previous or ""
     cur = current or ""
@@ -307,7 +348,34 @@ def _compute_incremental_delta(previous: str, current: str) -> str:
         return ""
     if cur.startswith(prev):
         return cur[len(prev):]
+    common = _longest_common_prefix_size(prev, cur)
+    if common > 0:
+        return cur[common:]
     return cur
+
+
+def _plan_stream_text_update(
+    *,
+    previous: str,
+    current: str,
+    allow_rewrite: bool = False,
+) -> tuple[bool, str, bool]:
+    """Plan a streaming text update.
+
+    Returns (should_emit, delta, rewrote_non_prefix).
+    """
+    prev = previous or ""
+    cur = (current or "").strip()
+    if not cur or cur == prev:
+        return False, "", False
+    if prev and not cur.startswith(prev):
+        if not allow_rewrite:
+            return False, "", False
+        return True, cur, True
+    delta = _compute_incremental_delta(prev, cur)
+    if not delta and cur == prev:
+        return False, "", False
+    return True, delta or cur, False
 
 
 def _is_short_acknowledgment(text: str) -> bool:
@@ -650,20 +718,7 @@ def _parse_inline_reasoning_directive(text: str) -> tuple[bool, str | None, str 
 
 
 def _supports_xhigh_thinking(provider: str | None, model: str | None) -> bool:
-    model_key = (model or "").strip().lower()
-    if not model_key:
-        return False
-    provider_key = (provider or "").strip().lower()
-    if model_key in _XHIGH_MODEL_SET:
-        return True
-    if provider_key and f"{provider_key}/{model_key}" in _XHIGH_MODEL_SET:
-        return True
-    if model_key in _XHIGH_MODEL_IDS:
-        return True
-    # OpenRouter often carries model refs as "provider/model".
-    if "/" in model_key and model_key.split("/", 1)[1] in _XHIGH_MODEL_IDS:
-        return True
-    return False
+    return supports_xhigh_thinking(provider, model)
 
 
 def _format_thinking_options(provider: str | None, model: str | None) -> str:
@@ -2732,9 +2787,7 @@ async def handle_message(
     if not callable(stream_event_callback):
         stream_event_callback = None
     stream_events_enabled = bool(stream_event_callback) and (channel or "").strip().lower() == "web"
-    streamed_raw_model_text = ""
-    streamed_assistant_text = ""
-    streamed_reasoning_text = ""
+    live_stream_machine: AssistantStreamStateMachine | None = None
     if mood is None:
         mood = await db.get_user_mood(user_id)
     extra["mood"] = mood
@@ -3228,38 +3281,29 @@ async def handle_message(
     live_model_stream_enabled = live_stream_reasoning_enabled or stream_events_enabled
     live_stream_reasoning_emitted = False
 
-    async def _emit_live_assistant_text(text_value: str) -> None:
-        nonlocal streamed_assistant_text
+    async def _emit_live_assistant_text(text_value: str, delta: str) -> None:
         if not stream_events_enabled:
             return
-        next_text = (text_value or "").strip()
-        if not next_text or next_text == streamed_assistant_text:
-            return
-        delta = _compute_incremental_delta(streamed_assistant_text, next_text)
-        streamed_assistant_text = next_text
         await _emit_live_stream_event(
             stream_event_callback,
             {
                 "type": "assistant",
-                "text": next_text,
-                "delta": delta,
+                "text": (text_value or "").strip(),
+                "delta": delta or "",
             },
         )
 
-    async def _emit_live_reasoning_text(text_value: str) -> None:
-        nonlocal streamed_reasoning_text
+    async def _emit_live_reasoning_text(text_value: str, delta: str) -> None:
         next_text = (text_value or "").strip()
-        if not next_text or next_text == streamed_reasoning_text:
+        if not next_text:
             return
-        delta = _compute_incremental_delta(streamed_reasoning_text, next_text)
-        streamed_reasoning_text = next_text
         if stream_events_enabled:
             await _emit_live_stream_event(
                 stream_event_callback,
                 {
                     "type": "reasoning",
                     "text": next_text,
-                    "delta": delta,
+                    "delta": delta or "",
                 },
             )
             return
@@ -3273,35 +3317,47 @@ async def handle_message(
             stream_event_type="reasoning",
         )
 
-    async def _on_model_text_delta(delta_text: str) -> None:
-        nonlocal streamed_raw_model_text, live_stream_reasoning_emitted
-        if not delta_text:
-            return
-        streamed_raw_model_text += delta_text
+    def _extract_live_assistant_text(raw_stream_text: str) -> str:
         assistant_live = _strip_reasoning_tags_from_text(
-            streamed_raw_model_text,
+            raw_stream_text,
             mode="strict",
             trim="both",
             strict_final=strict_final_mode_enabled,
         )
-        reasoning_live = _extract_thinking_from_tagged_stream(streamed_raw_model_text)
-        assistant_live = _strip_bracket_tool_protocol(_strip_tool_call_markup(assistant_live or "")).strip()
-        reasoning_live = (reasoning_live or "").strip()
-        if assistant_live:
-            await _emit_live_assistant_text(assistant_live)
-        if live_stream_reasoning_enabled and reasoning_live:
-            live_stream_reasoning_emitted = True
-            formatted_reasoning = _format_reasoning_message(reasoning_live)
-            if formatted_reasoning:
-                await _emit_live_reasoning_text(formatted_reasoning)
+        return _strip_bracket_tool_protocol(_strip_tool_call_markup(assistant_live or "")).strip()
+
+    async def _on_model_stream_event(payload: dict[str, Any]) -> None:
+        if not live_stream_machine:
+            return
+        await live_stream_machine.on_event(payload)
+
+    async def _on_model_text_delta(delta_text: str) -> None:
+        if not live_stream_machine or not delta_text:
+            return
+        await live_stream_machine.on_event({"type": "text_delta", "delta": delta_text})
+
+    if live_model_stream_enabled:
+        live_stream_machine = AssistantStreamStateMachine(
+            merge_source_text=_merge_stream_source_text,
+            plan_text_update=_plan_stream_text_update,
+            extract_assistant_text=_extract_live_assistant_text,
+            extract_reasoning_text=_extract_thinking_from_tagged_stream,
+            format_reasoning=_format_reasoning_message,
+            emit_assistant=_emit_live_assistant_text,
+            emit_reasoning=_emit_live_reasoning_text,
+            stream_reasoning=live_stream_reasoning_enabled,
+        )
 
     if live_model_stream_enabled:
         response, provider_used = await chat_with_fallback_stream(
             provider,
             messages,
             fallback_names,
-            on_text_delta=_on_model_text_delta,
+            on_stream_event=_on_model_stream_event,
             **chat_kwargs,
+        )
+        live_stream_reasoning_emitted = bool(
+            live_stream_machine and live_stream_machine.reasoning_emitted
         )
     else:
         response, provider_used = await chat_with_fallback(
@@ -3844,11 +3900,31 @@ async def handle_message(
         if provider_used.name == "openrouter":
             tool_kwargs["timeout"] = 90
         if live_model_stream_enabled and hasattr(provider_used, "chat_stream"):
+            if live_stream_machine:
+                await live_stream_machine.on_event(
+                    {"type": "message_start", "provider": provider_used.name}
+                )
             response = await provider_used.chat_stream(
                 current_messages,
                 on_text_delta=_on_model_text_delta,
                 **tool_kwargs,
             )
+            if live_stream_machine:
+                await live_stream_machine.on_event(
+                    {
+                        "type": "text_end",
+                        "provider": provider_used.name,
+                        "content": response.content or "",
+                    }
+                )
+                await live_stream_machine.on_event(
+                    {
+                        "type": "message_end",
+                        "provider": provider_used.name,
+                        "content": response.content or "",
+                    }
+                )
+                live_stream_reasoning_emitted = live_stream_machine.reasoning_emitted
         else:
             response = await provider_used.chat(current_messages, **tool_kwargs)
         if response.error:
@@ -4294,9 +4370,9 @@ async def handle_message(
 
     if stream_events_enabled and reply.strip():
         final_visible_reply = reply.strip()
-        if final_visible_reply != streamed_assistant_text:
-            final_delta = _compute_incremental_delta(streamed_assistant_text, final_visible_reply)
-            streamed_assistant_text = final_visible_reply
+        prior_live_reply = live_stream_machine.assistant_text if live_stream_machine else ""
+        if final_visible_reply != prior_live_reply:
+            final_delta = _compute_incremental_delta(prior_live_reply, final_visible_reply)
             await _emit_live_stream_event(
                 stream_event_callback,
                 {

@@ -15,12 +15,47 @@ All notable changes to Asta are documented here.
 - **Approval auto-resume** — After tapping `Once` or `Always`, Telegram now auto-continues the blocked request by calling the handler with the approved command result context (no manual `continue` message required).
 - **Self-knowledge includes release history** — Self-awareness docs context and the `asta:knowledge` virtual file root now include `CHANGELOG.md` alongside README and docs files.
 - **Learning intent aliases** — Added parser/runtime support for learning aliases in chat (`become an expert on`, `study`, `research`) with optional duration handling, while preserving existing `learn about` behavior.
+- **Exec allowlist hardening** — Allowlist mode now rejects shell control syntax/chaining (`|`, `&&`, `;`, redirects, command substitution, multiline input) and accepts only single direct commands.
+- **Shell launcher guardrail** — Shell launchers are now blocked in allowlist mode (including wrapped invocations like `env bash ...`), even if manually present in allowlist data.
+- **Provider-aware thinking options** — `/api/settings/thinking` now returns active provider/model context plus supported thinking options (`options`, `supports_xhigh`), so UI/channel controls can reflect model capability.
+- **Thinking capability parity across surfaces** — Telegram and handler now use shared thinking-capability logic (including comma-separated model handling), reducing drift between command parsing and runtime gating.
+- **Settings UI thinking selector cleanup** — Thinking dropdown now renders provider-aware options from backend capability data and preserves current selection safely when providers/models change.
+- **Provider capability matrix** — Added `/api/settings/provider-capabilities` (and `/settings/provider-capabilities`) plus Settings UI "Provider behavior matrix" cards that show per-provider tools behavior, streaming behavior, and thinking capability summaries for the fixed `Claude -> Ollama -> OpenRouter` chain.
 
 ### Tests
 
 - Added `backend/tests/test_telegram_approvals_ui.py` covering callback payload parsing, action markup, callback handler registration, and auto-resume prompt construction.
 - Added `backend/tests/test_self_awareness_docs.py` to verify `CHANGELOG.md` is included in self-awareness docs loading and the `asta:knowledge` virtual root.
 - Added `backend/tests/test_learning_intents.py` covering alias parsing and learning-job scheduling flow via `LearningService`.
+- Expanded exec regression coverage in:
+  - `backend/tests/test_exec_tool_compat.py` (shell token/newline rejection + launcher blocking)
+  - `backend/tests/test_exec_approval_flow.py` (no pending approval for shell-syntax-denied commands)
+- Added thinking capability regression coverage:
+  - `backend/tests/test_thinking_capabilities.py`
+  - `backend/tests/test_telegram_thinking_command.py` (CSV model support case)
+  - `backend/tests/test_thinking_settings.py` (`get_thinking` provider-aware options payload)
+- Added provider capability matrix regression coverage:
+  - `backend/tests/test_provider_flow_settings.py` (`get_provider_capabilities` matrix payload)
+
+---
+
+## [1.3.16] - 2026-02-16
+
+### Changed
+
+- **OpenClaw-style stream event pipeline** — Added a dedicated assistant stream state machine (`message_start`, `text_start`, `text_delta`, `text_end`, `message_end`) for live assistant/reasoning rendering and non-prefix rewrite handling across fallback/provider switches and tool-recall passes.
+- **Fallback stream lifecycle events** — `chat_with_fallback_stream` now emits explicit per-provider stream lifecycle events (including provider identity) while preserving existing text-delta callbacks and fallback behavior.
+- **Handler stream integration** — Replaced inline ad-hoc stream buffers in `handle_message` with the new state machine pipeline; tool-loop re-calls now emit stream lifecycle boundaries so web/Telegram reasoning streaming stays consistent with fallback calls.
+
+### Tests
+
+- Added `backend/tests/test_stream_state_machine.py` for state-machine lifecycle/reset/reasoning behavior.
+- Expanded `backend/tests/test_fallback.py` with lifecycle-event coverage per provider attempt.
+- Updated stream thinking tests to validate `on_stream_event` flow in `backend/tests/test_thinking_settings.py`.
+- Validation run:
+  - `backend/.venv/bin/pytest backend/tests/test_stream_state_machine.py backend/tests/test_fallback.py backend/tests/test_thinking_settings.py -q` (`62 passed`)
+  - `backend/.venv/bin/pytest backend/tests/test_cron_tool_actions.py backend/tests/test_reminder_cron_unification.py backend/tests/test_exec_approval_flow.py backend/tests/test_exec_tool_compat.py backend/tests/test_provider_flow_settings.py backend/tests/test_spotify_service_flows.py backend/tests/test_telegram_thinking_command.py backend/tests/test_telegram_approvals_ui.py -q` (`44 passed`)
+  - `frontend: npm run build` (passed)
 
 ---
 

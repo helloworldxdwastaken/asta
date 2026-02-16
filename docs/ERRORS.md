@@ -32,7 +32,7 @@ Quick reference for errors you might see and how to fix them.
 | **invalid or expired API key** | Key wrong or expired | Update the key in Settings → API keys or `backend/.env`, then restart. |
 | **Client error 404 for Ollama** | Ollama not running or wrong URL | Start Ollama (`ollama serve`) or set correct `OLLAMA_BASE_URL` in `backend/.env`. |
 | **Image reply says it only sees `image/jpeg` / generic image placeholder** | Vision preprocessor/provider path is not configured (or no vision-capable key available). | Add at least one vision-capable key (OpenRouter, Claude, or OpenAI). Keep `ASTA_VISION_PREPROCESS=true` (default). If using OpenRouter vision, ensure `OPENROUTER_API_KEY` is set and optionally set `ASTA_VISION_OPENROUTER_MODEL`. |
-| **`/reasoning stream` does not show live updates** | Provider path does not emit streaming deltas (or stream mode is off). | Use `reasoning_mode=stream` and a streaming-capable provider path (OpenAI, Groq, or OpenRouter). Claude/Google/Ollama paths can fall back to post-generation reasoning rendering. |
+| **`/reasoning stream` does not show live updates** | Provider path did not emit chunk deltas (or stream mode is off), or the model did not produce tagged reasoning text. | Use `reasoning_mode=stream` and a streaming-capable provider path (OpenAI, Groq, OpenRouter, or Ollama). Claude adapter is currently final-output style, so reasoning may appear only after completion. |
 | **Replies become empty / “I didn't get a reply back” in strict final mode** | `final_mode=strict` hides any text not wrapped in `<final>...</final>`. | Turn Final tag mode back to `off`, or keep `strict` and use models/prompts that reliably emit `<final>` tags. |
 
 ---

@@ -101,8 +101,9 @@ From Telegram chat, you can control core runtime behavior without opening the pa
 - `/allowlist` — show current effective exec allowlist
 - `/approvals` — list pending exec approval requests with inline buttons (`Once`, `Always`, `Deny`); approved actions auto-continue
 - `/think` (aliases: `/thinking`, `/t`) — thinking level (`off/minimal/low/medium/high/xhigh`)
-- `/reasoning` — reasoning visibility (`off/on/stream`), with live stream status on OpenAI/Groq/OpenRouter paths
+- `/reasoning` — reasoning visibility (`off/on/stream`), with live stream status on chunk-streaming providers (OpenAI/Groq/OpenRouter/Ollama); Claude may render reasoning after completion
 - Final tag strict mode is available in panel Settings (`final_mode=off|strict`) to expose only `<final>...</final>` output.
+- Exec allowlist mode is strict by design: only one direct command is allowed (no shell chaining/redirection/multiline), and shell launchers (`bash/sh/zsh/pwsh/cmd`) are blocked.
 
 ## Summary
 

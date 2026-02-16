@@ -14,7 +14,9 @@ from app.providers.base import (
     ProviderResponse,
     ProviderError,
     TextDeltaCallback,
+    StreamEventCallback,
     emit_text_delta,
+    emit_stream_event,
 )
 
 logger = logging.getLogger(__name__)
@@ -194,6 +196,7 @@ async def chat_with_fallback_stream(
     fallback_names: list[str],
     *,
     on_text_delta: TextDeltaCallback | None = None,
+    on_stream_event: StreamEventCallback | None = None,
     **kwargs,
 ) -> tuple[ProviderResponse, BaseProvider | None]:
     """Streaming variant of chat_with_fallback.
@@ -207,18 +210,60 @@ async def chat_with_fallback_stream(
     runtime_db = kwargs.pop("_runtime_db", None)
     runtime_user_id = str(kwargs.pop("_runtime_user_id", "") or "").strip()
 
-    async def _call_stream_capable(p, msgs, cb, **call_kwargs) -> ProviderResponse:
+    async def _call_stream_capable(p, msgs, cb, stream_cb, **call_kwargs) -> ProviderResponse:
+        await emit_stream_event(stream_cb, {"type": "message_start", "provider": p.name})
+        saw_text = False
+
+        async def _forward_delta(delta: str) -> None:
+            nonlocal saw_text
+            if not delta:
+                return
+            if not saw_text:
+                saw_text = True
+                await emit_stream_event(stream_cb, {"type": "text_start", "provider": p.name})
+            await emit_stream_event(
+                stream_cb,
+                {"type": "text_delta", "provider": p.name, "delta": delta},
+            )
+            await emit_text_delta(cb, delta)
+
         if hasattr(p, "chat_stream"):
-            return await p.chat_stream(msgs, on_text_delta=cb, **call_kwargs)
-        out = await p.chat(msgs, **call_kwargs)
-        if out.content:
-            await emit_text_delta(cb, out.content)
+            out = await p.chat_stream(msgs, on_text_delta=_forward_delta, **call_kwargs)
+        else:
+            out = await p.chat(msgs, **call_kwargs)
+            if out.content:
+                await _forward_delta(out.content)
+
+        if not out.error:
+            if not saw_text and out.content:
+                await emit_stream_event(stream_cb, {"type": "text_start", "provider": p.name})
+                await emit_stream_event(
+                    stream_cb,
+                    {"type": "text_delta", "provider": p.name, "delta": out.content},
+                )
+                await emit_text_delta(cb, out.content)
+                saw_text = True
+            if saw_text:
+                await emit_stream_event(
+                    stream_cb,
+                    {"type": "text_end", "provider": p.name, "content": out.content or ""},
+                )
+            await emit_stream_event(
+                stream_cb,
+                {"type": "message_end", "provider": p.name, "content": out.content or ""},
+            )
         return out
 
     primary_allowed, primary_reason = await _runtime_provider_allowed(runtime_db, runtime_user_id, primary.name)
     if primary_allowed:
         try:
-            response = await _call_stream_capable(primary, messages, on_text_delta, **kwargs)
+            response = await _call_stream_capable(
+                primary,
+                messages,
+                on_text_delta,
+                on_stream_event,
+                **kwargs,
+            )
         except Exception as e:
             logger.error(f"Primary provider {primary.name} stream exception: {e}")
             response = ProviderResponse(
@@ -265,6 +310,7 @@ async def chat_with_fallback_stream(
                 fb_provider,
                 messages,
                 on_text_delta,
+                on_stream_event,
                 **fb_kwargs,
             )
         except Exception as e:

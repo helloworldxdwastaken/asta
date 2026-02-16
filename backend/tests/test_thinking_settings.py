@@ -6,14 +6,18 @@ from fastapi import HTTPException
 
 from app.db import get_db
 from app.handler import (
+    _compute_incremental_delta,
     _extract_reasoning_blocks,
     _extract_thinking_from_tagged_stream,
     _format_reasoning_message,
+    _merge_stream_source_text,
+    _plan_stream_text_update,
     _strip_reasoning_tags_from_text,
     handle_message,
 )
 from app.providers.base import ProviderResponse
 from app.routers.settings import (
+    get_thinking,
     set_final_mode,
     set_reasoning,
     set_thinking,
@@ -39,6 +43,26 @@ class _DummyOllamaProvider:
 
 async def _fake_compact_history(messages, provider, context=None, max_tokens=None):
     return messages
+
+
+async def _emit_stream_chunks(
+    chunks: list[str],
+    *,
+    on_text_delta=None,
+    on_stream_event=None,
+    final_content: str | None = None,
+) -> None:
+    final_text = final_content if final_content is not None else "".join(chunks)
+    if callable(on_stream_event):
+        await on_stream_event({"type": "message_start", "provider": "test"})
+        for chunk in chunks:
+            await on_stream_event({"type": "text_delta", "provider": "test", "delta": chunk})
+        await on_stream_event({"type": "text_end", "provider": "test", "content": final_text})
+        await on_stream_event({"type": "message_end", "provider": "test", "content": final_text})
+        return
+    if callable(on_text_delta):
+        for chunk in chunks:
+            await on_text_delta(chunk)
 
 
 @pytest.mark.asyncio
@@ -363,6 +387,42 @@ def test_format_reasoning_message_normalizes_prefix_and_trim():
     assert _format_reasoning_message("   ") == ""
 
 
+def test_compute_incremental_delta_uses_common_prefix_for_rewrites():
+    # Provider/display rewrites should only emit the changed suffix.
+    assert _compute_incremental_delta("Reasoning:\nstep 1", "Reasoning:\nstep 1\nstep 2") == "\nstep 2"
+    assert _compute_incremental_delta("Draft answer", "Final answer") == "Final answer"
+
+
+def test_merge_stream_source_text_handles_snapshot_and_overlap_chunks():
+    assert _merge_stream_source_text("", "hello") == "hello"
+    assert _merge_stream_source_text("hello", "hello world") == "hello world"
+    assert _merge_stream_source_text("hello world", "world!") == "hello world!"
+    # Duplicate chunk should not append twice.
+    assert _merge_stream_source_text("alpha beta", "beta") == "alpha beta"
+
+
+def test_plan_stream_text_update_blocks_non_prefix_without_rewrite():
+    should_emit, delta, rewrote = _plan_stream_text_update(
+        previous="Checking files...",
+        current="Found 3 files",
+        allow_rewrite=False,
+    )
+    assert should_emit is False
+    assert delta == ""
+    assert rewrote is False
+
+
+def test_plan_stream_text_update_allows_single_rewrite_when_enabled():
+    should_emit, delta, rewrote = _plan_stream_text_update(
+        previous="Checking files...",
+        current="Found 3 files",
+        allow_rewrite=True,
+    )
+    assert should_emit is True
+    assert delta == "Found 3 files"
+    assert rewrote is True
+
+
 @pytest.mark.asyncio
 async def test_set_thinking_invalid_value_returns_http_400():
     with pytest.raises(HTTPException) as exc:
@@ -374,6 +434,24 @@ async def test_set_thinking_invalid_value_returns_http_400():
 async def test_set_thinking_accepts_xhigh():
     out = await set_thinking(ThinkingIn(thinking_level="xhigh"), user_id="default")
     assert out["thinking_level"] == "xhigh"
+
+
+@pytest.mark.asyncio
+async def test_get_thinking_includes_provider_aware_options():
+    db = get_db()
+    await db.connect()
+    user_id = f"test-get-thinking-options-{uuid.uuid4().hex[:8]}"
+    await db.set_user_default_ai(user_id, "claude")
+    await db.set_user_provider_model(user_id, "claude", "claude-3-5-sonnet-20241022")
+    await db.set_user_thinking_level(user_id, "high")
+
+    out = await get_thinking(user_id=user_id)
+    assert out["thinking_level"] == "high"
+    assert out["provider"] == "claude"
+    assert out["model"] == "claude-3-5-sonnet-20241022"
+    assert "high" in out["options"]
+    assert "xhigh" not in out["options"]
+    assert out["supports_xhigh"] is False
 
 
 @pytest.mark.asyncio
@@ -487,11 +565,20 @@ async def test_final_mode_strict_stream_emits_only_final_content():
     await db.set_user_reasoning_mode(user_id, "off")
     await db.set_user_final_mode(user_id, "strict")
 
-    async def _fake_chat_with_fallback_stream(primary, messages, fallback_names, on_text_delta=None, **kwargs):
-        if on_text_delta:
-            await on_text_delta("Draft outside ")
-            await on_text_delta("<final>Safe")
-            await on_text_delta(" answer</final>")
+    async def _fake_chat_with_fallback_stream(
+        primary,
+        messages,
+        fallback_names,
+        on_text_delta=None,
+        on_stream_event=None,
+        **kwargs,
+    ):
+        await _emit_stream_chunks(
+            ["Draft outside ", "<final>Safe", " answer</final>"],
+            on_text_delta=on_text_delta,
+            on_stream_event=on_stream_event,
+            final_content="Draft outside <final>Safe answer</final>",
+        )
         return ProviderResponse(content="Draft outside <final>Safe answer</final>"), primary
 
     events: list[dict] = []
@@ -918,11 +1005,20 @@ async def test_reasoning_mode_stream_emits_incremental_status_updates():
     user_id = "test-reasoning-stream-incremental"
     await db.set_user_reasoning_mode(user_id, "stream")
 
-    async def _fake_chat_with_fallback_stream(primary, messages, fallback_names, on_text_delta=None, **kwargs):
-        if on_text_delta:
-            await on_text_delta("<think>step one\n")
-            await on_text_delta("step two\n")
-            await on_text_delta("step three</think>\nFinal answer")
+    async def _fake_chat_with_fallback_stream(
+        primary,
+        messages,
+        fallback_names,
+        on_text_delta=None,
+        on_stream_event=None,
+        **kwargs,
+    ):
+        await _emit_stream_chunks(
+            ["<think>step one\n", "step two\n", "step three</think>\nFinal answer"],
+            on_text_delta=on_text_delta,
+            on_stream_event=on_stream_event,
+            final_content="<think>step one\nstep two\nstep three</think>\nFinal answer",
+        )
         return ProviderResponse(content="<think>step one\nstep two\nstep three</think>\nFinal answer"), primary
 
     emit_mock = AsyncMock()

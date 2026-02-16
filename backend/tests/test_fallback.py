@@ -178,6 +178,33 @@ async def test_stream_primary_failure_uses_fallback_provider():
 
 
 @pytest.mark.asyncio
+async def test_stream_emits_lifecycle_events_per_provider_attempt():
+    primary = MockProvider("primary", stream_error="timeout", stream_error_type=ProviderError.TIMEOUT)
+    fallback = MockProvider("fallback", stream_chunks=["Fallback stream"])
+    events: list[dict] = []
+
+    async def _on_event(payload: dict) -> None:
+        events.append(payload)
+
+    with unittest.mock.patch("app.providers.registry.get_provider", return_value=fallback):
+        resp, used = await chat_with_fallback_stream(
+            primary,
+            [],
+            ["fallback"],
+            on_stream_event=_on_event,
+        )
+
+    assert resp.content == "Fallback stream"
+    assert used is not None and used.name == "fallback"
+    starts = [e for e in events if str(e.get("type")) == "message_start"]
+    assert len(starts) == 2
+    assert starts[0].get("provider") == "primary"
+    assert starts[1].get("provider") == "fallback"
+    assert any(str(e.get("type")) == "text_delta" and e.get("provider") == "fallback" for e in events)
+    assert any(str(e.get("type")) == "message_end" and e.get("provider") == "fallback" for e in events)
+
+
+@pytest.mark.asyncio
 async def test_auth_failure_falls_back_and_auto_disables_provider():
     primary = MockProvider(
         "claude",
