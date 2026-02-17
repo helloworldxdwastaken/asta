@@ -3486,17 +3486,20 @@ async def handle_message(
                 logger.warning("Tool call missing name: %s", tc)
                 out = "Error: Tool call missing name"
                 _record_tool_outcome(tool_name="tool_call", tool_output=out, tool_args=args_data)
+                # Truncate extremely large tool output to prevent context overflow/model failure
+                MAX_CHARS = 10000
+                if len(out) > MAX_CHARS:
+                    logger.info("Truncating tool output from %d to %d chars", len(out), MAX_CHARS)
+                    out = out[:MAX_CHARS] + f"\n\n[TRUNCATED: original output was {len(out)} chars]"
                 current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
                 continue
 
             # Normalize and validate tool name
             name = name.strip().lower()
+            out = None
             if name not in allowed_tool_names:
                 logger.warning("Tool '%s' not in allowed tools: %s", name, sorted(allowed_tool_names))
                 out = f"Error: Tool '{name}' not available (not in registry)"
-                _record_tool_outcome(tool_name=name, tool_output=out, tool_args=args_data)
-                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
-                continue
 
             # SECURITY: Validate database availability for tools that need it
             db_required_tools = {
@@ -3508,9 +3511,6 @@ async def handle_message(
             if name in db_required_tools and db is None:
                 out = f"Error: Database not available for tool '{name}'"
                 logger.error("Tool %s requires database but db is None", name)
-                _record_tool_outcome(tool_name=name, tool_output=out, tool_args=args_data)
-                current_messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": out})
-                continue
 
             # Validate and normalize tool_call_id
             tool_call_id = tc.get("id", "")
@@ -3576,10 +3576,7 @@ async def handle_message(
                         "Approval is blocking this action. In Telegram: open /approvals and tap Once, Always, or Deny."
                     )
                     used_tool_labels.append(_build_tool_trace_label(name))
-                    _record_tool_outcome(tool_name=name, tool_output=out, tool_args=params)
-                    current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
-                    continue
-                if precheck_err and exec_mode != "allowlist":
+                elif precheck_err and exec_mode != "allowlist":
                     ran_exec_tool = True
                     last_exec_command = cmd
                     last_exec_stdout = ""
@@ -3587,59 +3584,55 @@ async def handle_message(
                     last_exec_error = precheck_err
                     used_tool_labels.append(_build_tool_trace_label(name))
                     out = f"error: {precheck_err}"
-                    _record_tool_outcome(tool_name=name, tool_output=out, tool_args=params)
-                    current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
-                    continue
-                # precheck_argv is intentionally not reused; runtime functions re-validate for safety.
-                _ = precheck_argv
-                if background or isinstance(yield_ms, int) or pty:
-                    from app.process_tool import run_exec_with_process_support
+                else:
+                    # precheck_argv is intentionally not reused; runtime functions re-validate for safety.
+                    _ = precheck_argv
+                    if background or isinstance(yield_ms, int) or pty:
+                        from app.process_tool import run_exec_with_process_support
 
-                    exec_result = await run_exec_with_process_support(
-                        cmd,
-                        allowed_bins=effective_bins,
-                        timeout_seconds=timeout_sec if isinstance(timeout_sec, int) else None,
-                        workdir=workdir,
-                        background=background,
-                        yield_ms=yield_ms if isinstance(yield_ms, int) else None,
-                        pty=pty,
-                    )
-                    status = (exec_result.get("status") or "").strip().lower()
-                    if status == "running":
-                        ok = True
-                        stdout = json.dumps(exec_result, indent=0)
-                        stderr = ""
-                    elif status in ("completed", "failed"):
-                        stdout = (exec_result.get("stdout") or "").strip()
-                        stderr = (exec_result.get("stderr") or "").strip()
-                        ok = bool(exec_result.get("ok")) if "ok" in exec_result else (status == "completed")
+                        exec_result = await run_exec_with_process_support(
+                            cmd,
+                            allowed_bins=effective_bins,
+                            timeout_seconds=timeout_sec if isinstance(timeout_sec, int) else None,
+                            workdir=workdir,
+                            background=background,
+                            yield_ms=yield_ms if isinstance(yield_ms, int) else None,
+                            pty=pty,
+                        )
+                        status = (exec_result.get("status") or "").strip().lower()
+                        if status == "running":
+                            ok = True
+                            stdout = json.dumps(exec_result, indent=0)
+                            stderr = ""
+                        elif status in ("completed", "failed"):
+                            stdout = (exec_result.get("stdout") or "").strip()
+                            stderr = (exec_result.get("stderr") or "").strip()
+                            ok = bool(exec_result.get("ok")) if "ok" in exec_result else (status == "completed")
+                        else:
+                            stdout = ""
+                            stderr = (exec_result.get("error") or "Exec failed").strip()
+                            ok = False
                     else:
-                        stdout = ""
-                        stderr = (exec_result.get("error") or "Exec failed").strip()
-                        ok = False
-                else:
-                    stdout, stderr, ok = await run_allowlisted_command(
-                        cmd,
-                        allowed_bins=effective_bins,
-                        timeout_seconds=timeout_sec if isinstance(timeout_sec, int) else None,
-                        workdir=workdir,
-                    )
-                ran_exec_tool = True
-                used_tool_labels.append(_build_tool_trace_label(name))
-                last_exec_command = cmd
-                last_exec_stdout = stdout
-                last_exec_stderr = stderr
-                if not ok:
-                    last_exec_error = (stderr or stdout or "").strip() or "Command not allowed or failed."
-                else:
-                    last_exec_error = ""
-                logger.info("Exec result: ok=%s stdout_len=%s stderr_len=%s", ok, len(stdout), len(stderr))
-                if ok or stdout or stderr:
-                    out = f"stdout:\n{stdout}\n" + (f"stderr:\n{stderr}\n" if stderr else "")
-                else:
-                    out = f"error: {stderr or 'Command not allowed or failed.'}"
-                _record_tool_outcome(tool_name=name, tool_output=out, tool_args=params)
-                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
+                        stdout, stderr, ok = await run_allowlisted_command(
+                            cmd,
+                            allowed_bins=effective_bins,
+                            timeout_seconds=timeout_sec if isinstance(timeout_sec, int) else None,
+                            workdir=workdir,
+                        )
+                    ran_exec_tool = True
+                    used_tool_labels.append(_build_tool_trace_label(name))
+                    last_exec_command = cmd
+                    last_exec_stdout = stdout
+                    last_exec_stderr = stderr
+                    if not ok:
+                        last_exec_error = (stderr or stdout or "").strip() or "Command not allowed or failed."
+                    else:
+                        last_exec_error = ""
+                    logger.info("Exec result: ok=%s stdout_len=%s stderr_len=%s", ok, len(stdout), len(stderr))
+                    if ok or stdout or stderr:
+                        out = f"stdout:\n{stdout}\n" + (f"stderr:\n{stderr}\n" if stderr else "")
+                    else:
+                        out = f"error: {stderr or 'Command not allowed or failed.'}"
             elif name == "process":
                 from app.process_tool import parse_process_tool_args, run_process_tool
 
@@ -3652,7 +3645,6 @@ async def handle_message(
                     tool_args=params,
                     action=str(params.get("action") or ""),
                 )
-                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "list_directory":
                 from app.files_tool import list_directory as list_dir, parse_files_tool_args as parse_files_args
                 params = parse_files_args(args_str)
@@ -3660,8 +3652,6 @@ async def handle_message(
                 out = await list_dir(path, user_id, db)
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label("list_directory"))
-                _record_tool_outcome(tool_name="list_directory", tool_output=out, tool_args=params)
-                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "read_file":
                 from app.files_tool import read_file_content as read_file_fn, parse_files_tool_args as parse_files_args
                 params = parse_files_args(args_str)
@@ -3669,8 +3659,6 @@ async def handle_message(
                 out = await read_file_fn(path, user_id, db)
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label("read_file"))
-                _record_tool_outcome(tool_name="read_file", tool_output=out, tool_args=params)
-                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "write_file":
                 from app.files_tool import write_file as write_file_fn, parse_files_tool_args as parse_files_args
 
@@ -3683,8 +3671,6 @@ async def handle_message(
                 out = await write_file_fn(path, content if isinstance(content, str) else "", user_id, db)
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label("write_file"))
-                _record_tool_outcome(tool_name="write_file", tool_output=out, tool_args=params)
-                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "allow_path":
                 from app.files_tool import allow_path as allow_path_fn, parse_files_tool_args as parse_files_args
                 params = parse_files_args(args_str)
@@ -3692,8 +3678,6 @@ async def handle_message(
                 out = await allow_path_fn(path, user_id, db)
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label("allow_path"))
-                _record_tool_outcome(tool_name="allow_path", tool_output=out, tool_args=params)
-                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "delete_file":
                 from app.files_tool import delete_file as delete_file_fn, parse_files_tool_args as parse_files_args
                 params = parse_files_args(args_str)
@@ -3702,8 +3686,6 @@ async def handle_message(
                 out = await delete_file_fn(path, user_id, db, permanently=permanently)
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label("delete_file"))
-                _record_tool_outcome(tool_name="delete_file", tool_output=out, tool_args=params)
-                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "delete_matching_files":
                 from app.files_tool import (
                     delete_matching_files as delete_matching_files_fn,
@@ -3722,8 +3704,6 @@ async def handle_message(
                 )
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label("delete_matching_files"))
-                _record_tool_outcome(tool_name="delete_matching_files", tool_output=out, tool_args=params)
-                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name in ("read", "write", "edit"):
                 from app.coding_compat_tool import (
                     parse_coding_compat_args,
@@ -3744,32 +3724,24 @@ async def handle_message(
                     out = await run_edit_compat(params, user_id, db)
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label(name))
-                _record_tool_outcome(tool_name=name, tool_output=out, tool_args=params)
-                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "web_search":
                 from app.openclaw_compat_tools import parse_openclaw_compat_args, run_web_search_compat
 
                 params = parse_openclaw_compat_args(args_str)
                 used_tool_labels.append(_build_tool_trace_label("web_search"))
                 out = await run_web_search_compat(params)
-                _record_tool_outcome(tool_name="web_search", tool_output=out, tool_args=params)
-                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "web_fetch":
                 from app.openclaw_compat_tools import parse_openclaw_compat_args, run_web_fetch_compat
 
                 params = parse_openclaw_compat_args(args_str)
                 used_tool_labels.append(_build_tool_trace_label("web_fetch"))
                 out = await run_web_fetch_compat(params)
-                _record_tool_outcome(tool_name="web_fetch", tool_output=out, tool_args=params)
-                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "memory_search":
                 from app.openclaw_compat_tools import parse_openclaw_compat_args, run_memory_search_compat
 
                 params = parse_openclaw_compat_args(args_str)
                 used_tool_labels.append(_build_tool_trace_label("memory_search"))
                 out = await run_memory_search_compat(params, user_id=user_id)
-                _record_tool_outcome(tool_name="memory_search", tool_output=out, tool_args=params)
-                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "memory_get":
                 from app.openclaw_compat_tools import parse_openclaw_compat_args, run_memory_get_compat
 
@@ -3777,7 +3749,6 @@ async def handle_message(
                 used_tool_labels.append(_build_tool_trace_label("memory_get"))
                 out = await run_memory_get_compat(params)
                 _record_tool_outcome(tool_name="memory_get", tool_output=out, tool_args=params)
-                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "apply_patch":
                 from app.apply_patch_compat_tool import parse_apply_patch_compat_args, run_apply_patch_compat
 
@@ -3785,8 +3756,6 @@ async def handle_message(
                 used_tool_labels.append(_build_tool_trace_label("apply_patch"))
                 out = await run_apply_patch_compat(params)
                 ran_files_tool = True
-                _record_tool_outcome(tool_name="apply_patch", tool_output=out, tool_args=params)
-                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "message":
                 from app.message_compat_tool import parse_message_compat_args, run_message_compat
 
@@ -3799,13 +3768,6 @@ async def handle_message(
                     current_channel=channel,
                     current_target=channel_target,
                 )
-                _record_tool_outcome(
-                    tool_name="message",
-                    tool_output=out,
-                    tool_args=params,
-                    action=str(params.get("action") or "send"),
-                )
-                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "reminders":
                 from app.reminders_tool import run_reminders_tool, parse_reminders_tool_args
                 params = parse_reminders_tool_args(args_str)
@@ -3839,7 +3801,6 @@ async def handle_message(
                     tool_args=params,
                     action=str(params.get("action") or ""),
                 )
-                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name == "cron":
                 from app.cron_tool import run_cron_tool, parse_cron_tool_args
                 params = parse_cron_tool_args(args_str)
@@ -3860,7 +3821,6 @@ async def handle_message(
                     tool_args=params,
                     action=str(params.get("action") or ""),
                 )
-                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
             elif name in (
                 "agents_list",
                 "sessions_spawn",
@@ -3884,12 +3844,36 @@ async def handle_message(
                     channel=channel,
                     channel_target=channel_target,
                 )
-                _record_tool_outcome(tool_name=name, tool_output=out, tool_args=params)
-                current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
+                _ = await run_subagent_tool(
+                    tool_name=name,
+                    params=params,
+                    user_id=user_id,
+                    parent_conversation_id=cid,
+                    provider_name=provider_name,
+                    channel=channel,
+                    channel_target=channel_target,
+                )
             else:
                 out = "Unknown tool."
-                _record_tool_outcome(tool_name=name, tool_output=out, tool_args=args_data)
+
+            if out is not None:
+                # Record if not already handled specifically in branches (like process/reminders/cron)
+                # Note: most tools were refactored to use this common block.
+                recorded_tools = (
+                    "process", "reminders", "cron", "agents_list", "sessions_spawn",
+                    "sessions_list", "sessions_history", "sessions_send", "sessions_stop"
+                )
+                if name not in recorded_tools:
+                    _record_tool_outcome(tool_name=name or "unknown", tool_output=out, tool_args=args_data)
+
+                # Truncate extremely large tool output to prevent context overflow/model failure (e.g. Notion large JSON)
+                MAX_CHARS = 10000
+                if len(out) > MAX_CHARS:
+                    logger.info("Truncating tool %s output from %d to %d chars", name, len(out), MAX_CHARS)
+                    out = out[:MAX_CHARS] + f"\n\n[TRUNCATED: original output was {len(out)} chars]"
+
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
+
         # Re-call same provider with updated messages (no fallback switch); use that provider's model
         tool_kwargs = {**chat_kwargs}
         if provider_used.name == provider.name:

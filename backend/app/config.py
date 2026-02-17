@@ -25,6 +25,48 @@ def _load_dotenv(path: Path) -> None:
                     os.environ[key] = value
 
 
+def save_settings_to_env(updates: dict[str, str]) -> None:
+    """Persist multiple env keys in backend/.env and refresh cached settings."""
+    if not updates:
+        return
+    
+    lines: list[str] = []
+    if _ENV_FILE.exists():
+        lines = _ENV_FILE.read_text(encoding="utf-8").splitlines()
+    
+    out: list[str] = []
+    remaining = updates.copy()
+    
+    # Update existing lines
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            out.append(line)
+            continue
+        
+        # Check if this line matches any of our updates
+        key, _, _ = line.partition("=")
+        key = key.strip()
+        if key in remaining:
+            out.append(f"{key}={remaining.pop(key)}")
+        else:
+            out.append(line)
+            
+    # Add new lines for any remaining updates
+    for key, value in remaining.items():
+        if out and out[-1].strip():
+            out.append("")
+        out.append(f"{key}={value}")
+        
+    _ENV_FILE.write_text("\n".join(out) + "\n", encoding="utf-8")
+    
+    # Update in-memory environment
+    for key, value in updates.items():
+        os.environ[key] = str(value)
+        
+    get_settings.cache_clear()
+
+
 def set_env_value(key: str, value: str, *, allow_empty: bool = False) -> None:
     """Persist an env key in backend/.env and refresh cached settings."""
     k = (key or "").strip()
@@ -162,6 +204,7 @@ class Settings(BaseSettings):
     asta_telegram_username: str | None = None
     asta_pingram_client_id: str | None = None
     asta_pingram_client_secret: str | None = None
+    asta_pingram_api_key: str | None = None  # Optional: from dashboard "API Key"; used as Bearer for sender
     asta_pingram_notification_id: str = "cron_alert"
     asta_pingram_template_id: str | None = None
     asta_owner_phone_number: str | None = None

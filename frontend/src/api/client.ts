@@ -451,8 +451,8 @@ export const api = {
       body: JSON.stringify({ username }),
     }),
   getPingramSettings: () =>
-    req<{ client_id: string; client_secret: string; notification_id: string; template_id: string; phone_number: string; is_secret_set: boolean }>("/settings/pingram"),
-  setPingramSettings: (body: { client_id?: string; client_secret?: string; notification_id?: string; template_id?: string; phone_number?: string }) =>
+    req<{ client_id: string; client_secret: string; api_key: string; api_key_set: boolean; notification_id: string; template_id: string; phone_number: string; is_secret_set: boolean }>("/settings/pingram"),
+  setPingramSettings: (body: { client_id?: string; client_secret?: string; api_key?: string; notification_id?: string; template_id?: string; phone_number?: string }) =>
     req<{ ok: boolean }>("/settings/pingram", {
       method: "POST",
       body: JSON.stringify(body),

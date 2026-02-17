@@ -255,46 +255,61 @@ async def _fire_reminder_async(reminder_id: int) -> None:
 
 
 async def trigger_pingram_voice_call(number: str, message: str, template_id: str | None = None) -> bool:
-    """Trigger an automated voice call via Pingram (NotificationAPI)."""
+    """Trigger an automated voice call via Pingram (NotificationAPI). Uses API Key (Bearer) if set, else Client ID+Secret."""
     s = get_settings()
     client_id = getattr(s, "asta_pingram_client_id", None)
     client_secret = getattr(s, "asta_pingram_client_secret", None)
+    api_key = getattr(s, "asta_pingram_api_key", None)
     notification_id = getattr(s, "asta_pingram_notification_id", "cron_alert")
     if not template_id:
         template_id = getattr(s, "asta_pingram_template_id", None)
 
-    if not client_id or not client_secret:
-        logger.warning("Pingram credentials missing, skipping voice call")
+    use_api_key = api_key and api_key.strip()
+    if not use_api_key and (not client_id or not client_secret):
+        logger.warning("Pingram credentials missing (set API Key or Client ID+Secret), skipping voice call")
+        return False
+    if use_api_key and not client_id:
+        logger.warning("Pingram API Key set but Client ID missing (required for sender URL)")
         return False
 
     if not number:
         logger.warning("No phone number provided for Pingram voice call")
         return False
 
+    clean_number = str(number).strip()
+    if not clean_number.startswith("+"):
+        clean_number = "+" + clean_number
+
+    payload = {
+        "type": notification_id,
+        "to": {"id": clean_number, "number": clean_number}
+    }
+    if template_id:
+        payload["templateId"] = template_id
+        payload.setdefault("parameters", {})
+    else:
+        payload["call"] = {"message": message}
+
     try:
+        if use_api_key:
+            import httpx
+            url = f"https://api.notificationapi.com/{client_id.strip()}/sender"
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                r = await client.post(
+                    url,
+                    json=payload,
+                    headers={
+                        "Authorization": f"Bearer {api_key.strip()}",
+                        "Content-Type": "application/json",
+                    },
+                )
+            if r.status_code in (200, 201, 202):
+                logger.info("Triggered Pingram voice call to %s (API Key, template=%s)", clean_number, template_id or "none")
+                return True
+            logger.error("Pingram sender failed: %s %s", r.status_code, r.text[:500])
+            return False
         from notificationapi_python_server_sdk import notificationapi
         notificationapi.init(client_id, client_secret)
-        
-        # Ensure number is in E.164 format
-        clean_number = str(number).strip()
-        if not clean_number.startswith("+"):
-            clean_number = "+" + clean_number
-
-        payload = {
-            "notificationId": notification_id,
-            "user": {
-                "id": clean_number,
-                "number": clean_number
-            }
-        }
-        
-        if template_id:
-            payload["templateId"] = template_id
-        else:
-            payload["call"] = {
-                "message": message
-            }
-
         await notificationapi.send(payload)
         logger.info("Triggered Pingram voice call to %s (template=%s)", clean_number, template_id or "none")
         return True

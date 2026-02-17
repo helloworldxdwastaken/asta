@@ -189,7 +189,7 @@ export default function Cron() {
   const [newChannel, setNewChannel] = useState("web");
   const [newTarget, setNewTarget] = useState("");
   const [newKind, setNewKind] = useState("agentturn");
-  const [newTlgCall, setNewTlgCall] = useState(false);
+  const [newTlgCall, setNewTlgCall] = useState(true);
 
   const handleCreate = async () => {
     if (!newName || !newCron || !newMessage) {
@@ -215,7 +215,7 @@ export default function Cron() {
       setNewName("");
       setNewCron("");
       setNewMessage("");
-      setNewTlgCall(false);
+      setNewTlgCall(true);
       setShowForm(false);
     } catch (e) {
       alert("Failed to create job: " + (e as Error).message);
@@ -331,15 +331,16 @@ export default function Cron() {
                 </select>
               </div>
 
-              <div className="field" style={{ flex: 1, display: "flex", alignItems: "flex-end" }}>
+              <div className="field" style={{ flex: 1 }}>
                 <label style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", cursor: "pointer" }}>
                   <input
                     type="checkbox"
                     checked={newTlgCall}
                     onChange={(e) => setNewTlgCall(e.target.checked)}
                   />
-                  Voice Call (Pingram/Phone)
+                  Voice call when job runs
                 </label>
+                <p className="help" style={{ margin: "0.25rem 0 0" }}>Default: on. Place a phone call (Pingram) when the job runs. Set default number in Channels → Voice Calls.</p>
               </div>
             </div>
 

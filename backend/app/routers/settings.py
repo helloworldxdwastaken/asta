@@ -129,16 +129,20 @@ class TelegramUsernameIn(BaseModel):
 class PingramSettingsIn(BaseModel):
     client_id: str | None = None
     client_secret: str | None = None
+    api_key: str | None = None
     notification_id: str = "cron_alert"
     template_id: str | None = None
     phone_number: str | None = None
 
 
 class PingramTestCallIn(BaseModel):
-    client_id: str
-    client_secret: str
-    notification_id: str
-    test_number: str
+    """Optional creds: if omitted or masked, use stored settings (so Test call works after Save)."""
+    client_id: str | None = None
+    client_secret: str | None = None
+    api_key: str | None = None
+    notification_id: str | None = None
+    test_number: str = ""
+    template_id: str | None = None
 
 
 @router.get("/settings/default-ai")
@@ -1206,10 +1210,16 @@ async def trigger_update():
 async def get_pingram_settings(user_id: str = "default"):
     """Return Pingram (NotificationAPI) settings."""
     s = get_settings()
+    cid = getattr(s, "asta_pingram_client_id", "") or ""
+    # Mask client ID to comfort user about "leaking real key"
+    masked_cid = cid[:4] + "..." + cid[-4:] if len(cid) > 8 else (cid[:2] + "..." if cid else "")
     is_secret_set = bool(getattr(s, "asta_pingram_client_secret", None))
+    api_key = getattr(s, "asta_pingram_api_key", None) or ""
     return {
-        "client_id": getattr(s, "asta_pingram_client_id", ""),
+        "client_id": masked_cid,
         "client_secret": "****" if is_secret_set else "",
+        "api_key": "****" if api_key else "",
+        "api_key_set": bool(api_key),
         "notification_id": getattr(s, "asta_pingram_notification_id", "cron_alert"),
         "template_id": getattr(s, "asta_pingram_template_id", ""),
         "phone_number": getattr(s, "asta_owner_phone_number", ""),
@@ -1221,7 +1231,6 @@ async def get_pingram_settings(user_id: str = "default"):
 @router.post("/api/settings/pingram")
 async def set_pingram_settings(body: PingramSettingsIn, user_id: str = "default"):
     """Update Pingram (NotificationAPI) settings."""
-    from app.keys import set_api_key
     from app.config import save_settings_to_env
     
     updates = {}
@@ -1237,64 +1246,47 @@ async def set_pingram_settings(body: PingramSettingsIn, user_id: str = "default"
         updates["ASTA_PINGRAM_TEMPLATE_ID"] = body.template_id
     if body.phone_number is not None:
         updates["ASTA_OWNER_PHONE_NUMBER"] = body.phone_number
-        
+    if body.api_key is not None:
+        if "*" not in (body.api_key or ""):
+            updates["ASTA_PINGRAM_API_KEY"] = body.api_key or ""
+        # if masked, don't overwrite
+
     if updates:
         save_settings_to_env(updates)
-        # Also update in-memory settings
         s = get_settings()
         if "ASTA_PINGRAM_CLIENT_ID" in updates:
             s.asta_pingram_client_id = updates["ASTA_PINGRAM_CLIENT_ID"]
         if "ASTA_PINGRAM_CLIENT_SECRET" in updates:
             s.asta_pingram_client_secret = updates["ASTA_PINGRAM_CLIENT_SECRET"]
+        if "ASTA_PINGRAM_API_KEY" in updates:
+            s.asta_pingram_api_key = updates["ASTA_PINGRAM_API_KEY"]
         if "ASTA_PINGRAM_NOTIFICATION_ID" in updates:
             s.asta_pingram_notification_id = updates["ASTA_PINGRAM_NOTIFICATION_ID"]
         if "ASTA_PINGRAM_TEMPLATE_ID" in updates:
             s.asta_pingram_template_id = updates["ASTA_PINGRAM_TEMPLATE_ID"]
         if "ASTA_OWNER_PHONE_NUMBER" in updates:
             s.asta_owner_phone_number = updates["ASTA_OWNER_PHONE_NUMBER"]
-            
+
     return {"ok": True}
 
 
 @router.post("/settings/pingram/test-call")
 @router.post("/api/settings/pingram/test-call")
 async def test_pingram_call(body: PingramTestCallIn):
-    """Trigger a test Pingram voice call."""
-    from app.reminders import trigger_pingram_voice_call
-    
-    # We use temporary settings for the test call if provided, or fall back to stored ones
-    # But here the frontend sends them explicitly for a better 'immediate test' experience
-    
-    # We need to temporarily override settings or pass them to trigger_pingram_voice_call
-    # Let's modify trigger_pingram_voice_call to accept optional creds
-    
-    # Actually, trigger_pingram_voice_call currently reads from settings.
-    # Let's just import it and call it. 
-    # If the user just typed them in but didn't save yet, we might want to use the provided ones.
-    
-    # For now, let's just use the provided ones directly in a local implementation or update reminders.py
-    
-    from notificationapi_python_server_sdk import notificationapi
-    try:
-        notificationapi.init(body.client_id, body.client_secret)
-        
-        clean_number = body.test_number.strip()
-        if not clean_number.startswith("+"):
-            clean_number = "+" + clean_number
+    """Trigger a test Pingram voice call. Uses the same code path as cron/reminders (trigger_pingram_voice_call)."""
+    clean_number = (body.test_number or "").strip()
+    if not clean_number:
+        return {"ok": False, "error": "Test number is required."}
+    if not clean_number.startswith("+"):
+        clean_number = "+" + clean_number
 
-        await notificationapi.send({
-            "notificationId": body.notification_id,
-            "user": {
-                "id": clean_number,
-                "number": clean_number
-            },
-            "call": {
-                "message": "This is a test call from Asta. Your Pingram integration is working correctly!"
-            }
-        })
+    # Use stored settings only (same as cron). Save your Client ID, API Key or Secret, Notification ID, Template ID first.
+    from app.reminders import trigger_pingram_voice_call
+    test_message = "This is a test call from Asta. Your Pingram integration is working correctly."
+    ok = await trigger_pingram_voice_call(clean_number, test_message, template_id=None)
+    if ok:
         return {"ok": True}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    return {"ok": False, "error": "Voice call failed. Check Settings are saved (Client ID, API Key or Client Secret, Notification ID, Template ID) and see backend logs or NotificationAPI dashboard for details."}
 
 
 @router.get("/settings/telegram/username")

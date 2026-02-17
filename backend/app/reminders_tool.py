@@ -104,9 +104,10 @@ async def run_reminders_tool(
     default_call = bool(owner_phone)
     tlg_call = params.get("call", default_call)
     
-    # If call is requested but no number in target, use owner_phone
+    # If call is requested but target isn't clearly a phone number, use owner_phone
     effective_target = channel_target
-    if tlg_call and owner_phone and not (channel_target and (channel_target.startswith("+") or channel_target.isdigit())):
+    is_phone = channel_target and (channel_target.startswith("+") or (channel_target.isdigit() and len(channel_target) > 10))
+    if tlg_call and owner_phone and (channel == "telegram" or not is_phone):
         effective_target = owner_phone
 
     if action == "status":

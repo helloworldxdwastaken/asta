@@ -253,21 +253,25 @@ function TelegramSettings({ keysStatus, onSaved, status }: { keysStatus: Record<
 function PingramSettings() {
     const [clientId, setClientId] = useState("");
     const [clientSecret, setClientSecret] = useState("");
+    const [apiKey, setApiKey] = useState("");
     const [notificationId, setNotificationId] = useState("cron_alert");
     const [templateId, setTemplateId] = useState("");
     const [phoneNumber, setPhoneNumber] = useState("");
     const [saving, setSaving] = useState(false);
     const [msg, setMsg] = useState<string | null>(null);
     const [isSecretSet, setIsSecretSet] = useState(false);
+    const [isApiKeySet, setIsApiKeySet] = useState(false);
 
     useEffect(() => {
         api.getPingramSettings().then((s) => {
             setClientId(s.client_id || "");
             setClientSecret(s.client_secret || "");
+            setApiKey(s.api_key || "");
             setNotificationId(s.notification_id || "cron_alert");
             setTemplateId(s.template_id || "");
             setPhoneNumber(s.phone_number || "");
             setIsSecretSet(s.is_secret_set);
+            setIsApiKeySet(s.api_key_set);
         }).catch(() => { });
     }, []);
 
@@ -278,6 +282,7 @@ function PingramSettings() {
             await api.setPingramSettings({
                 client_id: clientId.trim(),
                 client_secret: clientSecret.trim(),
+                api_key: apiKey.trim(),
                 notification_id: notificationId.trim(),
                 template_id: templateId.trim(),
                 phone_number: phoneNumber.trim()
@@ -285,10 +290,12 @@ function PingramSettings() {
             const s = await api.getPingramSettings();
             setClientId(s.client_id || "");
             setClientSecret(s.client_secret || "");
+            setApiKey(s.api_key || "");
             setNotificationId(s.notification_id || "cron_alert");
             setTemplateId(s.template_id || "");
             setPhoneNumber(s.phone_number || "");
             setIsSecretSet(s.is_secret_set);
+            setIsApiKeySet(s.api_key_set);
             setMsg("Pingram settings saved.");
         } catch (e) {
             setMsg("Error: " + ((e as Error).message || String(e)));
@@ -298,32 +305,26 @@ function PingramSettings() {
     };
 
     const testCall = async () => {
-        if (!isSecretSet && !clientSecret) {
-            setMsg("Error: Please set and save your Client Secret first.");
+        const number = (phoneNumber || "").trim();
+        if (!number) {
+            setMsg("Error: Enter a phone number in the field above, then click Test call.");
+            return;
+        }
+        if (!isApiKeySet && !isSecretSet && !clientSecret && !apiKey) {
+            setMsg("Error: Set and save either API Key or Client ID + Client Secret first.");
             return;
         }
         setSaving(true);
         setMsg(null);
         try {
-            // We use a dummy number or the user can enter one.
-            // For now, let's just trigger it and let the backend log if number is missing.
-            // Better: prompt for number if missing in settings.
-            const number = prompt("Enter phone number to receive a test call (E.164 format, e.g. +15551234567):");
-            if (!number) {
-                setSaving(false);
-                return;
-            }
-
-            // Send a test message
-            const body = {
+            const body: Record<string, string> = {
                 client_id: clientId,
-                client_secret: clientSecret, // Will use current if unchanged
+                client_secret: clientSecret,
+                api_key: apiKey,
                 notification_id: notificationId,
                 test_number: number
             };
-
-            // We'll add a test-call endpoint to the backend shortly
-            // Assuming API is on relative path /api or current origin
+            if (templateId.trim()) body.template_id = templateId.trim();
             const r = await fetch(`/api/settings/pingram/test-call`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -354,7 +355,7 @@ function PingramSettings() {
                     <h3>Voice Calls (Pingram)</h3>
                     <p className="help">Reliable phone calls via NotificationAPI.</p>
                 </div>
-                <span className={`status-badge ${isSecretSet ? "ok" : ""}`}>{isSecretSet ? "Active" : "Not configured"}</span>
+                <span className={`status-badge ${(isSecretSet || isApiKeySet) ? "ok" : ""}`}>{(isSecretSet || isApiKeySet) ? "Active" : "Not configured"}</span>
             </div>
 
             <div className="channel-body">
@@ -398,6 +399,17 @@ function PingramSettings() {
                             placeholder={isSecretSet ? "••••••••••••••••" : "NotificationAPI Client Secret"}
                             value={clientSecret}
                             onChange={(e) => setClientSecret(e.target.value)}
+                            className="input"
+                        />
+                    </div>
+                    <div className="field-block">
+                        <label>API Key</label>
+                        <p className="help">From dashboard Production Environment. Use this if voice calls don’t work with Client ID+Secret.</p>
+                        <input
+                            type="password"
+                            placeholder={isApiKeySet ? "••••••••••••••••" : "pingram_sk_…"}
+                            value={apiKey}
+                            onChange={(e) => setApiKey(e.target.value)}
                             className="input"
                         />
                     </div>

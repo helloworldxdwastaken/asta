@@ -39,6 +39,21 @@ All notable changes to Asta are documented here.
 
 ---
 
+## [1.3.17] - 2026-02-18
+
+### Added
+
+- **Pingram (NotificationAPI) API Key support** — Voice calls can use the dashboard API Key (Bearer auth) in addition to Client ID + Client Secret. Settings and Channels UI expose an API Key field; when set, cron and test calls use it for the sender request.
+- **Cron default to voice call** — New cron jobs and the add-cron API default `tlg_call` to true so jobs place a phone call (Pingram) when they run unless turned off. Cron UI clarifies "Voice call when job runs" with default on.
+
+### Changed
+
+- **OpenClaw-style exec and context** — Exec allowlist now includes bins from all workspace skills (autoAllowSkills-style). Context always includes all enabled skills per turn (no per-message filter). Empty-reply and post-exec fallbacks are generic only (no skill-specific hints).
+- **Pingram test call** — Test call button uses the same code path as cron/reminders (`trigger_pingram_voice_call`). Payload uses NotificationAPI format (`type`, `to`, `templateId`). Test uses form phone number (no prompt).
+- **Cron UI** — Voice call checkbox defaults on; help text points to Channels → Voice Calls for default number.
+
+---
+
 ## [1.3.16] - 2026-02-16
 
 ### Changed

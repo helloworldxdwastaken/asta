@@ -95,25 +95,39 @@ async def _fire_cron_job_async(
     payload_kind = (job.get("payload_kind") or "agentturn").strip().lower()
     tlg_call = bool(job.get("tlg_call") or False)
     
-    if tlg_call and channel_target:
+    if tlg_call:
         # User wants a voice call via Pingram (NotificationAPI)
         from app.reminders import trigger_pingram_voice_call
+        from app.config import get_settings
         
-        # If channel is telegram, we might not have a phone number in channel_target.
-        # But if the user entered a phone number there, it will work.
-        if channel_target.startswith("+") or channel_target.isdigit():
-            logger.info("Cron job %s: Triggering Pingram Voice Call to %s", cron_job_id, channel_target)
+        s = get_settings()
+        owner_phone = getattr(s, "asta_owner_phone_number", None)
+        
+        # Decide which number to call
+        target_to_call = channel_target
+        if owner_phone:
+            # If the target is a Telegram ID (often ~10 digits) or not clearly a phone number, use owner_phone
+            # WhatsApp targets are phone numbers. Telegram targets are chat IDs.
+            is_telegram = (channel == "telegram")
+            is_generic_digits = (channel_target.isdigit() and len(channel_target) <= 10)
+            if is_telegram or is_generic_digits or not (channel_target.startswith("+") or channel_target.isdigit()):
+                logger.debug("Cron job %s: Using owner_phone %s for voice call (target %s was %s)", 
+                             cron_job_id, owner_phone, channel, channel_target)
+                target_to_call = owner_phone
+
+        if target_to_call and (target_to_call.startswith("+") or target_to_call.isdigit()):
+            logger.info("Cron job %s: Triggering Pingram Voice Call to %s", cron_job_id, target_to_call)
             try:
                 # We use the job message as the voice payload
                 call_msg = message or f"This is Asta calling for your job {job.get('name') or cron_job_id}"
-                await trigger_pingram_voice_call(channel_target, call_msg)
+                await trigger_pingram_voice_call(target_to_call, call_msg)
             except Exception as e:
                 logger.warning("Failed to trigger Pingram call for job %s: %s", cron_job_id, e)
         else:
-            logger.warning("Cron job %s: Call enabled but target %s doesn't look like a phone number", cron_job_id, channel_target)
+            logger.warning("Cron job %s: Call enabled but target %s doesn't look like a phone number", cron_job_id, target_to_call)
             # Fallback to placeholder notification
             try:
-                await send_notification(channel, channel_target, "📞 **INCOMING ASTA CALL...** (Setup @username in Settings)")
+                await send_notification(channel, channel_target, "📞 **INCOMING ASTA CALL...** (Setup phone number in Settings)")
             except Exception as e:
                 logger.warning("Failed to trigger call placeholder for job %s: %s", cron_job_id, e)
 

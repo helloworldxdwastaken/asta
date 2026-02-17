@@ -17,7 +17,7 @@ class CronAddIn(BaseModel):
     channel: str = "web"
     channel_target: str = ""
     payload_kind: str = "agentturn"
-    tlg_call: bool = False
+    tlg_call: bool = True
 
 
 class CronUpdateIn(BaseModel):
