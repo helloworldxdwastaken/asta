@@ -3194,6 +3194,8 @@ async def handle_message(
         prepare_allowlisted_command,
         run_allowlisted_command,
         parse_exec_arguments,
+        truncate_output_tail,
+        OUTPUT_EVENT_TAIL_CHARS,
     )
     from app.config import get_settings
     effective_bins = await get_effective_exec_bins(db, user_id)
@@ -3866,11 +3868,17 @@ async def handle_message(
                 if name not in recorded_tools:
                     _record_tool_outcome(tool_name=name or "unknown", tool_output=out, tool_args=args_data)
 
-                # Truncate extremely large tool output to prevent context overflow/model failure (e.g. Notion large JSON)
-                MAX_CHARS = 10000
-                if len(out) > MAX_CHARS:
-                    logger.info("Truncating tool %s output from %d to %d chars", name, len(out), MAX_CHARS)
-                    out = out[:MAX_CHARS] + f"\n\n[TRUNCATED: original output was {len(out)} chars]"
+                # Truncate extremely large tool output to prevent context overflow/model failure
+                # OpenClaw-style: exec/bash use tail truncation (last 20k + "... (truncated)" prefix)
+                if name in ("exec", "bash"):
+                    if len(out) > OUTPUT_EVENT_TAIL_CHARS:
+                        logger.info("Truncating exec output from %d to last %d chars", len(out), OUTPUT_EVENT_TAIL_CHARS)
+                        out = truncate_output_tail(out, OUTPUT_EVENT_TAIL_CHARS)
+                else:
+                    MAX_CHARS = 10000
+                    if len(out) > MAX_CHARS:
+                        logger.info("Truncating tool %s output from %d to %d chars", name, len(out), MAX_CHARS)
+                        out = out[:MAX_CHARS] + f"\n\n[TRUNCATED: original output was {len(out)} chars]"
 
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
 
@@ -4161,6 +4169,8 @@ async def handle_message(
             if exec_outputs:
                 exec_message = "[Command output from Asta]\n\n" + "\n---\n\n".join(exec_outputs)
                 exec_message += "\n\nReply to the user based on this output. Do not use [ASTA_EXEC] in your reply."
+                from app.exec_tool import truncate_output_tail, OUTPUT_EVENT_TAIL_CHARS
+                exec_message = truncate_output_tail(exec_message, OUTPUT_EVENT_TAIL_CHARS)
                 messages_plus = list(messages) + [{"role": "assistant", "content": reply}] + [{"role": "user", "content": exec_message}]
                 response2, _ = await chat_with_fallback(
                     provider, messages_plus, fallback_names,

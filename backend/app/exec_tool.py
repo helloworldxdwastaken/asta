@@ -18,7 +18,16 @@ logger = logging.getLogger(__name__)
 
 EXEC_TIMEOUT_SECONDS = 30
 MAX_TIMEOUT_SECONDS = 120
-MAX_OUTPUT_BYTES = 100_000
+# OpenClaw-style: cap combined stdout+stderr size we retain; tail truncation for model payload
+OUTPUT_CAP_CHARS = 200_000
+OUTPUT_EVENT_TAIL_CHARS = 20_000
+
+
+def truncate_output_tail(raw: str, max_chars: int = OUTPUT_EVENT_TAIL_CHARS) -> str:
+    """Return at most the last max_chars of raw, with '... (truncated)' prefix when truncated (OpenClaw semantics)."""
+    if not raw or len(raw) <= max_chars:
+        return raw
+    return "... (truncated)\n" + raw[-max_chars:]
 
 SYSTEM_CONFIG_EXEC_BINS_KEY = "exec_allowed_bins_extra"
 
@@ -330,11 +339,12 @@ async def run_allowlisted_command(
         )
         stdout = (stdout_bytes or b"").decode("utf-8", errors="replace").strip()
         stderr = (stderr_bytes or b"").decode("utf-8", errors="replace").strip()
-        if len(stdout) > MAX_OUTPUT_BYTES:
-            stdout = stdout[:MAX_OUTPUT_BYTES] + "\n... (truncated)"
-        if len(stderr) > MAX_OUTPUT_BYTES:
-            stderr = stderr[:MAX_OUTPUT_BYTES] + "\n... (truncated)"
         success = proc.returncode == 0
+        # OpenClaw-style: cap combined output at OUTPUT_CAP_CHARS (keep tail), return single blob when truncated
+        combined = stdout + ("\n" + stderr if stderr else "")
+        if len(combined) > OUTPUT_CAP_CHARS:
+            combined = truncate_output_tail(combined, OUTPUT_CAP_CHARS)
+            return combined, "", success
         return stdout, stderr, success
     except asyncio.TimeoutError:
         hint = ""

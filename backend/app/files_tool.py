@@ -410,9 +410,19 @@ def parse_files_tool_args(arguments_str: str) -> dict:
         if "action" in arguments_str:
             validated["action"] = str(arguments_str["action"])
 
-        # Pattern validation (for delete_matching_files)
+        # delete_matching_files: directory, glob_pattern (pattern as alias), permanently
+        if "directory" in arguments_str:
+            validated["directory"] = str(arguments_str["directory"]) if arguments_str["directory"] is not None else ""
+        if "glob_pattern" in arguments_str:
+            validated["glob_pattern"] = str(arguments_str["glob_pattern"]) if arguments_str["glob_pattern"] is not None else ""
+        elif "pattern" in arguments_str:
+            validated["glob_pattern"] = str(arguments_str["pattern"]) if arguments_str["pattern"] is not None else ""
+        if "permanently" in arguments_str:
+            validated["permanently"] = bool(arguments_str["permanently"])
+
+        # Legacy pattern key for any consumer that expects it
         if "pattern" in arguments_str:
-            validated["pattern"] = str(arguments_str["pattern"])
+            validated["pattern"] = str(arguments_str["pattern"]) if arguments_str["pattern"] is not None else ""
 
         return validated
 

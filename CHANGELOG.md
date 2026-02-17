@@ -6,6 +6,8 @@ All notable changes to Asta are documented here.
 
 ### Changed
 
+- **Exec output handling (OpenClaw-style)** — Exec command output is capped at 200k chars (combined stdout+stderr, tail retained) and truncated to the last 20k chars with a “… (truncated)” prefix before being sent to the model. Applies to both the exec/bash tool result and the [ASTA_EXEC] fallback path. Prevents context overflow and unbounded memory from large command output.
+- **Files (delete-many) arguments** — `delete_matching_files` now receives `directory`, `glob_pattern`, and `permanently` from the model; the file-tool argument parser was updated to pass these through so “delete screenshots on my desktop” works when the model calls the tool with the right parameters.
 - **Telegram exec approvals UX** — `/approvals` now renders each pending request with inline actions:
   - `✅ Once` (approve/run once)
   - `✅ Always` (approve + persist binary allowlist)
