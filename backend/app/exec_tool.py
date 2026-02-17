@@ -44,17 +44,88 @@ def resolve_executable(name: str) -> str | None:
 
 def _first_runnable_fragment(cmd: str) -> str:
     """Return first non-empty, non-comment command line fragment from raw command text."""
-    raw = (cmd or "").strip()
-    if not raw:
+    original_lines = (cmd or "").splitlines()
+    if not original_lines:
         return ""
-    for line in raw.splitlines():
-        candidate = (line or "").strip()
-        if not candidate:
-            continue
-        if candidate.startswith("#"):
-            continue
-        return candidate
-    return ""
+
+    buffer = []
+    
+    # States
+    STATE_NONE = 0
+    STATE_SINGLE = 1
+    STATE_DOUBLE = 2
+    
+    state = STATE_NONE
+    found_start = False
+    
+    for line in original_lines:
+        stripped = line.strip()
+        if not found_start:
+            if not stripped: continue
+            if stripped.startswith("#"): continue
+            found_start = True
+            
+        # Process line char by char to handle quotes and escapes
+        i = 0
+        n = len(line)
+        escaped = False
+        
+        current_line_content = []
+        
+        while i < n:
+            char = line[i]
+            
+            if escaped:
+                escaped = False
+                current_line_content.append(char)
+                i += 1
+                continue
+                
+            if state == STATE_NONE:
+                if char == "\\":
+                    escaped = True
+                elif char == "'":
+                    state = STATE_SINGLE
+                    current_line_content.append(char)
+                elif char == '"':
+                    state = STATE_DOUBLE
+                    current_line_content.append(char)
+                else:
+                    current_line_content.append(char)
+            elif state == STATE_DOUBLE:
+                if char == "\\":
+                    escaped = True
+                elif char == '"':
+                    state = STATE_NONE
+                    current_line_content.append(char)
+                else:
+                    current_line_content.append(char)
+            elif state == STATE_SINGLE:
+                if char == "'":
+                    state = STATE_NONE
+                current_line_content.append(char)
+            
+            i += 1
+            
+        # End of line processing
+        if escaped:
+            # Line ended with an active backslash.
+            # In STATE_NONE or STATE_DOUBLE, this escapes the newline.
+            # We append the content (which excludes the trailing backslash)
+            # and do NOT append a newline to the buffer.
+            buffer.append("".join(current_line_content))
+        else:
+            # Line ended normally.
+            buffer.append("".join(current_line_content))
+            
+            if state == STATE_NONE:
+                # Command finished - no pending quote or continuation
+                break
+            else:
+                # Inside quote (SINGLE or DOUBLE) - append literal newline
+                buffer.append("\n")
+                
+    return "".join(buffer)
 
 
 def _normalize_known_exec_aliases(parts: list[str]) -> list[str]:
@@ -228,12 +299,31 @@ async def run_allowlisted_command(
     if isinstance(timeout_seconds, int):
         timeout = max(1, min(timeout_seconds, MAX_TIMEOUT_SECONDS))
 
+    # Inject keys from DB into environment (e.g. NOTION_API_KEY for curl)
+    env = os.environ.copy()
+    try:
+        from app.db import get_db
+        db = get_db()
+        await db.connect()
+        # Fetch relevant integration keys
+        keys_to_inject = {
+            "notion_api_key": "NOTION_API_KEY",
+            "giphy_api_key": "GIPHY_API_KEY",
+        }
+        for db_key, env_var in keys_to_inject.items():
+            val = await db.get_stored_api_key(db_key)
+            if val:
+                env[env_var] = val
+    except Exception as e:
+        logger.warning("Failed to inject DB keys into exec environment: %s", e)
+
     try:
         proc = await asyncio.create_subprocess_exec(
             *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=str(cwd_path) if cwd_path else None,
+            env=env,
         )
         stdout_bytes, stderr_bytes = await asyncio.wait_for(
             proc.communicate(), timeout=timeout

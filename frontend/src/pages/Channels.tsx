@@ -175,7 +175,7 @@ function TelegramSettings({ keysStatus, onSaved, status }: { keysStatus: Record<
     const [msg, setMsg] = useState<string | null>(null);
     const isSet = keysStatus["telegram_bot_token"];
 
-    const save = async () => {
+    const saveToken = async () => {
         if (!token.trim()) return;
         setSaving(true);
         setMsg(null);
@@ -210,43 +210,234 @@ function TelegramSettings({ keysStatus, onSaved, status }: { keysStatus: Record<
                     Create a bot at <a href="https://t.me/BotFather" target="_blank" rel="noreferrer" className="link">t.me/BotFather</a>.
                 </p>
                 <div className="alert" style={{ marginTop: "0.75rem" }}>
-                    Bot menu commands: <code>/start</code>, <code>/status</code>, <code>/exec_mode</code>, <code>/thinking</code>, <code>/reasoning</code>. If they don&apos;t appear, restart backend and reopen the bot chat.
+                    Bot menu commands: <code>/start</code>, <code>/status</code>, <code>/exec_mode</code>, <code>/thinking</code>, <code>/reasoning</code>.
                 </div>
 
                 <div className="field-row" style={{ marginTop: '1rem' }}>
                     <input
                         type="password"
-                        placeholder={isSet ? "Leave blank to keep current" : "Paste token from @BotFather"}
+                        placeholder={isSet ? "••••••••••••••••" : "Paste token from @BotFather"}
                         value={token}
                         onChange={(e) => setToken(e.target.value)}
                         className="input"
                         style={{ maxWidth: '100%' }}
                     />
-                    <button type="button" onClick={save} disabled={saving || !token.trim()} className="btn btn-primary">
-                        {saving ? "Saving…" : "Save"}
+                    <button type="button" onClick={saveToken} disabled={saving || !token.trim()} className="btn btn-primary">
+                        {saving ? "Saving…" : "Save token"}
                     </button>
                     {isSet && (
                         <button
                             type="button"
                             onClick={() => {
                                 if (confirm("Remove Telegram token? The bot will stop working.")) {
-                                    setToken("");
                                     api.setSettingsKeys({ telegram_bot_token: "" }).then(() => {
                                         onSaved();
-                                        setMsg("Token removed. Restart backend to fully stop the bot.");
+                                        setMsg("Token removed.");
                                     });
                                 }
                             }}
                             className="btn btn-danger"
                             style={{ marginLeft: '0.5rem' }}
                         >
-                            Remove Token
+                            Remove
                         </button>
                     )}
                 </div>
 
                 {msg && <div className={msg.startsWith("Error:") ? "alert alert-error" : "alert"} style={{ marginTop: "0.75rem" }}>{msg}</div>}
             </div>
+        </div>
+    );
+}
+
+function PingramSettings() {
+    const [clientId, setClientId] = useState("");
+    const [clientSecret, setClientSecret] = useState("");
+    const [notificationId, setNotificationId] = useState("cron_alert");
+    const [templateId, setTemplateId] = useState("");
+    const [phoneNumber, setPhoneNumber] = useState("");
+    const [saving, setSaving] = useState(false);
+    const [msg, setMsg] = useState<string | null>(null);
+    const [isSecretSet, setIsSecretSet] = useState(false);
+
+    useEffect(() => {
+        api.getPingramSettings().then((s) => {
+            setClientId(s.client_id || "");
+            setClientSecret(s.client_secret || "");
+            setNotificationId(s.notification_id || "cron_alert");
+            setTemplateId(s.template_id || "");
+            setPhoneNumber(s.phone_number || "");
+            setIsSecretSet(s.is_secret_set);
+        }).catch(() => { });
+    }, []);
+
+    const saveSettings = async () => {
+        setSaving(true);
+        setMsg(null);
+        try {
+            await api.setPingramSettings({
+                client_id: clientId.trim(),
+                client_secret: clientSecret.trim(),
+                notification_id: notificationId.trim(),
+                template_id: templateId.trim(),
+                phone_number: phoneNumber.trim()
+            });
+            const s = await api.getPingramSettings();
+            setClientId(s.client_id || "");
+            setClientSecret(s.client_secret || "");
+            setNotificationId(s.notification_id || "cron_alert");
+            setTemplateId(s.template_id || "");
+            setPhoneNumber(s.phone_number || "");
+            setIsSecretSet(s.is_secret_set);
+            setMsg("Pingram settings saved.");
+        } catch (e) {
+            setMsg("Error: " + ((e as Error).message || String(e)));
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const testCall = async () => {
+        if (!isSecretSet && !clientSecret) {
+            setMsg("Error: Please set and save your Client Secret first.");
+            return;
+        }
+        setSaving(true);
+        setMsg(null);
+        try {
+            // We use a dummy number or the user can enter one.
+            // For now, let's just trigger it and let the backend log if number is missing.
+            // Better: prompt for number if missing in settings.
+            const number = prompt("Enter phone number to receive a test call (E.164 format, e.g. +15551234567):");
+            if (!number) {
+                setSaving(false);
+                return;
+            }
+
+            // Send a test message
+            const body = {
+                client_id: clientId,
+                client_secret: clientSecret, // Will use current if unchanged
+                notification_id: notificationId,
+                test_number: number
+            };
+
+            // We'll add a test-call endpoint to the backend shortly
+            // Assuming API is on relative path /api or current origin
+            const r = await fetch(`/api/settings/pingram/test-call`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            const data = await r.json();
+            if (data.ok) {
+                setMsg("Test call triggered! You should receive a call shortly.");
+            } else {
+                setMsg("Error: " + (data.error || "Failed to trigger call. Check console/logs."));
+            }
+        } catch (e) {
+            setMsg("Error: " + (e as Error).message);
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    return (
+        <div className="channel-section">
+            <div className="channel-header">
+                <div className="channel-icon pingram-icon">
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">
+                        <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.5h7c-.47 4.34-3.1 8.26-7 9.5V11.5H5V6.3l7-3.11v8.31z" />
+                    </svg>
+                </div>
+                <div>
+                    <h3>Voice Calls (Pingram)</h3>
+                    <p className="help">Reliable phone calls via NotificationAPI.</p>
+                </div>
+                <span className={`status-badge ${isSecretSet ? "ok" : ""}`}>{isSecretSet ? "Active" : "Not configured"}</span>
+            </div>
+
+            <div className="channel-body">
+                <div className="alert alert-info" style={{ marginBottom: '1rem', fontSize: '0.85rem' }}>
+                    <strong>How to Setup:</strong>
+                    <ol style={{ paddingLeft: '1.2rem', marginTop: '0.4rem' }}>
+                        <li>Create a free account at <a href="https://app.notificationapi.com" target="_blank" rel="noreferrer" className="link">notificationapi.com</a></li>
+                        <li>Go to <strong>Settings &gt; Environments</strong> and copy your <strong>Client ID</strong> and <strong>Client Secret</strong>.</li>
+                        <li>Go to <strong>Notifications</strong> and create one named <code>cron_alert</code>.</li>
+                        <li>Enable the <strong>Automated Voice Call</strong> channel for it.</li>
+                    </ol>
+                </div>
+
+                <div className="field-block" style={{ marginTop: '1rem' }}>
+                    <label>Default Phone Number</label>
+                    <p className="help">Reminders will call this number by default (E.164 format, e.g. +15551234567).</p>
+                    <input
+                        type="text"
+                        placeholder="+15551234567"
+                        value={phoneNumber}
+                        onChange={(e) => setPhoneNumber(e.target.value)}
+                        className="input"
+                    />
+                </div>
+
+                <div className="field-group" style={{ marginTop: '1rem' }}>
+                    <div className="field-block">
+                        <label>Client ID</label>
+                        <input
+                            type="text"
+                            placeholder="NotificationAPI Client ID"
+                            value={clientId}
+                            onChange={(e) => setClientId(e.target.value)}
+                            className="input"
+                        />
+                    </div>
+                    <div className="field-block">
+                        <label>Client Secret</label>
+                        <input
+                            type="password"
+                            placeholder={isSecretSet ? "••••••••••••••••" : "NotificationAPI Client Secret"}
+                            value={clientSecret}
+                            onChange={(e) => setClientSecret(e.target.value)}
+                            className="input"
+                        />
+                    </div>
+                </div>
+
+                <div className="field-group" style={{ marginTop: '1rem' }}>
+                    <div className="field-block">
+                        <label>Notification ID</label>
+                        <input
+                            type="text"
+                            value={notificationId}
+                            onChange={(e) => setNotificationId(e.target.value)}
+                            className="input"
+                        />
+                    </div>
+                    <div className="field-block">
+                        <label>Custom Template ID</label>
+                        <input
+                            type="text"
+                            placeholder="Optional: template_one"
+                            value={templateId}
+                            onChange={(e) => setTemplateId(e.target.value)}
+                            className="input"
+                        />
+                    </div>
+                </div>
+
+                <div className="field-row" style={{ marginTop: '1.5rem' }}>
+                    <button type="button" onClick={saveSettings} disabled={saving} className="btn btn-primary">
+                        {saving ? "Saving…" : "Save settings"}
+                    </button>
+                    <button type="button" onClick={testCall} disabled={saving} className="btn">
+                        Test call
+                    </button>
+                </div>
+                {msg && <div className={msg.startsWith("Error:") ? "alert alert-error" : "alert"} style={{ marginTop: "0.75rem" }}>{msg}</div>}
+            </div>
+            <style>{`
+                .pingram-icon { background: #6366f1; }
+            `}</style>
         </div>
     );
 }
@@ -281,8 +472,9 @@ export default function Channels() {
             </div>
 
             <div className="channels-grid">
-                <WhatsAppQr status={status} />
                 <TelegramSettings keysStatus={keysStatus} onSaved={refreshKeys} status={status} />
+                <PingramSettings />
+                <WhatsAppQr status={status} />
             </div>
 
             <style>{`

@@ -159,6 +159,12 @@ class Settings(BaseSettings):
     anthropic_api_key: str | None = None
     openrouter_api_key: str | None = None  # OpenRouter (300+ models)
     ollama_base_url: str = "http://localhost:11434"
+    asta_telegram_username: str | None = None
+    asta_pingram_client_id: str | None = None
+    asta_pingram_client_secret: str | None = None
+    asta_pingram_notification_id: str = "cron_alert"
+    asta_pingram_template_id: str | None = None
+    asta_owner_phone_number: str | None = None
 
     # Channels
     telegram_bot_token: str | None = None

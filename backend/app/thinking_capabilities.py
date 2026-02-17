@@ -7,40 +7,52 @@ def supports_xhigh_thinking(provider: str | None, model: str | None) -> bool:
     Known to support xhigh:
     - OpenAI: gpt-4-turbo, gpt-4o, gpt-4o-mini (with extended thinking)
     - Anthropic: claude-3-5-sonnet, claude-opus
-    - OpenRouter: models that support extended thinking (Claude, OpenAI via OpenRouter)
+    - OpenRouter: models that support extended thinking (Claude, OpenAI, Kimi, Trinity)
     - Groq: generally does not support xhigh
-    - Ollama: local models generally do not support xhigh
+    - Ollama: local models generally do not support xhigh, except specific thinking models (DeepSeek R1, Kimi)
     
     Args:
         provider: Provider name (e.g. "openai", "anthropic", "openrouter", "ollama")
-        model: Model name/identifier
+        model: Model ID (e.g. "gpt-4", "claude-3-opus", "deepseek/deepseek-r1")
         
     Returns:
-        True if the provider/model supports xhigh thinking level, False otherwise
+        bool: True if model supports xhigh thinking
     """
     if not provider or not model:
         return False
+        
+    prov = provider.strip().lower()
+    mod = model.strip().lower()
     
-    provider_lower = provider.lower()
-    model_lower = model.lower()
-    
-    # OpenAI models with extended thinking support
-    if provider_lower in ("openai",):
-        # GPT-4 Turbo, GPT-4o, o1 family support extended thinking
-        if any(x in model_lower for x in ("gpt-4-turbo", "gpt-4o", "o1-", "gpt-4-extended")):
+    # OpenRouter
+    if prov == "openrouter":
+        # Known thinking models on OpenRouter
+        if "claude-3-5-sonnet" in mod or "claude-3.7-sonnet" in mod:
             return True
-    
-    # Anthropic Claude models with extended thinking
-    if provider_lower in ("anthropic", "claude"):
-        # Claude 3.5 Sonnet and Opus support extended thinking
-        if any(x in model_lower for x in ("claude-3-5", "claude-opus", "claude-3.5")):
+        if "openai/o1" in mod or "openai/o3" in mod:
             return True
-    
-    # OpenRouter: check if it's a Claude/OpenAI model that supports it
-    if provider_lower == "openrouter":
-        # Models via OpenRouter that support extended thinking
-        if any(x in model_lower for x in ("claude-3-5", "claude-opus", "gpt-4-turbo", "gpt-4o", "o1")):
+        if "deepseek/deepseek-r1" in mod:
             return True
-    
-    # Conservative: return False for unknown providers or basic models
+        if "moonshot/moonshot-v1" in mod or "kimi" in mod:
+            return True
+        if "trinity" in mod:
+            return True
+        return False
+        
+    # OpenAI (native)
+    if prov == "openai":
+        return mod.startswith("o1") or mod.startswith("o3")
+        
+    # Anthropic (native)
+    if prov == "anthropic":
+        return "claude-3-7-sonnet" in mod or "claude-3-5-sonnet" in mod
+        
+    # Ollama (local)
+    if prov == "ollama":
+        if "deepseek-r1" in mod:
+            return True
+        if "kimi" in mod:
+            return True
+        return False
+        
     return False

@@ -171,6 +171,7 @@ async def schedule_reminder(
     channel_target: str,
     message: str,
     run_at: datetime,
+    tlg_call: bool = False,
 ) -> int:
     """Persist reminder and add one-shot scheduler job. Returns reminder id."""
     from app.cron_runner import add_cron_job_to_scheduler
@@ -180,7 +181,7 @@ async def schedule_reminder(
     db = get_db()
     await db.connect()
     run_at_iso = run_at.strftime("%Y-%m-%dT%H:%M:%SZ")
-    rid = await db.add_reminder(user_id, channel, channel_target, message, run_at_iso)
+    rid = await db.add_reminder(user_id, channel, channel_target, message, run_at_iso, tlg_call=tlg_call)
     one_shot_id = decode_one_shot_reminder_id(rid)
     if one_shot_id is not None:
         sch = get_scheduler()
@@ -251,6 +252,55 @@ async def _fire_reminder_async(reminder_id: int) -> None:
 
     # Mark as sent
     await db.mark_reminder_sent(reminder_id)
+
+
+async def trigger_pingram_voice_call(number: str, message: str, template_id: str | None = None) -> bool:
+    """Trigger an automated voice call via Pingram (NotificationAPI)."""
+    s = get_settings()
+    client_id = getattr(s, "asta_pingram_client_id", None)
+    client_secret = getattr(s, "asta_pingram_client_secret", None)
+    notification_id = getattr(s, "asta_pingram_notification_id", "cron_alert")
+    if not template_id:
+        template_id = getattr(s, "asta_pingram_template_id", None)
+
+    if not client_id or not client_secret:
+        logger.warning("Pingram credentials missing, skipping voice call")
+        return False
+
+    if not number:
+        logger.warning("No phone number provided for Pingram voice call")
+        return False
+
+    try:
+        from notificationapi_python_server_sdk import notificationapi
+        notificationapi.init(client_id, client_secret)
+        
+        # Ensure number is in E.164 format
+        clean_number = str(number).strip()
+        if not clean_number.startswith("+"):
+            clean_number = "+" + clean_number
+
+        payload = {
+            "notificationId": notification_id,
+            "user": {
+                "id": clean_number,
+                "number": clean_number
+            }
+        }
+        
+        if template_id:
+            payload["templateId"] = template_id
+        else:
+            payload["call"] = {
+                "message": message
+            }
+
+        await notificationapi.send(payload)
+        logger.info("Triggered Pingram voice call to %s (template=%s)", clean_number, template_id or "none")
+        return True
+    except Exception as e:
+        logger.error("Failed to trigger Pingram voice call: %s", e)
+        return False
 
 
 async def send_notification(channel: str, target: str, message: str) -> None:

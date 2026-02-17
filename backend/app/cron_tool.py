@@ -82,6 +82,19 @@ def get_cron_tool_openai_def() -> list[dict]:
                             "type": "integer",
                             "description": "Max run history rows for action=runs (1-100, default 20).",
                         },
+                        "channel": {
+                            "type": "string",
+                            "enum": ["web", "telegram", "whatsapp"],
+                            "description": "Notification channel (default web).",
+                        },
+                        "channel_target": {
+                            "type": "string",
+                            "description": "Target ID for channel (chat_id for telegram, phone for whatsapp). Optional if only 1 allowed user.",
+                        },
+                        "tlg_call": {
+                            "type": "boolean",
+                            "description": "Whether to trigger a voice call (Pingram) for this job. Defaults to true if a phone number is set in settings.",
+                        },
                     },
                     "required": ["action"],
                 },
@@ -190,6 +203,26 @@ def _normalize_cron_params(raw: dict) -> dict:
             out["tz"] = tz
         if message:
             out["message"] = message
+            
+        channel = _to_str(_pick_first(params, ("channel", "chn")))
+        target = _to_str(_pick_first(params, ("channel_target", "target", "chat_id")))
+        if channel:
+            out["channel"] = channel
+        if target:
+            out["channel_target"] = target
+            
+        payload_kind = _to_str(_pick_first(params, ("payload_kind", "payloadKind", "kind")))
+        if payload_kind:
+            out["payload_kind"] = payload_kind.lower()
+            
+        tlg_call = _pick_first(params, ("tlg_call", "tlgCall", "call"))
+        if tlg_call is not None:
+            if isinstance(tlg_call, str):
+                v = tlg_call.strip().lower()
+                out["tlg_call"] = 1 if v in ("1", "true", "on", "yes") else 0
+            else:
+                out["tlg_call"] = 1 if tlg_call else 0
+
         return out
 
     if action == "update":
@@ -208,10 +241,29 @@ def _normalize_cron_params(raw: dict) -> dict:
             (("cron_expr", "cron", "expr", "cronExpr"), "cron_expr"),
             (("tz", "timezone"), "tz"),
             (("message", "msg", "text"), "message"),
+            (("channel", "chn"), "channel"),
+            (("channel_target", "target", "chat_id"), "channel_target"),
+            (("payload_kind", "payloadKind", "kind"), "payload_kind"),
         ):
             value = _to_str(_pick_first(params, key_group))
             if value:
                 out[target_key] = value
+        
+        enabled = params.get("enabled")
+        if enabled is not None:
+            if isinstance(enabled, str):
+                v = enabled.strip().lower()
+                out["enabled"] = 1 if v in ("1", "true", "on", "yes") else 0
+            else:
+                out["enabled"] = 1 if enabled else 0
+
+        tlg_call = params.get("tlg_call")
+        if tlg_call is not None:
+            if isinstance(tlg_call, str):
+                v = tlg_call.strip().lower()
+                out["tlg_call"] = 1 if v in ("1", "true", "on", "yes") else 0
+            else:
+                out["tlg_call"] = 1 if tlg_call else 0
         return out
 
     if action == "remove":
@@ -318,14 +370,41 @@ async def run_cron_tool(
         if not is_valid:
             return f"Error: Invalid cron expression: {error_msg}"
 
+        # Resolve channel/target
+        req_channel = (params.get("channel") or "").strip().lower() or channel
+        req_target = (params.get("channel_target") or "").strip() or channel_target
+        
+        if req_channel == "telegram" and not req_target:
+            from app.config import get_settings
+            settings = get_settings()
+            allowed = list(settings.telegram_allowed_ids)
+            if len(allowed) == 1:
+                req_target = allowed[0]
+
+        from app.config import get_settings
+        s = get_settings()
+        owner_phone = getattr(s, "asta_owner_phone_number", None)
+        
+        # Default tlg_call to True if phone number is set
+        default_call = bool(owner_phone)
+        tlg_call = params.get("tlg_call")
+        if tlg_call is None:
+            tlg_call = default_call
+            
+        # If call is requested but no number in target, use owner_phone
+        if tlg_call and owner_phone and not (req_target and (str(req_target).startswith("+") or str(req_target).isdigit())):
+            req_target = owner_phone
+
         job_id = await db.add_cron_job(
             user_id,
             name,
             cron_expr,
             message,
             tz=tz,
-            channel=channel,
-            channel_target=channel_target or "",
+            channel=req_channel,
+            channel_target=req_target,
+            payload_kind=payload_kind or "agentturn",
+            tlg_call=bool(tlg_call),
         )
         add_cron_job_to_scheduler(sch, job_id, cron_expr, tz)
         return json.dumps(
@@ -336,6 +415,8 @@ async def run_cron_tool(
                 "cron_expr": cron_expr,
                 "tz": tz,
                 "message": message,
+                "channel": req_channel,
+                "channel_target": req_target,
             },
             indent=0,
         )
@@ -356,12 +437,31 @@ async def run_cron_tool(
             if not is_valid:
                 return f"Error: Invalid cron expression: {error_msg}"
 
+        new_channel = params.get("channel")
+        new_target = params.get("channel_target")
+        new_payload_kind = params.get("payload_kind")
+        new_enabled = params.get("enabled")
+        new_tlg_call = params.get("tlg_call")
+        
+        # If switching to telegram without target, try to infer it
+        if new_channel == "telegram" and not new_target:
+             from app.config import get_settings
+             settings = get_settings()
+             allowed = list(settings.telegram_allowed_ids)
+             if len(allowed) == 1:
+                 new_target = allowed[0]
+
         ok = await db.update_cron_job(
             job_id,
             name=name,
             cron_expr=cron_expr,
             tz=tz,
             message=message,
+            channel=new_channel,
+            channel_target=new_target,
+            payload_kind=new_payload_kind,
+            enabled=new_enabled,
+            tlg_call=new_tlg_call
         )
         if not ok:
             return (

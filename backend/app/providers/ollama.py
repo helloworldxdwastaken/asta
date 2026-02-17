@@ -216,6 +216,19 @@ class OllamaProvider(BaseProvider):
         return "ollama"
 
     async def chat(self, messages: list[Message], **kwargs) -> ProviderResponse:
+        # Thinking injection: Kimi/Moonshot on Ollama requires strict system prompt to emit tokens.
+        thinking_level = kwargs.get("thinking_level")
+        if thinking_level and str(thinking_level).lower() not in ("off", "0", "false"):
+            think_instruction = (
+                "You are a deep thinking AI. "
+                "Always output your step-by-step reasoning process enclosed in <think> tags "
+                "before your final response."
+            )
+            # Add to context (system prompt)
+            ctx = kwargs.get("context") or ""
+            if think_instruction not in ctx:
+                kwargs["context"] = f"{ctx}\n\n{think_instruction}".strip()
+
         base = get_ollama_base_url()
         tools = kwargs.get("tools")
         need_tools = bool(tools)
@@ -286,6 +299,19 @@ class OllamaProvider(BaseProvider):
         on_text_delta: TextDeltaCallback | None = None,
         **kwargs,
     ) -> ProviderResponse:
+        # Thinking injection: Kimi/Moonshot on Ollama requires strict system prompt to emit tokens.
+        thinking_level = kwargs.get("thinking_level")
+        if thinking_level and str(thinking_level).lower() not in ("off", "0", "false"):
+            think_instruction = (
+                "You are a deep thinking AI. "
+                "Always output your step-by-step reasoning process enclosed in <think> tags "
+                "before your final response."
+            )
+            # Add to context (system prompt)
+            ctx = kwargs.get("context") or ""
+            if think_instruction not in ctx:
+                kwargs["context"] = f"{ctx}\n\n{think_instruction}".strip()
+
         base = get_ollama_base_url()
         tools = kwargs.get("tools")
         need_tools = bool(tools)

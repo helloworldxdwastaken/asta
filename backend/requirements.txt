@@ -25,6 +25,8 @@ chromadb
 sentence-transformers
 # Telegram
 python-telegram-bot[job-queue,rate-limiter]
+# Voice Calls
+notificationapi-python-server-sdk
 # Audio
 faster-whisper
 # Image/Video

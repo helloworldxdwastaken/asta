@@ -130,6 +130,16 @@ class OpenRouterProvider(BaseProvider):
                 n = (fn.get("name") or "").strip()
                 if n:
                     allowed_tool_names.add(n)
+        
+        # Inject detailed thinking prompt for models that need it (Trinity)
+        thinking_level = kwargs.get("thinking_level")
+        model_name_lower = str(kwargs.get("model") or "").lower()
+        if thinking_level and str(thinking_level).lower() not in ("off", "0", "false"):
+            if "trinity" in model_name_lower:
+                instr = "You are a deep thinking AI. Always output your step-by-step reasoning process enclosed in <think> tags before your final response."
+                if instr not in system:
+                    system = f"{system}\n\n{instr}".strip()
+
         if system:
             # OpenRouter fallback protocol: if a specific model fails structured tool_calls,
             # it may still emit this tag; handler will parse it.
@@ -199,6 +209,11 @@ class OpenRouterProvider(BaseProvider):
                 effort = _reasoning_effort_from_level(kwargs.get("thinking_level"))
                 if effort:
                     create_kwargs["reasoning_effort"] = effort
+                    # For non-OpenAI models (Kimi, Trinity), we also need include_reasoning: true
+                    # to ensure the reasoning trace is returned in the response fields.
+                    if "extra_body" not in create_kwargs:
+                        create_kwargs["extra_body"] = {}
+                    create_kwargs["extra_body"]["include_reasoning"] = True
                 try:
                     r = await client.chat.completions.create(**create_kwargs)
                 except Exception as first_err:
@@ -208,7 +223,13 @@ class OpenRouterProvider(BaseProvider):
                     else:
                         raise
                 msg = r.choices[0].message
-                content = (msg.content or "").strip()
+                content_parts = []
+                reasoning = getattr(msg, "reasoning", None)
+                if reasoning:
+                    content_parts.append(f"<think>{reasoning}</think>")
+                if msg.content:
+                    content_parts.append(msg.content)
+                content = "".join(content_parts).strip()
                 raw_tc = getattr(msg, "tool_calls", None)
                 tool_calls = _normalize_tool_calls(raw_tc)
                 if tools and raw_tc is None and hasattr(r, "choices") and r.choices:
@@ -281,6 +302,16 @@ class OpenRouterProvider(BaseProvider):
                 n = (fn.get("name") or "").strip()
                 if n:
                     allowed_tool_names.add(n)
+        
+        # Inject detailed thinking prompt for models that need it (Trinity)
+        thinking_level = kwargs.get("thinking_level")
+        model_name_lower = str(kwargs.get("model") or "").lower()
+        if thinking_level and str(thinking_level).lower() not in ("off", "0", "false"):
+            if "trinity" in model_name_lower:
+                instr = "You are a deep thinking AI. Always output your step-by-step reasoning process enclosed in <think> tags before your final response."
+                if instr not in system:
+                    system = f"{system}\n\n{instr}".strip()
+
         if system:
             if tools:
                 system = (
@@ -342,19 +373,31 @@ class OpenRouterProvider(BaseProvider):
                     create_kwargs["tools"] = tools
                     create_kwargs["tool_choice"] = "auto"
                 effort = _reasoning_effort_from_level(kwargs.get("thinking_level"))
+                # For non-OpenAI models (Kimi, Trinity), we also need include_reasoning: true
                 if effort:
                     create_kwargs["reasoning_effort"] = effort
+                    if "extra_body" not in create_kwargs:
+                        create_kwargs["extra_body"] = {}
+                    create_kwargs["extra_body"]["include_reasoning"] = True
+
                 try:
                     stream = await client.chat.completions.create(**create_kwargs)
                 except Exception as first_err:
                     if effort and _is_reasoning_param_unsupported_error(str(first_err)):
                         create_kwargs.pop("reasoning_effort", None)
+                        # Also remove include_reasoning if it was the cause (though usually it's reasoning_effort)
+                        # But keep it if possible? Let's try removing just effort first.
+                        # If that fails, the outer loop will catch it.
                         stream = await client.chat.completions.create(**create_kwargs)
                     else:
                         raise
 
                 content_parts: list[str] = []
                 stream_tool_calls: dict[int, dict] = {}
+                
+                # Tracking for reasoning tag injection
+                is_reasoning = False
+                
                 async for chunk in stream:
                     choices = getattr(chunk, "choices", None) or []
                     if not choices:
@@ -362,16 +405,38 @@ class OpenRouterProvider(BaseProvider):
                     delta = getattr(choices[0], "delta", None)
                     if not delta:
                         continue
+                        
+                    # Handle separate reasoning field (OpenRouter standard for some models)
+                    reasoning_delta = getattr(delta, "reasoning", None)
+                    if reasoning_delta:
+                        if not is_reasoning:
+                            # Start thinking block
+                            await emit_text_delta(on_text_delta, "<think>")
+                            content_parts.append("<think>")
+                            is_reasoning = True
+                        
+                        await emit_text_delta(on_text_delta, reasoning_delta)
+                        content_parts.append(reasoning_delta)
+                        continue # reasoning usually exclusive with content in a single chunk
+                    
+                    # Handle content
                     delta_content = getattr(delta, "content", None)
                     text_delta = ""
                     if isinstance(delta_content, str):
                         text_delta = delta_content
                     elif isinstance(delta_content, list):
-                        text_delta = "".join(
+                         text_delta = "".join(
                             str(getattr(part, "text", "") if not isinstance(part, dict) else part.get("text", "") or "")
                             for part in delta_content
                         )
+                    
                     if text_delta:
+                        if is_reasoning:
+                            # Close thinking block before content
+                            await emit_text_delta(on_text_delta, "</think>")
+                            content_parts.append("</think>")
+                            is_reasoning = False
+                            
                         content_parts.append(text_delta)
                         await emit_text_delta(on_text_delta, text_delta)
 
@@ -379,6 +444,11 @@ class OpenRouterProvider(BaseProvider):
                     for tc_delta in delta_tool_calls:
                         merge_stream_tool_call_delta(stream_tool_calls, tc_delta)
 
+                # Close thinking tag if stream ended while reasoning
+                if is_reasoning:
+                    await emit_text_delta(on_text_delta, "</think>")
+                    content_parts.append("</think>")
+                
                 content = "".join(content_parts).strip()
                 tool_calls = finalize_stream_tool_calls(stream_tool_calls)
                 if tools and not tool_calls:

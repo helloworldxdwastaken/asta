@@ -84,7 +84,7 @@ If the panel shows "API off", start the backend first or use **Settings -> Run t
 - **Dashboard**: system overview — Brain (AI providers), Body (CPU/RAM/disk + model), Eyes (vision), Channels, Notes, Schedule (reminders + cron), Capabilities (skills count).
 - **Responsive dashboard layout**: medium/smaller screens now use adaptive card/vitals breakpoints for readable panel cards and metrics.
 - **Chat**: provider routing + automatic skill execution.
-- **Reasoning controls**: per-user **Thinking level** (`off/minimal/low/medium/high/xhigh`) and **Reasoning visibility** (`off/on/stream`) in Settings and Telegram commands. Stream mode now uses a dedicated message event state machine for chunk-time reasoning/assistant updates (with post-generation fallback when providers do not stream).
+- **Reasoning controls**: per-user **Thinking level** (`off/minimal/low/medium/high/xhigh`) and **Reasoning visibility** (`off/on/stream`) in Settings and Telegram commands. Now supports **OpenRouter Kimi/Trinity** (via `reasoning_effort` + auto-injected `<think>` tags) and Ollama. Stream mode now uses a dedicated message event state machine for chunk-time reasoning/assistant updates (with post-generation fallback when providers do not stream).
 - **Strict final mode**: optional `final_mode=strict` in Settings to show only text inside `<final>...</final>` blocks (OpenClaw-style enforcement).
 - **Web live streaming**: Chat UI uses `POST /api/chat/stream` (SSE) for real-time `assistant` and `reasoning` updates powered by OpenClaw-style stream lifecycle events (`message_start/text_delta/text_end/message_end`).
 - **OpenClaw-style main provider flow**: fixed priority chain `Claude -> Ollama -> OpenRouter`, with per-provider runtime enable/disable controls and auto-disable on billing/auth failures.
@@ -93,9 +93,9 @@ If the panel shows "API off", start the backend first or use **Settings -> Run t
 - **Subagent control UX**: deterministic `/subagents` command flow (`list/spawn/info/send/stop`, optional `--wait` on send) plus conservative auto-spawn for explicit long/background requests (toggle: `ASTA_SUBAGENTS_AUTO_SPAWN`).
 - **Files**: local knowledge files + allowed paths. User context (who you are) lives in **workspace/USER.md**.
 - **Learning**: "learn about X for Y minutes" (also: "research/study/become an expert on X") with retrievable context.
-- **Cron**: list, add, update, remove, run now, and inspect recent run history for recurring jobs (e.g. daily auto-updater). Settings → Auto-updater for schedule.
-- **Audio Notes**: upload/voice transcription and summary (faster-whisper).
-- **Channels**: Telegram + WhatsApp (Beta) integrations in one place.
+- **Schedule (Reminders + Cron)**: list, add, update, remove, and run recurring jobs or one-shot reminders. One-shot reminders (created via "Remind me at...") are now visible on the **Cron** page with a **One-Shot** badge for easier management.
+- **Automated Voice Calls (Pingram)**: triggering reliable phone calls for reminders and jobs via NotificationAPI (integration: Pingram). Supports custom **Pingram Templates** and fallback to default messages. Configure your phone number and credentials in the **Channels** page.
+- **Channels**: Telegram, Voice Calls (Pingram), and WhatsApp (Beta) integrations in one place.
 - **Settings/Skills**: key management, fixed main-provider flow, model policy controls, toggles, and backend controls.
 - **Vision controls in Settings**: preprocess toggle with fixed model `nvidia/nemotron-nano-12b-v2-vl:free` for UI consistency.
 

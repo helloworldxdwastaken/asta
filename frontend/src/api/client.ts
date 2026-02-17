@@ -84,6 +84,8 @@ export type CronJob = {
   channel: string;
   channel_target: string;
   enabled: number;
+  payload_kind: string;
+  tlg_call: number;
   created_at: string;
 };
 
@@ -431,14 +433,28 @@ export const api = {
     req<{ cron_jobs: CronJob[] }>(`/cron?user_id=${encodeURIComponent(userId)}`),
   deleteCronJob: (jobId: number) =>
     req<{ ok: boolean; id: number }>(`/cron/${jobId}`, { method: "DELETE" }),
-  updateCronJob: (jobId: number, body: { name?: string; cron_expr?: string; tz?: string; message?: string }) =>
-    req<{ ok: boolean; id: number; name?: string; cron_expr: string; tz: string | null }>(`/cron/${jobId}`, {
+  updateCronJob: (jobId: number, body: { name?: string; cron_expr?: string; tz?: string; message?: string; channel?: string; channel_target?: string; enabled?: boolean; payload_kind?: string; tlg_call?: boolean }) =>
+    req<{ ok: boolean; id: number; name?: string; cron_expr?: string; tz?: string | null; channel?: string; channel_target?: string; enabled?: number; payload_kind?: string; tlg_call?: number }>(`/cron/${jobId}`, {
       method: "PUT",
       body: JSON.stringify(body),
     }),
-  addCronJob: (body: { name: string; cron_expr: string; message: string; tz?: string; channel?: string; channel_target?: string }) =>
+  addCronJob: (body: { name: string; cron_expr: string; message: string; tz?: string; channel?: string; channel_target?: string; payload_kind?: string; tlg_call?: boolean }) =>
     req<{ id: number; name: string; cron_expr: string }>("/cron", {
       method: "POST",
       body: JSON.stringify({ ...body, channel: body.channel ?? "web", channel_target: body.channel_target ?? "" }),
+    }),
+  getTelegramUsername: () =>
+    req<{ username: string | null }>("/settings/telegram/username"),
+  setTelegramUsername: (username: string) =>
+    req<{ ok: boolean }>("/settings/telegram/username", {
+      method: "POST",
+      body: JSON.stringify({ username }),
+    }),
+  getPingramSettings: () =>
+    req<{ client_id: string; client_secret: string; notification_id: string; template_id: string; phone_number: string; is_secret_set: boolean }>("/settings/pingram"),
+  setPingramSettings: (body: { client_id?: string; client_secret?: string; notification_id?: string; template_id?: string; phone_number?: string }) =>
+    req<{ ok: boolean }>("/settings/pingram", {
+      method: "POST",
+      body: JSON.stringify(body),
     }),
 };

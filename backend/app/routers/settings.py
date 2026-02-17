@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 import httpx
 from pathlib import Path
 from fastapi import APIRouter, Request, UploadFile, File, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.config import get_settings, set_env_value
 from app.db import get_db
@@ -92,6 +92,7 @@ ALLOWED_API_KEY_NAMES = frozenset({
     "anthropic_api_key", "openai_api_key", "openrouter_api_key",
     "telegram_bot_token", "giphy_api_key",
     "spotify_client_id", "spotify_client_secret",
+    "notion_api_key",
 })
 
 
@@ -119,6 +120,25 @@ class VisionSettingsIn(BaseModel):
     preprocess: bool
     provider_order: str
     openrouter_model: str
+
+
+class TelegramUsernameIn(BaseModel):
+    username: str = Field(..., description="Telegram username starting with @")
+
+
+class PingramSettingsIn(BaseModel):
+    client_id: str | None = None
+    client_secret: str | None = None
+    notification_id: str = "cron_alert"
+    template_id: str | None = None
+    phone_number: str | None = None
+
+
+class PingramTestCallIn(BaseModel):
+    client_id: str
+    client_secret: str
+    notification_id: str
+    test_number: str
 
 
 @router.get("/settings/default-ai")
@@ -603,6 +623,7 @@ class ApiKeysIn(BaseModel):
     giphy_api_key: str | None = None
     spotify_client_id: str | None = None
     spotify_client_secret: str | None = None
+    notion_api_key: str | None = None
 
 
 @router.put("/settings/keys")
@@ -1177,4 +1198,120 @@ async def trigger_update():
         )
 
     threading.Thread(target=_do_update, daemon=True).start()
-    return {"ok": true, "message": "Update triggered. System will restart shortly."}
+    return {"ok": True, "message": "Update triggered. System will restart shortly."}
+
+
+@router.get("/settings/pingram")
+@router.get("/api/settings/pingram")
+async def get_pingram_settings(user_id: str = "default"):
+    """Return Pingram (NotificationAPI) settings."""
+    s = get_settings()
+    is_secret_set = bool(getattr(s, "asta_pingram_client_secret", None))
+    return {
+        "client_id": getattr(s, "asta_pingram_client_id", ""),
+        "client_secret": "****" if is_secret_set else "",
+        "notification_id": getattr(s, "asta_pingram_notification_id", "cron_alert"),
+        "template_id": getattr(s, "asta_pingram_template_id", ""),
+        "phone_number": getattr(s, "asta_owner_phone_number", ""),
+        "is_secret_set": is_secret_set
+    }
+
+
+@router.post("/settings/pingram")
+@router.post("/api/settings/pingram")
+async def set_pingram_settings(body: PingramSettingsIn, user_id: str = "default"):
+    """Update Pingram (NotificationAPI) settings."""
+    from app.keys import set_api_key
+    from app.config import save_settings_to_env
+    
+    updates = {}
+    if body.client_id is not None:
+        updates["ASTA_PINGRAM_CLIENT_ID"] = body.client_id
+    if body.client_secret is not None:
+        # If it's the masked version, don't update
+        if "*" not in body.client_secret:
+            updates["ASTA_PINGRAM_CLIENT_SECRET"] = body.client_secret
+    if body.notification_id is not None:
+        updates["ASTA_PINGRAM_NOTIFICATION_ID"] = body.notification_id
+    if body.template_id is not None:
+        updates["ASTA_PINGRAM_TEMPLATE_ID"] = body.template_id
+    if body.phone_number is not None:
+        updates["ASTA_OWNER_PHONE_NUMBER"] = body.phone_number
+        
+    if updates:
+        save_settings_to_env(updates)
+        # Also update in-memory settings
+        s = get_settings()
+        if "ASTA_PINGRAM_CLIENT_ID" in updates:
+            s.asta_pingram_client_id = updates["ASTA_PINGRAM_CLIENT_ID"]
+        if "ASTA_PINGRAM_CLIENT_SECRET" in updates:
+            s.asta_pingram_client_secret = updates["ASTA_PINGRAM_CLIENT_SECRET"]
+        if "ASTA_PINGRAM_NOTIFICATION_ID" in updates:
+            s.asta_pingram_notification_id = updates["ASTA_PINGRAM_NOTIFICATION_ID"]
+        if "ASTA_PINGRAM_TEMPLATE_ID" in updates:
+            s.asta_pingram_template_id = updates["ASTA_PINGRAM_TEMPLATE_ID"]
+        if "ASTA_OWNER_PHONE_NUMBER" in updates:
+            s.asta_owner_phone_number = updates["ASTA_OWNER_PHONE_NUMBER"]
+            
+    return {"ok": True}
+
+
+@router.post("/settings/pingram/test-call")
+@router.post("/api/settings/pingram/test-call")
+async def test_pingram_call(body: PingramTestCallIn):
+    """Trigger a test Pingram voice call."""
+    from app.reminders import trigger_pingram_voice_call
+    
+    # We use temporary settings for the test call if provided, or fall back to stored ones
+    # But here the frontend sends them explicitly for a better 'immediate test' experience
+    
+    # We need to temporarily override settings or pass them to trigger_pingram_voice_call
+    # Let's modify trigger_pingram_voice_call to accept optional creds
+    
+    # Actually, trigger_pingram_voice_call currently reads from settings.
+    # Let's just import it and call it. 
+    # If the user just typed them in but didn't save yet, we might want to use the provided ones.
+    
+    # For now, let's just use the provided ones directly in a local implementation or update reminders.py
+    
+    from notificationapi_python_server_sdk import notificationapi
+    try:
+        notificationapi.init(body.client_id, body.client_secret)
+        
+        clean_number = body.test_number.strip()
+        if not clean_number.startswith("+"):
+            clean_number = "+" + clean_number
+
+        await notificationapi.send({
+            "notificationId": body.notification_id,
+            "user": {
+                "id": clean_number,
+                "number": clean_number
+            },
+            "call": {
+                "message": "This is a test call from Asta. Your Pingram integration is working correctly!"
+            }
+        })
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+@router.get("/settings/telegram/username")
+@router.get("/api/settings/telegram/username")
+async def get_telegram_username():
+    """Return the configured Telegram username for voice calls."""
+    s = get_settings()
+    return {"username": getattr(s, "asta_telegram_username", None)}
+
+
+@router.post("/settings/telegram/username")
+@router.post("/api/settings/telegram/username")
+async def set_telegram_username(body: TelegramUsernameIn):
+    """Update the Telegram username for voice calls."""
+    username = (body.username or "").strip()
+    if username and not username.startswith("@"):
+        username = "@" + username
+    
+    set_env_value("ASTA_TELEGRAM_USERNAME", username, allow_empty=True)
+    return {"ok": True, "username": username}

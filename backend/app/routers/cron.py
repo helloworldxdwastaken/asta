@@ -16,6 +16,8 @@ class CronAddIn(BaseModel):
     tz: str | None = None
     channel: str = "web"
     channel_target: str = ""
+    payload_kind: str = "agentturn"
+    tlg_call: bool = False
 
 
 class CronUpdateIn(BaseModel):
@@ -23,6 +25,11 @@ class CronUpdateIn(BaseModel):
     cron_expr: str | None = None
     tz: str | None = None
     message: str | None = None
+    enabled: bool | None = None
+    payload_kind: str | None = None
+    tlg_call: bool | None = None
+    channel: str | None = None
+    channel_target: str | None = None
 
 
 @router.get("/cron")
@@ -59,6 +66,8 @@ async def add_cron(body: CronAddIn, user_id: str = "default"):
         tz=body.tz,
         channel=body.channel or "web",
         channel_target=body.channel_target or "",
+        payload_kind=body.payload_kind,
+        tlg_call=body.tlg_call,
     )
     sch = get_scheduler()
     add_cron_job_to_scheduler(sch, job_id, cron_expr, body.tz)
@@ -87,7 +96,18 @@ async def update_cron(job_id: int, body: CronUpdateIn):
         if not is_valid:
             raise HTTPException(400, f"Invalid cron expression: {error_msg}")
 
-    ok = await db.update_cron_job(job_id, name=name, cron_expr=cron_expr, tz=tz, message=message)
+    ok = await db.update_cron_job(
+        job_id,
+        name=name,
+        cron_expr=cron_expr,
+        tz=tz,
+        message=message,
+        enabled=body.enabled,
+        payload_kind=body.payload_kind,
+        tlg_call=body.tlg_call,
+        channel=body.channel,
+        channel_target=body.channel_target,
+    )
     if not ok:
         raise HTTPException(409, "Could not update cron job (duplicate name or job not found)")
     # Reschedule: remove old, add new with updated expr/tz

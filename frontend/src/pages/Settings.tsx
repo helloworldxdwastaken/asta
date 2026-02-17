@@ -11,6 +11,7 @@ const PROVIDER_LOGOS: Record<string, { url: string; initial: string }> = {
   openai: { url: "https://openai.com/favicon.ico", initial: "O" },
   openrouter: { url: "https://openrouter.ai/favicon.ico", initial: "R" },
   giphy: { url: "https://giphy.com/favicon.ico", initial: "G" },
+  notion: { url: "https://www.notion.so/images/favicon.ico", initial: "N" },
 };
 
 /** AI providers: single key each (except Google has two optional keys) */
@@ -25,6 +26,7 @@ const AI_PROVIDER_ENTRIES: { id: string; name: string; keys: { key: string; labe
 /** Channel extras (Telegram is on Channels page) */
 const OTHER_KEYS: { id: string; name: string; key: string; logoKey: string; getKeyUrl: string }[] = [
   { id: "giphy", name: "Giphy (GIF skill)", key: "giphy_api_key", logoKey: "giphy", getKeyUrl: "https://developers.giphy.com/dashboard/" },
+  { id: "notion", name: "Notion", key: "notion_api_key", logoKey: "notion", getKeyUrl: "https://notion.so/my-integrations" },
 ];
 
 function ProviderLogo({ logoKey, size = 40 }: { logoKey: string; size?: number }) {
@@ -619,9 +621,9 @@ function DefaultAiSelect() {
                 ? "Kimi/Trinity only (comma-separated fallback allowed)"
                 : provider === "ollama"
                   ? "Custom Ollama model/tag (optional)"
-                : provider === "claude"
-                  ? "e.g. claude-haiku-4-5-20251001"
-                  : (defaultModel || "e.g. llama-3.3-70b-versatile")
+                  : provider === "claude"
+                    ? "e.g. claude-haiku-4-5-20251001"
+                    : (defaultModel || "e.g. llama-3.3-70b-versatile")
             }
             value={model}
             onChange={(e) => setModel(e.target.value)}
@@ -1034,6 +1036,8 @@ function SpotifySetup({ keysStatus, onSaved }: { keysStatus: Record<string, bool
     </div>
   );
 }
+
+
 
 export default function Settings() {
   const [providers, setProviders] = useState<string[]>([]);

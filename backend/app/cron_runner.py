@@ -92,68 +92,61 @@ async def _fire_cron_job_async(
             "trigger": trigger_norm,
             "run_mode": mode_norm,
         }
-    if is_one_shot_cron_expr(cron_expr):
-        # One-shot reminders should not call handle_message again.
+    payload_kind = (job.get("payload_kind") or "agentturn").strip().lower()
+    tlg_call = bool(job.get("tlg_call") or False)
+    
+    if tlg_call and channel_target:
+        # User wants a voice call via Pingram (NotificationAPI)
+        from app.reminders import trigger_pingram_voice_call
+        
+        # If channel is telegram, we might not have a phone number in channel_target.
+        # But if the user entered a phone number there, it will work.
+        if channel_target.startswith("+") or channel_target.isdigit():
+            logger.info("Cron job %s: Triggering Pingram Voice Call to %s", cron_job_id, channel_target)
+            try:
+                # We use the job message as the voice payload
+                call_msg = message or f"This is Asta calling for your job {job.get('name') or cron_job_id}"
+                await trigger_pingram_voice_call(channel_target, call_msg)
+            except Exception as e:
+                logger.warning("Failed to trigger Pingram call for job %s: %s", cron_job_id, e)
+        else:
+            logger.warning("Cron job %s: Call enabled but target %s doesn't look like a phone number", cron_job_id, channel_target)
+            # Fallback to placeholder notification
+            try:
+                await send_notification(channel, channel_target, "📞 **INCOMING ASTA CALL...** (Setup @username in Settings)")
+            except Exception as e:
+                logger.warning("Failed to trigger call placeholder for job %s: %s", cron_job_id, e)
+
+    if is_one_shot_cron_expr(cron_expr) or payload_kind not in ("agentturn",):
+        # One-shot reminders or jobs explicitly set to notify/systemevent should not call handle_message as an AI turn.
         try:
             await send_notification(channel, channel_target, _format_reminder_message(message))
+            run_status = "ok"
+            run_output = f"Direct notification sent via {channel}: {_format_reminder_message(message)}"
+            if is_one_shot_cron_expr(cron_expr):
+                await db.mark_reminder_sent(encode_one_shot_reminder_id(cron_job_id))
         except Exception as e:
-            logger.exception("One-shot reminder job %s failed: %s", cron_job_id, e)
+            logger.exception("Direct notification job %s failed: %s", cron_job_id, e)
             run_status = "error"
             run_error = str(e)
-            await db.add_cron_job_run(
-                cron_job_id=int(cron_job_id),
+    else:
+        # For recurring jobs (agentturn), call AI
+        try:
+            from app.handler import handle_message
+            reply = await handle_message(
                 user_id=str(user_id),
-                trigger=trigger_norm,
-                run_mode=mode_norm,
-                status=run_status,
-                error=run_error,
+                channel=channel,
+                channel_target=channel_target,
+                text=message,
+                is_ai_turn=True,
             )
-            return {
-                "ok": False,
-                "id": int(cron_job_id),
-                "status": run_status,
-                "error": run_error[:300],
-                "trigger": trigger_norm,
-                "run_mode": mode_norm,
-            }
-        await db.mark_reminder_sent(encode_one_shot_reminder_id(cron_job_id))
-        run_status = "sent"
-        run_output = _format_reminder_message(message)
-        await db.add_cron_job_run(
-            cron_job_id=int(cron_job_id),
-            user_id=str(user_id),
-            trigger=trigger_norm,
-            run_mode=mode_norm,
-            status=run_status,
-            output=run_output,
-        )
-        return {
-            "ok": True,
-            "id": int(cron_job_id),
-            "status": run_status,
-            "output": run_output[:300],
-            "trigger": trigger_norm,
-            "run_mode": mode_norm,
-        }
-    try:
-        from app.handler import handle_message
-        reply = await handle_message(
-            user_id,
-            channel,
-            message,
-            provider_name="default",
-            channel_target=channel_target,
-        )
-        if reply and channel_target and channel in ("telegram", "whatsapp"):
-            await send_notification(channel, channel_target, reply)
-        run_status = "ok"
-        run_output = (reply or "").strip()
-    except Exception as e:
-        logger.exception("Cron job %s failed: %s", cron_job_id, e)
-        run_status = "error"
-        run_error = str(e)
-        if channel_target and channel in ("telegram", "whatsapp"):
-            await send_notification(channel, channel_target, f"Cron job failed: {str(e)[:300]}")
+            run_status = "ok"
+            run_output = (reply or "").strip()
+        except Exception as e:
+            logger.exception("Cron job %s (AI turn) failed: %s", cron_job_id, e)
+            run_status = "error"
+            run_error = str(e)
+
     await db.add_cron_job_run(
         cron_job_id=int(cron_job_id),
         user_id=str(user_id),

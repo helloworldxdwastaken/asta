@@ -65,10 +65,22 @@ class ReminderService:
 
         reminder = parse_reminder(text, tz_str=tz_str)
         if reminder:
+            from app.config import get_settings
+            s = get_settings()
+            owner_phone = getattr(s, "asta_owner_phone_number", None)
+            
+            # Default tlg_call to True if phone number is set
+            tlg_call = bool(owner_phone)
+            
             run_at = reminder["run_at"]
             msg = reminder.get("message", "Reminder")
+            
             target = channel_target or "web"
-            await schedule_reminder(user_id, channel, target, msg, run_at)
+            # If call is requested but no number in target, use owner_phone
+            if tlg_call and owner_phone and not (target and (target.startswith("+") or target.isdigit())):
+                target = owner_phone
+
+            await schedule_reminder(user_id, channel, target, msg, run_at, tlg_call=tlg_call)
             
             return {
                 "reminder_scheduled": True,

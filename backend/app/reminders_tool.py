@@ -47,6 +47,10 @@ def get_reminders_tool_openai_def() -> list[dict]:
                             "type": "integer",
                             "description": "Reminder id for update/remove actions.",
                         },
+                        "call": {
+                            "type": "boolean",
+                            "description": "Whether to trigger a voice call (Pingram) for this reminder. Defaults to true if a phone number is set in settings.",
+                        },
                     },
                     "required": ["action"],
                 },
@@ -90,6 +94,20 @@ async def run_reminders_tool(
 ) -> str:
     action = (params.get("action") or "").strip().lower()
     await db.connect()
+
+    from app.config import get_settings
+    s = get_settings()
+    owner_phone = getattr(s, "asta_owner_phone_number", None)
+    
+    # Default tlg_call to True if phone number is set and channel is telegram or whatsapp
+    # (actually we mainly care about automated calls for the owner)
+    default_call = bool(owner_phone)
+    tlg_call = params.get("call", default_call)
+    
+    # If call is requested but no number in target, use owner_phone
+    effective_target = channel_target
+    if tlg_call and owner_phone and not (channel_target and (channel_target.startswith("+") or channel_target.isdigit())):
+        effective_target = owner_phone
 
     if action == "status":
         pending = await db.get_pending_reminders_for_user(user_id, limit=50)
@@ -185,6 +203,15 @@ async def run_reminders_tool(
             message=resolved_message,
             run_at=resolved_run_at_iso,
         )
+        if tlg_call is not None:
+             # For reminders, tlg_call is stored in the cron_jobs table (one-shot job)
+             one_shot_id = decode_one_shot_reminder_id(reminder_id)
+             if one_shot_id is not None:
+                 await db.update_cron_job(one_shot_id, tlg_call=tlg_call)
+                 # If call enabled and target isn't a phone, update target in reminders table
+                 if tlg_call and owner_phone and not (channel_target and (channel_target.startswith("+") or channel_target.isdigit())):
+                     await db._conn.execute("UPDATE reminders SET channel_target = ? WHERE id = ?", (owner_phone, reminder_id))
+                     await db._conn.commit()
         if not ok:
             return f"Error: reminder id {reminder_id} not found (or update failed)."
 
@@ -243,8 +270,8 @@ async def run_reminders_tool(
             if run_at <= datetime.now(timezone.utc):
                 return "Error: run_at must be in the future."
             reminder_message = message or "Reminder"
-            target = channel_target or "web"
-            reminder_id = await schedule_reminder(user_id, channel, target, reminder_message, run_at)
+            target = effective_target or "web"
+            reminder_id = await schedule_reminder(user_id, channel, target, reminder_message, run_at, tlg_call=tlg_call)
             return json.dumps(
                 {
                     "ok": True,
@@ -280,8 +307,8 @@ async def run_reminders_tool(
 
         run_at = parsed["run_at"]
         reminder_message = parsed.get("message", "Reminder")
-        target = channel_target or "web"
-        reminder_id = await schedule_reminder(user_id, channel, target, reminder_message, run_at)
+        target = effective_target or "web"
+        reminder_id = await schedule_reminder(user_id, channel, target, reminder_message, run_at, tlg_call=tlg_call)
         return json.dumps(
             {
                 "ok": True,

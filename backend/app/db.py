@@ -262,6 +262,8 @@ class Db:
                 channel TEXT NOT NULL DEFAULT 'web',
                 channel_target TEXT NOT NULL DEFAULT '',
                 enabled INTEGER NOT NULL DEFAULT 1,
+                payload_kind TEXT NOT NULL DEFAULT 'agentturn',
+                tlg_call INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 UNIQUE (user_id, name)
             );
@@ -307,6 +309,27 @@ class Db:
             CREATE INDEX IF NOT EXISTS idx_subagent_status ON subagent_runs(status, created_at DESC);
         """)
         await self._conn.commit()
+        # Migrations
+        cursor = await self._conn.execute("PRAGMA table_info(cron_jobs)")
+        cron_cols = [row["name"] for row in await cursor.fetchall()]
+        if "payload_kind" not in cron_cols:
+            try:
+                await self._conn.execute(
+                    "ALTER TABLE cron_jobs ADD COLUMN payload_kind TEXT NOT NULL DEFAULT 'agentturn'"
+                )
+                await self._conn.commit()
+            except Exception as e:
+                self.logger.exception("Failed to add payload_kind column to cron_jobs: %s", e)
+
+        if "tlg_call" not in cron_cols:
+            try:
+                await self._conn.execute(
+                    "ALTER TABLE cron_jobs ADD COLUMN tlg_call INTEGER NOT NULL DEFAULT 0"
+                )
+                await self._conn.commit()
+            except Exception as e:
+                self.logger.exception("Failed to add tlg_call column to cron_jobs: %s", e)
+
         # Check if column exists before adding
         cursor = await self._conn.execute("PRAGMA table_info(user_settings)")
         columns = [row["name"] for row in await cursor.fetchall()]
@@ -844,7 +867,7 @@ class Db:
         await self._conn.commit()
 
     async def add_reminder(
-        self, user_id: str, channel: str, channel_target: str, message: str, run_at: str
+        self, user_id: str, channel: str, channel_target: str, message: str, run_at: str, tlg_call: bool = False
     ) -> int:
         if not self._conn:
             await self.connect()
@@ -860,6 +883,7 @@ class Db:
             tz=None,
             channel=channel or "web",
             channel_target=channel_target or "",
+            tlg_call=tlg_call,
         )
         return encode_one_shot_reminder_id(cron_id)
 
@@ -1110,16 +1134,19 @@ class Db:
         tz: str | None = None,
         channel: str = "web",
         channel_target: str = "",
+        payload_kind: str = "agentturn",
+        tlg_call: bool = False,
     ) -> int:
         """Insert or replace cron job by (user_id, name). Returns id."""
         if not self._conn:
             await self.connect()
         await self._conn.execute(
-            """INSERT INTO cron_jobs (user_id, name, cron_expr, tz, message, channel, channel_target, enabled, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, 1, datetime('now'))
+            """INSERT INTO cron_jobs (user_id, name, cron_expr, tz, message, channel, channel_target, enabled, payload_kind, tlg_call, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, datetime('now'))
                ON CONFLICT(user_id, name) DO UPDATE SET cron_expr=excluded.cron_expr, tz=excluded.tz,
-               message=excluded.message, channel=excluded.channel, channel_target=excluded.channel_target, enabled=1""",
-            (user_id, name.strip(), cron_expr.strip(), tz or "", message.strip(), channel, channel_target or ""),
+               message=excluded.message, channel=excluded.channel, channel_target=excluded.channel_target, enabled=1,
+               payload_kind=excluded.payload_kind, tlg_call=excluded.tlg_call""",
+            (user_id, name.strip(), cron_expr.strip(), tz or "", message.strip(), channel, channel_target or "", payload_kind, 1 if tlg_call else 0),
         )
         await self._conn.commit()
         cursor = await self._conn.execute("SELECT id FROM cron_jobs WHERE user_id = ? AND name = ?", (user_id, name.strip()))
@@ -1131,10 +1158,10 @@ class Db:
         if not self._conn:
             await self.connect()
         cursor = await self._conn.execute(
-            """SELECT id, name, cron_expr, tz, message, channel, channel_target, enabled, created_at
+            """SELECT id, name, cron_expr, tz, message, channel, channel_target, enabled, payload_kind, tlg_call, created_at
                FROM cron_jobs
-               WHERE user_id = ? AND lower(trim(cron_expr)) NOT LIKE '@at %'
-               ORDER BY name""",
+               WHERE user_id = ?
+               ORDER BY created_at DESC""",
             (user_id,),
         )
         return [dict(r) for r in await cursor.fetchall()]
@@ -1144,7 +1171,7 @@ class Db:
         if not self._conn:
             await self.connect()
         cursor = await self._conn.execute(
-            "SELECT id, user_id, name, cron_expr, tz, message, channel, channel_target FROM cron_jobs WHERE enabled = 1"
+            "SELECT id, user_id, name, cron_expr, tz, message, channel, channel_target, payload_kind, tlg_call FROM cron_jobs WHERE enabled = 1"
         )
         return [dict(r) for r in await cursor.fetchall()]
 
@@ -1163,6 +1190,11 @@ class Db:
         tz: str | None = None,
         message: str | None = None,
         name: str | None = None,
+        enabled: int | None = None,
+        channel: str | None = None,
+        channel_target: str | None = None,
+        payload_kind: str | None = None,
+        tlg_call: bool | None = None,
     ) -> bool:
         """Update an existing cron job by id. Only non-None fields are updated."""
         if not self._conn:
@@ -1184,6 +1216,22 @@ class Db:
         if message is not None:
             updates.append("message = ?")
             params.append(message.strip())
+        if enabled is not None:
+            updates.append("enabled = ?")
+            params.append(1 if enabled else 0)
+        if channel is not None:
+            updates.append("channel = ?")
+            params.append(channel.strip().lower())
+        if channel_target is not None:
+            updates.append("channel_target = ?")
+            params.append(channel_target.strip())
+        if payload_kind is not None:
+            updates.append("payload_kind = ?")
+            params.append(payload_kind.strip().lower())
+        if tlg_call is not None:
+            updates.append("tlg_call = ?")
+            params.append(1 if tlg_call else 0)
+
         if not updates:
             return True
         params.append(job_id)
