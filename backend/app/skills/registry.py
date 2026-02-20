@@ -5,17 +5,18 @@ from app.skills.server_status import ServerStatusSkill
 from app.skills.time import TimeSkill
 from app.skills.weather import WeatherSkill
 from app.skills.files import FilesSkill
-from app.skills.drive import DriveSkill
 from app.skills.rag import RagSkill
 from app.skills.web import GoogleSearchSkill
 from app.skills.spotify import SpotifySkill
-from app.skills.lyrics import LyricsSkill
 from app.skills.reminders import RemindersSkill
 from app.skills.self_awareness import SelfAwarenessSkill
 from app.skills.learning import LearningSkill
 from app.skills.audio_notes import AudioNotesSkill
 from app.skills.silly_gif import SillyGifSkill
 from app.skills.markdown_skill import MarkdownSkill
+from app.skills.vercel import VercelSkill
+from app.skills.github import GitHubSkill
+from app.skills.gog import GoogleWorkspaceSkill
 from app.workspace import discover_workspace_skills_runtime
 
 logger = logging.getLogger(__name__)
@@ -26,16 +27,17 @@ _BUILTIN_SKILLS: list[Skill] = [
     TimeSkill(),
     WeatherSkill(),
     FilesSkill(),
-    DriveSkill(),
     RagSkill(),
     GoogleSearchSkill(),
     SpotifySkill(),
-    LyricsSkill(),
     RemindersSkill(),
     SelfAwarenessSkill(),
     LearningSkill(),
     AudioNotesSkill(),
     SillyGifSkill(),
+    VercelSkill(),
+    GitHubSkill(),
+    GoogleWorkspaceSkill(),
 ]
 
 

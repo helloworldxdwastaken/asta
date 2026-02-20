@@ -68,3 +68,27 @@ esimo_dump.txt
 
 # Reference code (cloned for comparison; not part of Asta)
 reference/openclaw/
+.vercel
+
+# Personal data files
+asta.db
+backend.log.old
+*.db-journal
+
+# Build outputs
+MACAPP/build/
+
+# Generated/test files
+*.pyc
+__pycache__/
+node_modules/
+.DS_Store
+
+# Personal data
+asta.db
+backend.log.old
+*.db-journal
+
+# Build
+MACAPP/build/
+frontend/dist/

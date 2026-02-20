@@ -10,7 +10,7 @@ A personal AI workspace that runs on **web**, **Telegram**, and **WhatsApp (Beta
 
 - Multi-provider AI: Groq, Google Gemini, Claude, OpenAI, OpenRouter, and Ollama.
 - OpenClaw-style skill flow: model selects the best workspace skill and reads its `SKILL.md` on demand.
-- Built-in skills: time/weather, web search, lyrics, Spotify, reminders, audio notes, and background learning.
+- Built-in skills: time/weather, web search, Spotify, reminders, audio notes, background learning, and Google Workspace (Gmail, Calendar, Drive via gog CLI).
 - Clear split between **built-in Python skills** (core/reliable) and **workspace `SKILL.md` skills** (import/custom).
 - Unified memory: chat history, allowed local files, learned knowledge (RAG), and channel history.
 - Native setup: no Docker required.

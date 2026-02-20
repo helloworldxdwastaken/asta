@@ -4,6 +4,35 @@ All notable changes to Asta are documented here.
 
 ## [Unreleased]
 
+---
+
+## [1.3.18] - 2026-02-21
+
+### Added
+
+- **Google Workspace (gog) skill** — New skill for Gmail, Google Calendar, and Google Drive via `gog` CLI. Supports searching emails, listing/creating calendar events, and searching Drive files. Uses your authenticated `gog` account (currently `dronx.enmanuel@gmail.com`).
+- **Tool loop detection** — Added `backend/app/tool_loop_detection.py` to detect and warn when the model repeatedly calls the same tool with identical arguments (e.g., stuck in a read_file loop). Emits warning at 10 calls and critical at 20 calls.
+- **Enhanced Spotify service** — Spotify service now includes:
+  - Intent parsing with confidence scores (control/playlist/track/search)
+  - Personal playlist priority (your playlists get +30 score bonus)
+  - Album context playback (plays track in album context for natural continuation)
+  - Track recommendations queue (queues 12 similar tracks after playing)
+  - TTL caching (playlists cached for 10 minutes)
+
+### Changed
+
+- **Removed stub skills** — Removed `LyricsSkill` (unused, token waste) and `DriveSkill` (stub with no real functionality). Google Drive is now handled by the new gog skill.
+- **Skills cleanup** — Removed unused skills from registry to reduce overhead.
+
+### Removed
+
+- **LyricsSkill** — Removed due to low utility and token burn.
+- **DriveSkill** — Replaced by Google Workspace (gog) skill.
+
+---
+
+## [Unreleased]
+
 ### Changed
 
 - **Exec output handling (OpenClaw-style)** — Exec command output is capped at 200k chars (combined stdout+stderr, tail retained) and truncated to the last 20k chars with a “… (truncated)” prefix before being sent to the model. Applies to both the exec/bash tool result and the [ASTA_EXEC] fallback path. Prevents context overflow and unbounded memory from large command output.
