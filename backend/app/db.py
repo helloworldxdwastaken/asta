@@ -307,6 +307,17 @@ class Db:
             );
             CREATE INDEX IF NOT EXISTS idx_subagent_parent_created ON subagent_runs(parent_conversation_id, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_subagent_status ON subagent_runs(status, created_at DESC);
+            CREATE TABLE IF NOT EXISTS usage_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL DEFAULT 'default',
+                provider TEXT NOT NULL,
+                model TEXT NOT NULL DEFAULT '',
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_usage_provider_created ON usage_stats(provider, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_usage_user_created ON usage_stats(user_id, created_at DESC);
         """)
         await self._conn.commit()
         # Migrations
@@ -1871,6 +1882,46 @@ class Db:
         )
         await self._conn.commit()
         return cur.rowcount > 0
+
+    async def record_usage(
+        self,
+        provider: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        user_id: str = "default",
+    ) -> None:
+        """Record token usage for a provider call."""
+        if not self._conn:
+            await self.connect()
+        now = datetime.now(timezone.utc).isoformat()
+        await self._conn.execute(
+            "INSERT INTO usage_stats (user_id, provider, model, input_tokens, output_tokens, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, provider, model or "", input_tokens or 0, output_tokens or 0, now),
+        )
+        await self._conn.commit()
+
+    async def get_usage_stats(self, user_id: str = "default", days: int = 30) -> list[dict[str, Any]]:
+        """Return per-provider token usage totals for the last N days."""
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute(
+            """
+            SELECT provider,
+                   SUM(input_tokens) AS input_tokens,
+                   SUM(output_tokens) AS output_tokens,
+                   COUNT(*) AS calls,
+                   MAX(created_at) AS last_used
+            FROM usage_stats
+            WHERE user_id = ?
+              AND created_at >= datetime('now', ? || ' days')
+            GROUP BY provider
+            ORDER BY (SUM(input_tokens) + SUM(output_tokens)) DESC
+            """,
+            (user_id, f"-{days}"),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
 
     async def close(self) -> None:
         if self._conn:

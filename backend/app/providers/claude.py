@@ -152,6 +152,16 @@ class ClaudeProvider(BaseProvider):
             if tools:
                 create_kwargs["tools"] = tools
             r = await client.messages.create(**create_kwargs)
+            # Capture token usage
+            _usage = getattr(r, "usage", None)
+            _in = getattr(_usage, "input_tokens", 0) or 0
+            _out = getattr(_usage, "output_tokens", 0) or 0
+            if _in or _out:
+                try:
+                    from app.db import get_db
+                    await get_db().record_usage("claude", model, _in, _out)
+                except Exception:
+                    pass
             text_blocks: list[str] = []
             tool_calls: list[dict] = []
             for b in (r.content or []):
@@ -251,11 +261,19 @@ class ClaudeProvider(BaseProvider):
         tool_calls_list: list[dict] = []
         in_thinking = False
         cur_tool_id = cur_tool_name = cur_tool_args = ""
+        _stream_in_tokens = 0
+        _stream_out_tokens = 0
 
         try:
             stream = await client.messages.create(**create_kwargs)
             async for event in stream:
                 etype = getattr(event, "type", "")
+                if etype == "message_start":
+                    _u = getattr(getattr(event, "message", None), "usage", None)
+                    _stream_in_tokens = getattr(_u, "input_tokens", 0) or 0
+                elif etype == "message_delta":
+                    _u = getattr(event, "usage", None)
+                    _stream_out_tokens = getattr(_u, "output_tokens", 0) or 0
 
                 if etype == "content_block_start":
                     block = getattr(event, "content_block", None)
@@ -312,4 +330,10 @@ class ClaudeProvider(BaseProvider):
 
         content = "".join(content_parts).strip()
         await emit_stream_event(on_stream_event, {"type": "message_end", "content": content})
+        if _stream_in_tokens or _stream_out_tokens:
+            try:
+                from app.db import get_db
+                await get_db().record_usage("claude", model, _stream_in_tokens, _stream_out_tokens)
+            except Exception:
+                pass
         return ProviderResponse(content=content, tool_calls=tool_calls_list or None)

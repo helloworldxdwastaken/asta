@@ -412,10 +412,16 @@ async def get_available_models():
     return {
         "ollama": ollama_models,
         "openrouter": list(OPENROUTER_RECOMMENDED_MODELS),
-        "openai": [],  # Uses OpenAI API, user can specify any model
-        "claude": [],  # Uses Anthropic API, user can specify any model  
-        "google": [],   # Uses Google API, user can specify any model
-        "groq": [],    # Uses Groq API, user can specify any model
+        "claude": [
+            "claude-sonnet-4-6",
+            "claude-opus-4-6",
+            "claude-haiku-4-5-20251001",
+            "claude-3-5-sonnet-20241022",
+            "claude-3-5-haiku-20241022",
+        ],
+        "openai": [],
+        "google": [],
+        "groq": [],
     }
 
 
@@ -1322,3 +1328,13 @@ async def set_telegram_username(body: TelegramUsernameIn):
     
     set_env_value("ASTA_TELEGRAM_USERNAME", username, allow_empty=True)
     return {"ok": True, "username": username}
+
+
+@router.get("/settings/usage")
+@router.get("/api/settings/usage")
+async def get_usage_stats(user_id: str = "default", days: int = 30):
+    """Return per-provider/model token usage totals."""
+    db = get_db()
+    await db.connect()
+    rows = await db.get_usage_stats(user_id=user_id, days=days)
+    return {"usage": rows, "days": days}

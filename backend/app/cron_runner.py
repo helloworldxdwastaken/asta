@@ -99,37 +99,50 @@ async def _fire_cron_job_async(
         # User wants a voice call via Pingram (NotificationAPI)
         from app.reminders import trigger_pingram_voice_call
         from app.config import get_settings
-        
-        s = get_settings()
-        owner_phone = getattr(s, "asta_owner_phone_number", None)
-        
-        # Decide which number to call
-        target_to_call = channel_target
-        if owner_phone:
-            # If the target is a Telegram ID (often ~10 digits) or not clearly a phone number, use owner_phone
-            # WhatsApp targets are phone numbers. Telegram targets are chat IDs.
-            is_telegram = (channel == "telegram")
-            is_generic_digits = (channel_target.isdigit() and len(channel_target) <= 10)
-            if is_telegram or is_generic_digits or not (channel_target.startswith("+") or channel_target.isdigit()):
-                logger.debug("Cron job %s: Using owner_phone %s for voice call (target %s was %s)", 
-                             cron_job_id, owner_phone, channel, channel_target)
-                target_to_call = owner_phone
 
-        if target_to_call and (target_to_call.startswith("+") or target_to_call.isdigit()):
+        s = get_settings()
+        owner_phone = getattr(s, "asta_owner_phone_number", None) or ""
+
+        def _is_phone(s: str) -> bool:
+            """True if s looks like an international phone number, not a Telegram chat ID.
+            A valid phone number starts with '+' or is >= 11 digits (country code + number).
+            Telegram chat IDs are <= 10 digits and don't start with '+'.
+            """
+            if not s:
+                return False
+            if s.startswith("+"):
+                return True
+            # All-digit string: require >= 11 chars (country code + 10-digit number = min 11)
+            return s.isdigit() and len(s) >= 11
+
+        # Prefer owner_phone for all cases except when channel_target is already a real phone number
+        # (e.g. WhatsApp targets start with country code). Telegram chat IDs are never phone numbers.
+        if owner_phone and _is_phone(owner_phone):
+            target_to_call = owner_phone
+            logger.debug("Cron job %s: Using owner_phone for voice call", cron_job_id)
+        elif _is_phone(channel_target):
+            target_to_call = channel_target
+            logger.debug("Cron job %s: Using channel_target %s for voice call", cron_job_id, channel_target)
+        else:
+            target_to_call = ""
+
+        if target_to_call:
             logger.info("Cron job %s: Triggering Pingram Voice Call to %s", cron_job_id, target_to_call)
             try:
-                # We use the job message as the voice payload
                 call_msg = message or f"This is Asta calling for your job {job.get('name') or cron_job_id}"
                 await trigger_pingram_voice_call(target_to_call, call_msg)
             except Exception as e:
                 logger.warning("Failed to trigger Pingram call for job %s: %s", cron_job_id, e)
         else:
-            logger.warning("Cron job %s: Call enabled but target %s doesn't look like a phone number", cron_job_id, target_to_call)
-            # Fallback to placeholder notification
+            logger.warning(
+                "Cron job %s: Voice call enabled but no phone number configured. "
+                "Set your phone number in Channels → Voice Calls.",
+                cron_job_id,
+            )
             try:
-                await send_notification(channel, channel_target, "📞 **INCOMING ASTA CALL...** (Setup phone number in Settings)")
+                await send_notification(channel, channel_target, "📞 **INCOMING ASTA CALL...** (Set phone number in Channels → Voice Calls)")
             except Exception as e:
-                logger.warning("Failed to trigger call placeholder for job %s: %s", cron_job_id, e)
+                logger.warning("Failed to send call placeholder for job %s: %s", cron_job_id, e)
 
     if is_one_shot_cron_expr(cron_expr) or payload_kind not in ("agentturn",):
         # One-shot reminders or jobs explicitly set to notify/systemevent should not call handle_message as an AI turn.

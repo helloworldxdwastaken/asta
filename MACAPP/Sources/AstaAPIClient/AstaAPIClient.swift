@@ -606,6 +606,13 @@ public struct AstaAPIClient: Sendable {
         _ = try await session.data(for: req)
     }
 
+    public func usageStats(days: Int = 30) async throws -> AstaUsageStatsResponse {
+        var comps = URLComponents(url: baseURL.appending(path: "api/settings/usage"), resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "days", value: "\(days)")]
+        let (data, _) = try await session.data(from: comps.url!)
+        return try JSONDecoder().decode(AstaUsageStatsResponse.self, from: data)
+    }
+
     public func uploadSkillZip(fileURL: URL) async throws -> AstaSkillUploadResult {
         let url = baseURL.appending(path: "api/skills/upload")
         let boundary = "AstaBoundary-\(UUID().uuidString)"
@@ -1077,6 +1084,20 @@ public struct AstaConversationItem: Codable, Sendable, Identifiable {
     public let title: String
     public let created_at: String
     public let last_active: String
+}
+
+public struct AstaUsageRow: Codable, Sendable, Identifiable {
+    public var id: String { provider }
+    public let provider: String
+    public let input_tokens: Int
+    public let output_tokens: Int
+    public let calls: Int
+    public let last_used: String?
+}
+
+public struct AstaUsageStatsResponse: Codable, Sendable {
+    public let usage: [AstaUsageRow]
+    public let days: Int
 }
 
 // MARK: - Private request body types

@@ -2,6 +2,19 @@
 
 All notable changes to Asta are documented here.
 
+## [1.3.21] - 2026-02-23
+
+### Fixed
+
+- **Cron voice calls not triggering** — Fixed phone number detection logic in cron runner. Previously, any all-digit string (including Telegram chat IDs) passed the phone check. Now requires `+` prefix or ≥ 11 digits (international format). If no valid phone number is found, logs a clear warning instead of silently calling the wrong number.
+- **Claude model picker in macOS app** — Backend now returns Claude model presets from `/api/settings/available-models` (was returning empty list). Models tab in macOS app now shows a picker for Claude instead of a free-text field: `claude-sonnet-4-6`, `claude-opus-4-6`, `claude-haiku-4-5-20251001`, plus Claude 3.5 Sonnet/Haiku for stability.
+
+### Added
+
+- **Token usage tracking (Claude)** — Claude provider now captures `input_tokens` / `output_tokens` from both non-stream and stream responses and writes them to a new `usage_stats` table. New endpoint `GET /api/settings/usage?days=30` returns per-provider totals. macOS Settings → Models tab now shows a "Token usage (last 30 days)" table with Input / Output / Calls columns.
+
+---
+
 ## [1.3.20] - 2026-02-23
 
 ### Added

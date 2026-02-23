@@ -230,6 +230,9 @@ struct GeneralSettingsTab: View {
 
 struct ModelsSettingsTab: View {
     @ObservedObject var appState: AppState
+    @State private var usageRows: [AstaUsageRow] = []
+    @State private var usageLoading = true
+
     var body: some View {
         Form {
             Section {
@@ -256,9 +259,54 @@ struct ModelsSettingsTab: View {
             } else {
                 Section { ProgressView().frame(maxWidth: .infinity) }
             }
+
+            // Token usage (last 30 days)
+            Section {
+                if usageLoading {
+                    ProgressView().frame(maxWidth: .infinity)
+                } else if usageRows.isEmpty {
+                    Text("No usage data yet. Counts appear after conversations.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 4) {
+                        GridRow {
+                            Text("Provider").font(.caption).foregroundStyle(.secondary).gridColumnAlignment(.leading)
+                            Text("Input").font(.caption).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+                            Text("Output").font(.caption).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+                            Text("Calls").font(.caption).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+                        }
+                        Divider()
+                        ForEach(usageRows) { row in
+                            GridRow {
+                                Text(row.provider).font(.system(size: 12))
+                                Text(fmtTokens(row.input_tokens)).font(.system(size: 12)).gridColumnAlignment(.trailing)
+                                Text(fmtTokens(row.output_tokens)).font(.system(size: 12)).gridColumnAlignment(.trailing)
+                                Text("\(row.calls)").font(.system(size: 12)).gridColumnAlignment(.trailing)
+                            }
+                        }
+                    }
+                }
+            } header: { Text("Token usage (last 30 days)") }
         }
         .formStyle(.grouped)
+        .task { await loadUsage() }
     }
+
+    private func fmtTokens(_ n: Int) -> String {
+        if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
+        if n >= 1_000 { return String(format: "%.1fK", Double(n) / 1_000) }
+        return "\(n)"
+    }
+
+    private func loadUsage() async {
+        guard appState.connected else { usageLoading = false; return }
+        usageLoading = true
+        if let resp = try? await appState.client.usageStats(days: 30) {
+            usageRows = resp.usage
+        }
+        usageLoading = false
+    }
+
     private func modelOptions(for provider: String) -> [String] {
         guard let a = appState.availableModels else { return [] }
         switch provider {
