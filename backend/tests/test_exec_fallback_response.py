@@ -167,8 +167,9 @@ async def test_files_write_empty_model_reply_surfaces_tool_output_excerpt():
             provider_name="openai",
         )
 
-    assert "I ran Files (write) but the model didn't return a reply." in reply
-    assert "/Users/test/workspace/notes/work-door.md" in reply
+    assert "I used Files (write)" in reply
+    assert "Tool output" not in reply
+    assert "/Users/test/workspace/notes/work-door.md" not in reply
     assert "didn't get a reply back" not in reply.lower()
 
 

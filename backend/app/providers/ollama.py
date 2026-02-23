@@ -162,12 +162,41 @@ def _from_ollama_tool_calls(raw_tool_calls: list[Any] | None) -> list[dict] | No
     return out or None
 
 
+# Models that should be automatically pulled if not available
+_AUTO_PULL_MODELS: tuple[str, ...] = (
+    "minimax-m2.5:cloud",
+)
+
+
+async def _ensure_model_pulled(model: str, base_url: str) -> None:
+    """Ensure a model is pulled in Ollama. Skip for cloud models as they're remote."""
+    # Cloud models (ending with :cloud) don't need pulling - they're accessed remotely
+    if model.endswith(":cloud"):
+        return
+
+    installed = await ollama_list_models(base_url=base_url)
+    if model in installed:
+        return
+
+    # Try to pull the model
+    try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            await client.post(f"{base_url}/api/pull", json={"model": model})
+            logger.info(f"Pulled Ollama model: {model}")
+    except Exception as e:
+        logger.warning(f"Failed to pull Ollama model {model}: {e}")
+
+
 async def _resolve_models_for_request(
     *,
     model_raw: str | None,
     need_tools: bool,
     base_url: str,
 ) -> tuple[list[str], str | None]:
+    # Check if we need to pull any models proactively
+    for model in _AUTO_PULL_MODELS:
+        await _ensure_model_pulled(model, base_url)
+
     installed = await ollama_list_models(base_url=base_url)
     explicit = _parse_model_candidates(model_raw)
     if explicit:
@@ -256,6 +285,10 @@ class OllamaProvider(BaseProvider):
             }
             if ollama_tools:
                 payload["tools"] = ollama_tools
+            
+            # Enable thinking for Qwen2.5/3 models
+            if "qwen" in model.lower():
+                payload["thinking"] = {"type": "enabled"}
 
             try:
                 async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_SECONDS) as client:
@@ -269,7 +302,12 @@ class OllamaProvider(BaseProvider):
                     break
                 data = resp.json() if resp.content else {}
                 message = data.get("message") if isinstance(data, dict) else {}
+                # Extract thinking field and convert to XML tags (like OpenRouter does)
+                thinking = str((message or {}).get("thinking") or "")
                 content = str((message or {}).get("content") or "").strip()
+                # Prepend thinking with XML tags if present
+                if thinking:
+                    content = f"<think>{thinking}</think>\n{content}"
                 tool_calls = _from_ollama_tool_calls((message or {}).get("tool_calls"))
                 return ProviderResponse(content=content, tool_calls=tool_calls)
             except Exception as e:
@@ -339,8 +377,15 @@ class OllamaProvider(BaseProvider):
             }
             if ollama_tools:
                 payload["tools"] = ollama_tools
+            
+            # Enable thinking for Qwen2.5/3 models
+            if "qwen" in model.lower():
+                payload["thinking"] = {"type": "enabled"}
+            
             content_parts: list[str] = []
             raw_tool_calls: list[Any] = []
+            # Track if we're in a thinking block for streaming
+            is_thinking = False
             try:
                 async with httpx.AsyncClient(timeout=_STREAM_TIMEOUT_SECONDS) as client:
                     async with client.stream("POST", f"{base}/api/chat", json=payload) as resp:
@@ -357,15 +402,40 @@ class OllamaProvider(BaseProvider):
                                 logger.debug("Skipping malformed Ollama stream line: %s", line[:120])
                                 continue
                             msg = chunk.get("message") if isinstance(chunk, dict) else {}
+                            
+                            # Extract thinking delta for streaming (like OpenRouter does)
+                            thinking_delta = str((msg or {}).get("thinking") or "")
+                            if thinking_delta:
+                                if not is_thinking:
+                                    # Start thinking block
+                                    content_parts.append("<think>")
+                                    await emit_text_delta(on_text_delta, "<think>")
+                                    is_thinking = True
+                                content_parts.append(thinking_delta)
+                                await emit_text_delta(on_text_delta, thinking_delta)
+                            
                             delta = str((msg or {}).get("content") or "")
                             if delta:
+                                if is_thinking:
+                                    # Close thinking block before content
+                                    content_parts.append("</think>")
+                                    await emit_text_delta(on_text_delta, "</think>")
+                                    is_thinking = False
                                 content_parts.append(delta)
                                 await emit_text_delta(on_text_delta, delta)
+                            
                             tc = (msg or {}).get("tool_calls")
                             if isinstance(tc, list):
                                 raw_tool_calls.extend(tc)
                             if chunk.get("done"):
                                 break
+                
+                # Close thinking tag if stream ended while thinking
+                if is_thinking:
+                    content_parts.append("</think>")
+                    if on_text_delta:
+                        await emit_text_delta(on_text_delta, "</think>")
+                
                 return ProviderResponse(
                     content="".join(content_parts).strip(),
                     tool_calls=_from_ollama_tool_calls(raw_tool_calls),

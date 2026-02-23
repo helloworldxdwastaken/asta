@@ -272,8 +272,8 @@ def _get_spotify_section(extra: dict) -> list[str]:
         parts.append("The user asked to play something but has not connected their Spotify account. Reply with ONE short sentence: tell them to go to Settings → Spotify and click 'Connect Spotify' (one-time). After they connect, Asta WILL start playback on their devices — do NOT say you cannot control Spotify or that you can only give commands.")
         parts.append("")
     elif extra.get("spotify_play_connected") is True:
-        parts.append("--- Spotify play ---")
-        parts.append("The user HAS connected their Spotify account for playback. Do NOT tell them to connect or reconnect. Instead, either list devices to choose from or confirm playback started, based on the context above.")
+        parts.append("--- Spotify ---")
+        parts.append("The user has connected their Spotify account. Playback and search are available. Do NOT tell them to connect or reconnect. If they asked whether Spotify is connected, confirm it is. If they asked to play something, list available devices or confirm playback started based on the context above.")
         parts.append("")
     elif extra.get("spotify_devices") is not None and len(extra.get("spotify_devices", [])) == 0 and extra.get("spotify_play_track_uri"):
         parts.append("--- Spotify play ---")
@@ -361,4 +361,143 @@ def _get_learning_status_section(extra: dict) -> list[str]:
         parts.append("--- Learn about (started) ---")
         parts.append(f"You started a background learning job: topic '{topic}' for {duration} minutes. Reply in one short sentence that you're learning about it and will notify them when done (e.g. 'I'll learn about {topic} for {duration} minutes and ping you when I'm done.'). Do NOT explain how RAG or search works.")
         parts.append("")
+    return parts
+
+
+def _get_vercel_section(extra: dict) -> list[str]:
+    parts = []
+    if not extra:
+        return parts
+    
+    # CLI not installed
+    if extra.get("vercel_needs_cli"):
+        parts.append("--- Vercel (CLI) ---")
+        parts.append(f"Error: {extra.get('vercel_error', 'CLI not installed')}")
+        parts.append("")
+        parts.append("Setup:")
+        parts.append("1. Install: npm i -g vercel")
+        parts.append("2. Authenticate: vercel login")
+        parts.append("")
+        return parts
+    
+    # Check if user needs to authenticate
+    if extra.get("vercel_needs_auth"):
+        parts.append("--- Vercel (CLI) ---")
+        parts.append(f"Error: {extra.get('vercel_error', 'Not authenticated')}")
+        if extra.get("vercel_auth_instructions"):
+            parts.append("")
+            parts.append("Setup:")
+            for line in extra["vercel_auth_instructions"].split("\n"):
+                parts.append(line)
+        parts.append("")
+        return parts
+    
+    err = extra.get("vercel_error")
+    if err:
+        parts.append("--- Vercel ---")
+        parts.append(f"Error: {err}")
+        if extra.get("vercel_command"):
+            parts.append(f"Command: {extra['vercel_command']}")
+        parts.append("")
+        return parts
+    
+    # CLI output (new format)
+    if extra.get("vercel_output"):
+        parts.append("--- Vercel ---")
+        parts.append(extra["vercel_output"])
+        parts.append("")
+        if extra.get("vercel_command"):
+            parts.append(f"(Ran: {extra['vercel_command']})")
+            parts.append("")
+        return parts
+    
+    # Legacy format (API-based)
+    if extra.get("vercel_summary"):
+        parts.append("--- Vercel ---")
+        parts.append(extra["vercel_summary"])
+        parts.append("")
+    
+    if extra.get("vercel_projects"):
+        parts.append("Vercel Projects:")
+        for p in extra["vercel_projects"]:
+            name = p.get("name", "Unknown")
+            state = p.get("latestDeployment", "N/A")
+            parts.append(f"  - {name}: {state}")
+        parts.append("")
+    
+    if extra.get("vercel_deployments"):
+        parts.append("Recent Deployments:")
+        for d in extra["vercel_deployments"]:
+            name = d.get("name", "Unknown")
+            state = d.get("state", "unknown")
+            uid = d.get("uid", "")[:8]
+            parts.append(f"  - {name} ({state}) - {uid}")
+        parts.append("")
+    
+    if extra.get("vercel_deployment"):
+        d = extra["vercel_deployment"]
+        parts.append("Deployment Details:")
+        parts.append(f"  Name: {d.get('name')}")
+        parts.append(f"  State: {d.get('state')}")
+        if d.get("url"):
+            parts.append(f"  🔗 URL: {d.get('url')}")
+            parts.append("IMPORTANT: Always include the deployment URL in your response to the user!")
+        if d.get("error"):
+            parts.append(f"  Error: {d.get('error')}")
+        parts.append("")
+    
+    if extra.get("vercel_cancelled"):
+        parts.append(f"✓ Deployment {extra['vercel_cancelled']} has been cancelled.")
+        parts.append("")
+    
+    return parts
+
+
+def _get_github_section(extra: dict) -> list[str]:
+    parts = []
+    if not extra:
+        return parts
+    
+    # CLI not installed
+    if extra.get("github_needs_cli"):
+        parts.append("--- GitHub (CLI) ---")
+        parts.append(f"Error: {extra.get('github_error', 'CLI not installed')}")
+        parts.append("")
+        parts.append("Setup:")
+        parts.append("1. Install GitHub CLI: brew install gh")
+        parts.append("2. Authenticate: gh auth login")
+        parts.append("")
+        return parts
+    
+    # Check if user needs to authenticate
+    if extra.get("github_needs_auth"):
+        parts.append("--- GitHub (CLI) ---")
+        parts.append(f"Error: {extra.get('github_error', 'Not authenticated')}")
+        if extra.get("github_auth_instructions"):
+            parts.append("")
+            parts.append("Setup:")
+            for line in extra["github_auth_instructions"].split("\n"):
+                parts.append(line)
+        parts.append("")
+        return parts
+    
+    err = extra.get("github_error")
+    if err:
+        parts.append("--- GitHub ---")
+        parts.append(f"Error: {err}")
+        if extra.get("github_command"):
+            parts.append(f"Command: {extra['github_command']}")
+        parts.append("")
+        return parts
+    
+    # CLI output (new format)
+    if extra.get("github_output"):
+        parts.append("--- GitHub ---")
+        parts.append(extra["github_output"])
+        parts.append("")
+        if extra.get("github_command"):
+            parts.append(f"(Ran: {extra['github_command']})")
+            parts.append("")
+        return parts
+    
     return parts

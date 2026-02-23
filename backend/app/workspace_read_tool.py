@@ -5,8 +5,9 @@ import json
 from pathlib import Path
 
 from app.config import get_settings
+from app.adaptive_paging import compute_page_chars, truncate_with_offset_hint, DEFAULT_PAGE_CHARS
 
-MAX_READ_CHARS = 60_000
+MAX_READ_CHARS = DEFAULT_PAGE_CHARS  # legacy alias; real limit is now adaptive
 
 
 def _workspace_root() -> Path | None:
@@ -38,8 +39,23 @@ def _resolve_workspace_path(raw_path: str) -> tuple[Path | None, str | None]:
     return candidate, None
 
 
-async def read_workspace_file(path: str, max_chars: int = MAX_READ_CHARS) -> str:
-    """Read a workspace file by absolute or workspace-relative path."""
+async def read_workspace_file(
+    path: str,
+    max_chars: int | None = None,
+    offset: int = 0,
+    *,
+    model: str | None = None,
+    provider: str | None = None,
+) -> str:
+    """Read a workspace file by absolute or workspace-relative path with adaptive paging.
+
+    Args:
+        path:      Workspace-relative or absolute path.
+        max_chars: Hard cap on output chars. If None, derives from model context window.
+        offset:    Character offset to start reading from (for pagination).
+        model:     Model name, used to auto-compute adaptive page cap.
+        provider:  Provider name, used to refine context window lookup.
+    """
     resolved, err = _resolve_workspace_path(path)
     if err:
         return f"Error: {err}"
@@ -49,9 +65,10 @@ async def read_workspace_file(path: str, max_chars: int = MAX_READ_CHARS) -> str
         content = resolved.read_text(encoding="utf-8", errors="replace")
     except Exception as e:
         return f"Error reading file: {e}"
-    if len(content) > max_chars:
-        content = content[:max_chars] + "\n... (truncated)"
-    return content
+    page_chars = max_chars if max_chars and max_chars > 0 else compute_page_chars(model, provider)
+    if offset > 0:
+        content = content[offset:]
+    return truncate_with_offset_hint(content, max_chars=page_chars, offset=offset)
 
 
 def get_workspace_read_tool_openai_def() -> list[dict]:

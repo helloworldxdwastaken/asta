@@ -10,6 +10,7 @@ const PROVIDER_LOGOS: Record<string, { url: string; initial: string }> = {
   claude: { url: "https://anthropic.com/favicon.ico", initial: "C" },
   openai: { url: "https://openai.com/favicon.ico", initial: "O" },
   openrouter: { url: "https://openrouter.ai/favicon.ico", initial: "R" },
+  ollama: { url: "https://ollama.com/favicon.ico", initial: "O" },
   giphy: { url: "https://giphy.com/favicon.ico", initial: "G" },
   notion: { url: "https://www.notion.so/images/favicon.ico", initial: "N" },
 };
@@ -677,7 +678,21 @@ function DefaultAiSelect() {
   );
 }
 
-function FallbackProviderSelect() {
+const MAIN_PROVIDER_GET_KEY_URL: Record<MainProviderId, string> = {
+  claude: "https://console.anthropic.com/settings/keys",
+  ollama: "",
+  openrouter: "https://openrouter.ai/keys",
+};
+
+function FallbackProviderSelect({
+  keys = {},
+  setKeys,
+  keysStatus = {},
+}: {
+  keys?: Record<string, string>;
+  setKeys?: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  keysStatus?: Record<string, boolean>;
+} = {}) {
   const [flow, setFlow] = useState<ProviderFlow | null>(null);
   const [models, setModels] = useState<Record<string, string>>({});
   const [defaults, setDefaults] = useState<Record<string, string>>({});
@@ -686,6 +701,7 @@ function FallbackProviderSelect() {
   const [savingProvider, setSavingProvider] = useState<MainProviderId | null>(null);
   const [savingModelFor, setSavingModelFor] = useState<MainProviderId | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const keyFieldByProvider: Partial<Record<MainProviderId, string>> = { claude: "anthropic_api_key", openrouter: "openrouter_api_key" };
 
   const load = async () => {
     const [flowResp, modelsResp, availableResp] = await Promise.allSettled([
@@ -753,9 +769,6 @@ function FallbackProviderSelect() {
 
   return (
     <div className="settings-block-top">
-      <p className="help settings-help-bottom-sm">
-        Fixed provider priority (OpenClaw style). The order is locked for now, and you can enable/disable each provider.
-      </p>
       <div className="provider-cards">
         {flow.providers.map((entry) => {
           const id = entry.provider as MainProviderId;
@@ -763,6 +776,8 @@ function FallbackProviderSelect() {
           const claudePresetValue = isKnownClaudePreset
             ? (models[id] ?? "")
             : ((models[id] ?? "").trim() ? CLAUDE_CUSTOM_MODEL : "");
+          const keyField = keyFieldByProvider[id];
+          const keySet = keyField ? keysStatus[keyField] : false;
           return (
             <div key={"flow-provider-" + id} className="provider-card">
               <div className="provider-card-header">
@@ -771,9 +786,32 @@ function FallbackProviderSelect() {
                   <span className="provider-card-title">
                     {entry.position}. {entry.label}
                   </span>
-                  {entry.connected ? <span className="status-ok">Connected</span> : <span className="status-pending">Not connected</span>}
+                  {entry.connected ? <span className="status-ok">Connected</span> : keySet ? <span className="status-ok">Key set</span> : <span className="status-pending">Not connected</span>}
                 </div>
               </div>
+              {keyField && setKeys && (
+                <div className="provider-card-fields" style={{ marginBottom: "0.75rem" }}>
+                  <div className="field">
+                    <div className="field-row">
+                      <label className="label" htmlFor={"flow-key-" + id}>API key</label>
+                      {keysStatus[keyField] && <span className="status-ok">Set</span>}
+                    </div>
+                    <div className="actions settings-inline-controls settings-actions-wrap">
+                      <input
+                        id={"flow-key-" + id}
+                        type="password"
+                        placeholder={keysStatus[keyField] ? "Leave blank to keep current" : "Paste key"}
+                        value={keys[keyField] ?? ""}
+                        onChange={(e) => setKeys((k) => ({ ...k, [keyField]: e.target.value }))}
+                        className="input settings-input-flex"
+                      />
+                    </div>
+                    <p className="help provider-card-get-key">
+                      Get your API key: <a href={MAIN_PROVIDER_GET_KEY_URL[id]} target="_blank" rel="noreferrer" className="link">{MAIN_PROVIDER_GET_KEY_URL[id]}</a>
+                    </p>
+                  </div>
+                </div>
+              )}
               <div className="field-row">
                 <span className="help">
                   {entry.auto_disabled
@@ -1108,18 +1146,28 @@ export default function Settings() {
             <div className="accordion">
               <details open>
                 <summary>
-                  <span>API keys</span>
-                  <span className="acc-meta">Providers & channels</span>
+                  <span>API keys & default AI</span>
+                  <span className="acc-meta">Connect services and choose who answers</span>
                 </summary>
                 <div className="acc-body">
                   <p className="help settings-help-bottom">
-                    Keys are stored in your local database (<code>backend/asta.db</code>) and are never committed to git. Restart the backend if you change the Telegram token.
+                    API keys let Asta use each service (Claude, OpenAI, etc.). Pick a <strong>default AI</strong> for chat and channels, then add keys and turn providers on or off. Keys are stored locally (<code>backend/asta.db</code>). Restart the backend if you change the Telegram token.
                   </p>
                   <RestartBackendButton />
 
-                  <h3 className="settings-section-title">AI providers</h3>
+                  <h3 className="settings-section-title">Default AI</h3>
+                  <p className="help settings-help-bottom-sm">Which AI answers by default in Chat, WhatsApp, and Telegram.</p>
+                  <DefaultAiSelect />
+
+                  <h3 className="settings-section-title settings-subhead-gap">Main AI providers (Claude, Ollama, OpenRouter)</h3>
+                  <p className="help settings-help-bottom-sm">
+                    Order is fixed. Add your API key for each, then enable or disable. Ollama needs no key (runs locally).
+                  </p>
+                  <FallbackProviderSelect keys={keys} setKeys={setKeys} keysStatus={keysStatus} />
+
+                  <h3 className="settings-section-title">More AI services (Groq, Google, OpenAI)</h3>
                   <div className="provider-cards">
-                    {AI_PROVIDER_ENTRIES.map((entry) => (
+                    {AI_PROVIDER_ENTRIES.filter((e) => e.id !== "claude" && e.id !== "openrouter").map((entry) => (
                       <div key={entry.id} className="provider-card">
                         <div className="provider-card-header">
                           <ProviderLogo logoKey={entry.logoKey} size={44} />
@@ -1163,7 +1211,7 @@ export default function Settings() {
                     ))}
                   </div>
 
-                  <h3 className="settings-section-title">Channels & extras</h3>
+                  <h3 className="settings-section-title">Channels & other (Telegram, Giphy, Notion…)</h3>
                   <div className="provider-cards provider-cards--small">
                     {OTHER_KEYS.map((entry) => (
                       <div key={entry.id} className="provider-card">
@@ -1202,19 +1250,6 @@ export default function Settings() {
                     </button>
                   </div>
                   {message && <div className={message.startsWith("Error:") ? "alert alert-error settings-alert-top" : "alert settings-alert-top"}>{message}</div>}
-                </div>
-              </details>
-
-              <details>
-                <summary>
-                  <span>Default AI</span>
-                  <span className="acc-meta">Used across chat + channels</span>
-                </summary>
-                <div className="acc-body">
-                  <p className="help">Asta uses this provider by default for Chat, WhatsApp, and Telegram.</p>
-                  <DefaultAiSelect />
-                  <h3 className="settings-subhead settings-subhead-gap">Provider priority (fixed)</h3>
-                  <FallbackProviderSelect />
                 </div>
               </details>
             </div>

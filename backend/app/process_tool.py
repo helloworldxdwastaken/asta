@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.exec_tool import (
-    MAX_OUTPUT_BYTES,
+    OUTPUT_CAP_CHARS,
     MAX_TIMEOUT_SECONDS,
     build_exec_runtime_argv,
     prepare_allowlisted_command,
@@ -227,9 +227,9 @@ def _append_output(s: ProcessSession, text: str, stream: str) -> None:
     else:
         s.pending_stdout.append(text)
     merged = s.aggregated + text
-    if len(merged) > MAX_OUTPUT_BYTES:
+    if len(merged) > OUTPUT_CAP_CHARS:
         s.truncated = True
-        merged = merged[-MAX_OUTPUT_BYTES:]
+        merged = merged[-OUTPUT_CAP_CHARS:]
     s.aggregated = merged
     s.tail = merged[-DEFAULT_TAIL_CHARS:] if len(merged) > DEFAULT_TAIL_CHARS else merged
 

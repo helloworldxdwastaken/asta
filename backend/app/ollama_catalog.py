@@ -16,9 +16,11 @@ _TOOL_MODELS_CACHE_TTL_SECONDS = 45.0
 _tool_models_cache: dict[str, tuple[float, list[str]]] = {}
 
 _OLLAMA_TOOL_MODEL_PREFERENCE_PREFIXES: tuple[str, ...] = (
+    "minimax-m2.5",
     "gpt-oss",
     "llama3.3",
     "qwen2.5-coder",
+    "qwen2.5",
     "qwen3",
     "deepseek-r1",
     "glm",

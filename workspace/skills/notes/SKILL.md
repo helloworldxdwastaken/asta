@@ -4,9 +4,9 @@ description: Save and manage quick notes, meeting notes, or lists in the workspa
 metadata: {"clawdbot":{"emoji":"📝","os":["darwin","linux"]}}
 ---
 
-# Notes (OpenClaw-style)
+# Notes
 
-Save notes and lists to **`notes/`** (workspace-relative) so they persist and can be read later. Uses the same file-creation convention as the files skill.
+Save notes and lists to `notes/` in the workspace so they persist and can be read later.
 
 ## When to use
 
@@ -15,38 +15,42 @@ Save notes and lists to **`notes/`** (workspace-relative) so they persist and ca
 
 ## How to save a note
 
-1. **Single note** – Use the file-creation block with a path under `notes/`:
-   - `[ASTA_WRITE_FILE: notes/quick-note.md]`
-   - content here
-   - `[/ASTA_WRITE_FILE]`
+Call the **`write_file`** tool with:
+- `path`: workspace-relative like `notes/shopping-list.md` or `notes/2024-02-13.md`
+- `content`: the note content in markdown
 
-2. **Named note** – If the user gives a title, use a sanitized filename (lowercase, hyphens):
-   - "Note: Shopping list" → `notes/shopping-list.md`
-   - "Save as meeting-2024-02" → `notes/meeting-2024-02.md`
+**Naming rules:**
+- Named note (user gives title): sanitize to lowercase + hyphens → `notes/shopping-list.md`
+- Date-based (no title): `notes/note-YYYY-MM-DD.md`
+- Meeting notes: `notes/meeting-YYYY-MM-DD.md`
 
-3. **Appending** – If the user says "add to my notes" and you already have a note file, you cannot append via this convention (only full-file write). Prefer creating a new file like `notes/note-2024-02-13.md` or suggest they ask to "read my note X" and then "add Y to it" (you would need to output a new file with old content + new).
+## Examples
 
-4. **Date in filename** – For quick notes without a name, use the date: `notes/2024-02-13.md` or `notes/note-2024-02-13.md`.
-
-## Example
-
-User: "Note that we're meeting Tuesday 3pm."
-
-Output the content, then add:
+**Quick note:**
 ```
-[ASTA_WRITE_FILE: notes/2024-02-13.md]
-# Quick note
-- Meeting Tuesday 3pm
-[/ASTA_WRITE_FILE]
+write_file(path="notes/note-2024-02-13.md", content="# Quick note\n- Meeting Tuesday 3pm")
 ```
 
-After the block is processed, Asta will confirm e.g. "I've saved that to `…/workspace/notes/2024-02-13.md`."
+**Shopping list:**
+```
+write_file(path="notes/shopping-list.md", content="# Shopping list\n- Milk\n- Bananas")
+```
 
 ## Reading notes
 
-If the user asks "what's in my notes" or "read my note about X", use the **files** skill context: list or read from `notes/` (do **not** prefix with `workspace/` in tool paths). You can describe how to open the file in the panel or summarize if you have path access.
+If the user asks "what's in my notes" or "read my note about X":
+- Use `list_directory` on the workspace `notes/` folder
+- Use `read_file` to open a specific note
 
-## Requirements
+## Appending to a note
 
-- Workspace must be set (default: project `workspace/`). Notes are stored under `workspace/notes/` on disk, but tool paths should be workspace-relative like `notes/my-note.md`.
-- The files skill’s file-creation convention is used; no extra install.
+The `write_file` tool overwrites the file. To append:
+1. `read_file` the existing note
+2. Combine old content + new content
+3. `write_file` with the combined content
+
+## Notes
+
+- Workspace-relative paths resolve to `workspace/notes/` on disk.
+- Parent directories are created automatically.
+- No extra binaries required.

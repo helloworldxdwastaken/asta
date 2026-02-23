@@ -14,11 +14,12 @@ from bs4 import BeautifulSoup
 from app.config import get_settings
 from app.memories import load_user_memories
 from app.search_web import search_web
+from app.adaptive_paging import compute_page_chars, truncate_with_offset_hint, DEFAULT_PAGE_CHARS
 
 DEFAULT_WEB_SEARCH_COUNT = 5
 MAX_WEB_SEARCH_COUNT = 10
 DEFAULT_WEB_FETCH_MAX_CHARS = 12_000
-MAX_WEB_FETCH_CHARS_CAP = 60_000
+MAX_WEB_FETCH_CHARS_CAP = DEFAULT_PAGE_CHARS  # now adaptive; was hard-coded 60k
 DEFAULT_WEB_FETCH_TIMEOUT_SECONDS = 20
 
 DEFAULT_MEMORY_RESULTS = 5
@@ -26,6 +27,11 @@ MAX_MEMORY_RESULTS = 20
 DEFAULT_MEMORY_GET_LINES = 120
 MAX_MEMORY_GET_LINES = 500
 DEFAULT_MEMORY_SEARCH_MODE = "search"  # fast lexical-first; fallback to RAG only when needed
+
+# Max chars for memory_search snippets (per-result cap)
+_MEMORY_SNIPPET_MAX_CHARS = 800
+# Max chars for memory_get text output (adaptive, with per-call floor)
+_MEMORY_GET_FLOOR_CHARS = 4_000
 
 _BLOCKED_HOSTNAMES = {
     "localhost",
@@ -251,11 +257,14 @@ async def run_web_fetch_compat(params: dict) -> str:
         return json.dumps({"error": "Blocked URL host for safety."}, indent=0)
 
     extract_mode = "text" if (params.get("extractMode") == "text") else "markdown"
-    max_chars = _to_int(params.get("maxChars"))
+    _model = params.get("_model")  # optionally injected by handler
+    _provider = params.get("_provider")  # optionally injected by handler
+    adaptive_cap = compute_page_chars(_model, _provider)
+    max_chars_raw = _to_int(params.get("maxChars"))
     max_chars = (
-        DEFAULT_WEB_FETCH_MAX_CHARS
-        if max_chars is None
-        else max(1, min(max_chars, MAX_WEB_FETCH_CHARS_CAP))
+        adaptive_cap
+        if max_chars_raw is None
+        else max(1, min(max_chars_raw, adaptive_cap))
     )
     timeout_seconds = DEFAULT_WEB_FETCH_TIMEOUT_SECONDS
     max_bytes = max_chars * 8
@@ -462,6 +471,11 @@ async def run_memory_search_compat(params: dict, user_id: str) -> str:
             pass
 
     ranked = sorted(results, key=lambda r: float(r.get("score") or 0), reverse=True)[:max_results]
+    # Cap per-snippet size so a single large memory file can't blow the context window.
+    for hit in ranked:
+        snip = hit.get("snippet") or ""
+        if len(snip) > _MEMORY_SNIPPET_MAX_CHARS:
+            hit["snippet"] = snip[:_MEMORY_SNIPPET_MAX_CHARS] + "…"
     payload = {
         "results": ranked,
         "provider": "asta-compat",
@@ -499,7 +513,12 @@ def _resolve_memory_get_path(path: str) -> tuple[Path | None, str | None]:
     return candidate, None
 
 
-async def run_memory_get_compat(params: dict) -> str:
+async def run_memory_get_compat(
+    params: dict,
+    *,
+    model: str | None = None,
+    provider: str | None = None,
+) -> str:
     path = (params.get("path") or "").strip()
     file_path, err = _resolve_memory_get_path(path)
     if err:
@@ -520,17 +539,37 @@ async def run_memory_get_compat(params: dict) -> str:
     start = min(max(0, from_line - 1), len(lines))
     end = min(len(lines), start + line_count)
     text = "\n".join(lines[start:end])
+
+    # Adaptive paging: cap text to ~20% of model context window.
+    page_chars = max(_MEMORY_GET_FLOOR_CHARS, compute_page_chars(model, provider))
+    truncated = False
+    continuation_from: int | None = None
+    if len(text) > page_chars:
+        # Find the last complete line within the limit.
+        truncated_text = text[:page_chars]
+        last_nl = truncated_text.rfind("\n")
+        if last_nl > 0:
+            truncated_text = truncated_text[:last_nl]
+        lines_shown = truncated_text.count("\n") + 1
+        continuation_from = start + lines_shown + 1  # 1-based line for next call
+        text = truncated_text
+        end = start + lines_shown
+        truncated = True
+
     root = _workspace_root()
     rel = (
         file_path.resolve().relative_to(root.resolve()).as_posix()
         if root
         else file_path.name
     )
-    payload = {
+    payload: dict = {
         "path": rel,
         "from": start + 1 if lines else 1,
         "lines": max(0, end - start),
         "totalLines": len(lines),
         "text": text,
     }
+    if truncated and continuation_from is not None:
+        payload["truncated"] = True
+        payload["hint"] = f"Output capped for context. Call again with from={continuation_from} to continue."
     return json.dumps(payload, indent=0)

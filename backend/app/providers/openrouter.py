@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://openrouter.ai/api/v1"
 
+# App attribution headers (optional but recommended by OpenRouter docs)
+_APP_REFERER = "https://github.com/asta-ai/asta"
+_APP_TITLE = "Asta"
+
 
 def _normalize_tool_calls(raw: list | None) -> list[dict] | None:
     """Convert OpenRouter/OpenAI response tool_calls to our list[dict] format. Handles both object and dict items."""
@@ -116,7 +120,15 @@ class OpenRouterProvider(BaseProvider):
                 error_message="OpenRouter API key not set. Add it in Settings (API keys) or in backend/.env as OPENROUTER_API_KEY. Get a key at https://openrouter.ai/keys"
             )
         timeout = kwargs.get("timeout") or MODEL_TIMEOUT
-        client = AsyncOpenAI(api_key=key, base_url=BASE_URL, timeout=timeout)
+        client = AsyncOpenAI(
+            api_key=key,
+            base_url=BASE_URL,
+            timeout=timeout,
+            default_headers={
+                "HTTP-Referer": _APP_REFERER,
+                "X-Title": _APP_TITLE,
+            },
+        )
         system = kwargs.get("context", "")
         image_bytes: bytes | None = kwargs.get("image_bytes")
         image_mime: str | None = kwargs.get("image_mime", "image/jpeg")
@@ -179,21 +191,16 @@ class OpenRouterProvider(BaseProvider):
                 msgs.append(msg)
 
         # Support comma-separated models: first is primary, rest are fallbacks.
-        # Guardrail: keep OpenRouter model selection on Kimi/Trinity families for tool reliability.
         model_raw = str(kwargs.get("model") or DEFAULT_MODEL).strip()
-        if image_bytes:
-            # Force vision model if image present
-            model_raw = "nvidia/nemotron-nano-12b-v2-vl:free"
-        else:
-            allowed_models, rejected_models = classify_openrouter_model_csv(model_raw)
-            if rejected_models:
-                logger.warning(
-                    "OpenRouter model policy dropped unsupported model(s): %s",
-                    ", ".join(rejected_models),
-                )
-            if not allowed_models:
-                allowed_models, _ = classify_openrouter_model_csv(DEFAULT_MODEL)
-            model_raw = ",".join(allowed_models)
+        allowed_models, rejected_models = classify_openrouter_model_csv(model_raw)
+        if rejected_models:
+            logger.warning(
+                "OpenRouter model policy stripped prefix from: %s",
+                ", ".join(rejected_models),
+            )
+        if not allowed_models:
+            allowed_models, _ = classify_openrouter_model_csv(DEFAULT_MODEL)
+        model_raw = ",".join(allowed_models)
             
         models = [m.strip() for m in model_raw.split(",") if m.strip()]
         if not models:
@@ -288,7 +295,15 @@ class OpenRouterProvider(BaseProvider):
                 error_message="OpenRouter API key not set. Add it in Settings (API keys) or in backend/.env as OPENROUTER_API_KEY. Get a key at https://openrouter.ai/keys"
             )
         timeout = kwargs.get("timeout") or MODEL_TIMEOUT
-        client = AsyncOpenAI(api_key=key, base_url=BASE_URL, timeout=timeout)
+        client = AsyncOpenAI(
+            api_key=key,
+            base_url=BASE_URL,
+            timeout=timeout,
+            default_headers={
+                "HTTP-Referer": _APP_REFERER,
+                "X-Title": _APP_TITLE,
+            },
+        )
         system = kwargs.get("context", "")
         image_bytes: bytes | None = kwargs.get("image_bytes")
         image_mime: str | None = kwargs.get("image_mime", "image/jpeg")
@@ -348,18 +363,15 @@ class OpenRouterProvider(BaseProvider):
                 msgs.append(msg)
 
         model_raw = str(kwargs.get("model") or DEFAULT_MODEL).strip()
-        if image_bytes:
-            model_raw = "nvidia/nemotron-nano-12b-v2-vl:free"
-        else:
-            allowed_models, rejected_models = classify_openrouter_model_csv(model_raw)
-            if rejected_models:
-                logger.warning(
-                    "OpenRouter model policy dropped unsupported model(s): %s",
-                    ", ".join(rejected_models),
-                )
-            if not allowed_models:
-                allowed_models, _ = classify_openrouter_model_csv(DEFAULT_MODEL)
-            model_raw = ",".join(allowed_models)
+        allowed_models, rejected_models = classify_openrouter_model_csv(model_raw)
+        if rejected_models:
+            logger.warning(
+                "OpenRouter model policy stripped prefix from: %s",
+                ", ".join(rejected_models),
+            )
+        if not allowed_models:
+            allowed_models, _ = classify_openrouter_model_csv(DEFAULT_MODEL)
+        model_raw = ",".join(allowed_models)
 
         models = [m.strip() for m in model_raw.split(",") if m.strip()]
         if not models:

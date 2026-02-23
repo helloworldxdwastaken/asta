@@ -18,6 +18,9 @@ export default function Dashboard() {
   const [cronCount, setCronCount] = useState(0);
   const [updateInfo, setUpdateInfo] = useState<{ available: boolean; local: string; remote: string } | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [ragStatus, setRagStatus] = useState<{ ok: boolean; message: string; provider: string | null } | null>(null);
+  const [ragTopics, setRagTopics] = useState<{ topic: string; chunks_count: number }[]>([]);
+  const [driveInfo, setDriveInfo] = useState<{ connected: boolean; fileCount: number } | null>(null);
 
   const refresh = useCallback(() => {
     setError(null);
@@ -33,6 +36,9 @@ export default function Dashboard() {
     api.getWorkspaceNotes(20).then((r) => setWorkspaceNotes(r.notes || [])).catch(() => setWorkspaceNotes([]));
     api.getCronJobs().then((r) => setCronCount((r.cron_jobs || []).length)).catch(() => setCronCount(0));
     api.checkUpdate().then(r => setUpdateInfo({ available: r.update_available, local: r.local, remote: r.remote })).catch(() => { });
+    api.ragStatus().then((r) => setRagStatus({ ok: r.ok, message: r.message || "", provider: r.provider ?? null })).catch(() => setRagStatus(null));
+    api.ragLearned().then((r) => setRagTopics(r.topics || [])).catch(() => setRagTopics([]));
+    api.driveList().then((r) => setDriveInfo({ connected: !!r.connected, fileCount: Array.isArray(r.files) ? r.files.length : 0 })).catch(() => setDriveInfo(null));
   }, []);
 
   useEffect(() => {
@@ -347,6 +353,92 @@ export default function Dashboard() {
             </div>
           </div>
 
+          {/* ─── 5. LEARNING (RAG) ─── */}
+          <div className="bento-card learning-section">
+            <div className="card-header">
+              <div className="icon">📚</div>
+              <div>
+                <h2>Learning (RAG)</h2>
+                <p className="desc">Learned knowledge & topics</p>
+              </div>
+            </div>
+            <div className="stat-and-link">
+              {ragStatus?.ok ? (
+                <>
+                  <div className="stat-value">{ragTopics.length}</div>
+                  <div className="stat-label">{ragTopics.length === 1 ? "topic learned" : "topics learned"}</div>
+                  <div className="help" style={{ marginTop: "0.25rem" }}>
+                    {ragStatus.provider ? `Using ${ragStatus.provider}` : "Ready"}
+                  </div>
+                </>
+              ) : (
+                <div className="empty-state" style={{ marginBottom: "0.5rem" }}>
+                  {ragStatus === null ? "Checking…" : "Not set up (Ollama + nomic-embed-text)"}
+                </div>
+              )}
+              <Link to="/learning" className="setup-link">Open RAG →</Link>
+            </div>
+          </div>
+
+          {/* ─── 6. FILES ─── */}
+          <div className="bento-card files-section">
+            <div className="card-header">
+              <div className="icon">📁</div>
+              <div>
+                <h2>Files</h2>
+                <p className="desc">Workspace & allowed paths</p>
+              </div>
+            </div>
+            <div className="stat-and-link">
+              <p className="help" style={{ margin: 0 }}>Browse and edit files Asta can read.</p>
+              <Link to="/files" className="setup-link">Open Files →</Link>
+            </div>
+          </div>
+
+          {/* ─── 7. DRIVE ─── */}
+          <div className="bento-card drive-section">
+            <div className="card-header">
+              <div className="icon">☁️</div>
+              <div>
+                <h2>Drive</h2>
+                <p className="desc">Google Drive (if connected)</p>
+              </div>
+            </div>
+            <div className="stat-and-link">
+              {driveInfo ? (
+                <>
+                  <div className={`connector-status ${driveInfo.connected ? "connected" : "disconnected"}`} style={{ marginBottom: "0.25rem" }}>
+                    {driveInfo.connected ? "Connected" : "Not connected"}
+                  </div>
+                  {driveInfo.connected && (
+                    <div className="stat-value" style={{ fontSize: "1.25rem" }}>{driveInfo.fileCount}</div>
+                  )}
+                  {driveInfo.connected && (
+                    <div className="stat-label">{driveInfo.fileCount === 1 ? "file" : "files"} in list</div>
+                  )}
+                </>
+              ) : (
+                <div className="help" style={{ marginBottom: "0.5rem" }}>—</div>
+              )}
+              <Link to="/drive" className="setup-link">Open Drive →</Link>
+            </div>
+          </div>
+
+          {/* ─── 8. AUDIO NOTES ─── */}
+          <div className="bento-card audio-section">
+            <div className="card-header">
+              <div className="icon">🎤</div>
+              <div>
+                <h2>Audio notes</h2>
+                <p className="desc">Record & transcribe</p>
+              </div>
+            </div>
+            <div className="stat-and-link">
+              <p className="help" style={{ margin: 0 }}>Record voice notes and get transcripts.</p>
+              <Link to="/audio-notes" className="setup-link">Open Audio notes →</Link>
+            </div>
+          </div>
+
         </div>
       )}
 
@@ -500,8 +592,13 @@ export default function Dashboard() {
         .memory-section { grid-column: span 1; }
         .cron-section { grid-column: span 1; }
         .skills-section { grid-column: span 1; }
+        .learning-section, .files-section, .drive-section, .audio-section { grid-column: span 1; }
 
         .cron-section .icon { background: linear-gradient(135deg, rgba(20, 184, 166, 0.2), rgba(6, 182, 212, 0.15)); border: 1px solid rgba(20, 184, 166, 0.25); }
+        .learning-section .icon { background: linear-gradient(135deg, rgba(59, 130, 246, 0.2), rgba(37, 99, 235, 0.15)); border: 1px solid rgba(59, 130, 246, 0.25); }
+        .files-section .icon { background: linear-gradient(135deg, rgba(107, 114, 128, 0.2), rgba(75, 85, 99, 0.15)); border: 1px solid rgba(107, 114, 128, 0.25); }
+        .drive-section .icon { background: linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(22, 163, 74, 0.15)); border: 1px solid rgba(34, 197, 94, 0.25); }
+        .audio-section .icon { background: linear-gradient(135deg, rgba(239, 68, 68, 0.2), rgba(220, 38, 38, 0.15)); border: 1px solid rgba(239, 68, 68, 0.25); }
         .stat-and-link {
             display: flex;
             flex-direction: column;
@@ -517,7 +614,8 @@ export default function Dashboard() {
         @media (max-width: 1460px) {
             .dashboard-container { padding: 0 1.5rem 3.25rem; }
             .bento-grid { grid-template-columns: repeat(3, 1fr); gap: 1.25rem; }
-            .brain-section, .vision-section, .connectors-section, .memory-section, .cron-section, .skills-section { grid-column: span 1; }
+            .brain-section, .vision-section, .connectors-section, .memory-section, .cron-section, .skills-section,
+            .learning-section, .files-section, .drive-section, .audio-section { grid-column: span 1; }
             .body-section { grid-column: span 2; }
         }
         @media (max-width: 1180px) {
@@ -532,7 +630,8 @@ export default function Dashboard() {
                 justify-content: flex-start;
             }
             .bento-grid { grid-template-columns: repeat(2, 1fr); gap: 1rem; }
-            .brain-section, .vision-section, .connectors-section, .memory-section, .cron-section, .skills-section { grid-column: span 1; }
+            .brain-section, .vision-section, .connectors-section, .memory-section, .cron-section, .skills-section,
+            .learning-section, .files-section, .drive-section, .audio-section { grid-column: span 1; }
             .body-section { grid-column: span 2; }
             .bento-card { padding: 1.35rem; border-radius: 16px; }
             .card-header { gap: 0.9rem; margin-bottom: 1.1rem; padding-bottom: 0.95rem; }
@@ -546,7 +645,8 @@ export default function Dashboard() {
             .dashboard-header .title { font-size: 1.55rem; }
             .dashboard-header .subtitle { font-size: 0.88rem; }
             .bento-grid { grid-template-columns: 1fr; gap: 0.9rem; }
-            .brain-section, .body-section, .vision-section, .connectors-section, .memory-section, .cron-section, .skills-section { grid-column: span 1; }
+            .brain-section, .body-section, .vision-section, .connectors-section, .memory-section, .cron-section, .skills-section,
+            .learning-section, .files-section, .drive-section, .audio-section { grid-column: span 1; }
             .bento-card { padding: 1.1rem; border-radius: 14px; }
             .card-header h2 { font-size: 1.05rem; }
             .vitals-grid { grid-template-columns: 1fr; }

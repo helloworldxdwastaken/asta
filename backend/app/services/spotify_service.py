@@ -337,6 +337,17 @@ def _has_spotify_intent(text: str, pending_play: bool, retry_request: dict[str, 
         return True
     if _is_music_search(text):
         return True
+    # Also catch natural-language requests like "can you play music" / "play something"
+    intent = _parse_intent(text)
+    if intent and intent.confidence >= 0.65:
+        return True
+    # Status / connection queries — e.g. "is spotify connected", "reconnect spotify"
+    if any(k in t for k in (
+        "spotify connected", "spotify status", "spotify account",
+        "reconnect spotify", "connect spotify", "spotify not working",
+        "spotify link", "spotify auth", "spotify login",
+    )):
+        return True
     return False
 
 
@@ -360,12 +371,23 @@ class SpotifyService:
         if not _has_spotify_intent(text, pending_play, retry_request):
             return None
 
+        # ---- Populate spotify_play_connected so LLM always knows the connection status ----
+        _token_check = await get_user_access_token(user_id)
+        if _token_check:
+            extra_context["spotify_play_connected"] = True
+        else:
+            row = await db.get_spotify_tokens(user_id)
+            if row:
+                extra_context["spotify_reconnect_needed"] = True
+            else:
+                extra_context["spotify_play_connected"] = False
+
         # ---- NEW: Intent-based processing ----
         intent = _parse_intent(text)
         
         # If high confidence intent, use enhanced handlers
         if intent and intent.confidence >= 0.65:
-            token = await get_user_access_token(user_id)
+            token = _token_check
             if not token:
                 row = await db.get_spotify_tokens(user_id)
                 if row:
@@ -416,7 +438,7 @@ class SpotifyService:
         # 4. Playlist URI
         playlist_uri = extract_playlist_uri(text)
         if playlist_uri:
-            token = await get_user_access_token(user_id)
+            token = _token_check
             if not token:
                 return "Spotify is not connected. Go to Settings > Spotify to connect."
             ok = await start_playback(user_id, None, context_uri=playlist_uri)

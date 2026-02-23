@@ -18,11 +18,42 @@ logger = logging.getLogger(__name__)
 _RUN_TASKS: dict[str, asyncio.Task] = {}
 _ARCHIVE_TASKS: dict[str, asyncio.Task] = {}
 _TASKS_LOCK = asyncio.Lock()  # Guards _RUN_TASKS and _ARCHIVE_TASKS access
+# Track depth for each session: session_key -> depth level
+_SESSION_DEPTHS: dict[str, int] = {}
+_DEPTHS_LOCK = asyncio.Lock()
 _ALLOWED_CLEANUP = {"keep", "delete"}
 _ALLOWED_THINKING = {"off", "minimal", "low", "medium", "high", "xhigh"}
 
 
+async def _get_session_depth(session_key: str) -> int:
+    """Get the current depth level for a session key.
+    
+    Depth is determined by counting ':subagent:' occurrences in the session key.
+    Main session = depth 0
+    First-level subagent = depth 1
+    Second-level subagent = depth 2, etc.
+    """
+    return session_key.count(":subagent:")
+
+
+async def _get_children_count(parent_session_key: str) -> int:
+    """Count active child subagents for a given parent session."""
+    async with _TASKS_LOCK:
+        count = 0
+        for run_id, task in _RUN_TASKS.items():
+            if task is None or task.done():
+                continue
+            # Check if this task is a direct child of the parent
+            if f"{parent_session_key}:subagent:" in run_id:
+                count += 1
+        return count
+
+
 def get_subagent_tools_openai_def() -> list[dict]:
+    settings = get_settings()
+    max_depth = max(1, int(getattr(settings, "asta_subagents_max_depth", 1) or 1))
+    max_children = max(1, int(getattr(settings, "asta_subagents_max_children", 5) or 5))
+    
     return [
         {
             "type": "function",
@@ -37,7 +68,9 @@ def get_subagent_tools_openai_def() -> list[dict]:
             "function": {
                 "name": "sessions_spawn",
                 "description": (
-                    "Spawn a background subagent run in an isolated session. Non-blocking: returns accepted immediately."
+                    f"Spawn a background subagent run in an isolated session. "
+                    f"Non-blocking: returns accepted immediately. "
+                    f"Max nesting depth: {max_depth}, max concurrent children: {max_children}."
                 ),
                 "parameters": {
                     "type": "object",
@@ -428,9 +461,34 @@ async def spawn_subagent_run(
         return {"status": "error", "error": "thinking must be one of: off, minimal, low, medium, high, xhigh"}
     thinking_override = thinking_norm or None
 
+    # Get depth and children limits from settings
+    settings = get_settings()
+    max_depth = max(1, int(getattr(settings, "asta_subagents_max_depth", 1) or 1))
+    max_children = max(1, int(getattr(settings, "asta_subagents_max_children", 5) or 5))
+    
+    # Check current depth level of parent session
+    current_depth = await _get_session_depth(parent_conversation_id)
+    if current_depth >= max_depth:
+        return {
+            "status": "error",
+            "error": f"Max subagent depth reached ({max_depth}). Cannot spawn subagent at depth {current_depth + 1}.",
+            "maxDepth": max_depth,
+            "currentDepth": current_depth,
+        }
+    
+    # Check children count for this parent
+    children_count = await _get_children_count(parent_conversation_id)
+    if children_count >= max_children:
+        return {
+            "status": "error",
+            "error": f"Max concurrent children reached ({max_children}). Cannot spawn more subagents.",
+            "maxChildren": max_children,
+            "currentChildren": children_count,
+        }
+
     db = get_db()
     await db.connect()
-    max_concurrent = max(1, int(getattr(get_settings(), "asta_subagents_max_concurrent", 3) or 3))
+    max_concurrent = max(1, int(getattr(settings, "asta_subagents_max_concurrent", 3) or 3))
 
     # Protect concurrency check and task creation with lock.
     # Single-user runtime truth is in-memory tasks; DB "running" rows can become stale
@@ -609,12 +667,17 @@ async def run_subagent_tool(
     await db.connect()
     name = (tool_name or "").strip()
     if name == "agents_list":
-        max_concurrent = max(1, int(getattr(get_settings(), "asta_subagents_max_concurrent", 3) or 3))
+        settings = get_settings()
+        max_concurrent = max(1, int(getattr(settings, "asta_subagents_max_concurrent", 3) or 3))
+        max_depth = max(1, int(getattr(settings, "asta_subagents_max_depth", 1) or 1))
+        max_children = max(1, int(getattr(settings, "asta_subagents_max_children", 5) or 5))
         return _json(
             {
                 "agents": [{"id": "main", "label": "Asta (single-user)"}],
                 "count": 1,
                 "maxConcurrent": max_concurrent,
+                "maxDepth": max_depth,
+                "maxChildren": max_children,
             }
         )
 

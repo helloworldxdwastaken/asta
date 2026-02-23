@@ -147,7 +147,32 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 - **Auto-archive:** `ASTA_SUBAGENTS_ARCHIVE_AFTER_MINUTES` controls timed cleanup for `cleanup=keep` child sessions (set `0` to disable).
 - **Announce:** when a subagent ends, Asta writes an assistant update to the parent conversation and also sends it to Telegram/WhatsApp when applicable.
 
-### 4.4 Security
+### 4.4 Named Agents (workspace skills with `is_agent: true`)
+
+Asta supports **named agents** - specialized AI agents stored as skills in `workspace/skills/<agent_name>/SKILL.md` with a special `is_agent: true` frontmatter marker. These differ from subagents (background task runs) - they are custom AI behaviors loaded as skills.
+
+**Creating an Agent:**
+1. Create folder `workspace/skills/<agent_slug>/`
+2. Add `SKILL.md` with frontmatter:
+```yaml
+---
+name: Agent Name
+description: What the agent does
+emoji: 🤖
+model: (optional)
+thinking: (optional)
+is_agent: true
+---
+```
+3. Agent auto-discovers via `/api/agents`
+
+**Current Agents:**
+- **Research** (`competitor`): Industry research report writer coordinating `researcher`, `report_writer`, `fact_checker` subagents
+- **Excel Processor** (`excel-processor`): Spreadsheet expert delegating to `xlsx` agent
+
+**API:** `GET/POST/PATCH/DELETE /api/agents` - managed by `routers/agents.py`
+
+### 4.5 Security
 
 - Never commit API keys. Use env vars or a secrets store; document in README.
 - Restrict file access to configured directories (e.g. `ASTA_ALLOWED_PATHS`).

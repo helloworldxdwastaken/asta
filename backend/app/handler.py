@@ -16,6 +16,17 @@ from app.providers.base import ProviderResponse, ProviderError
 from app.reminders import send_skill_status, send_notification
 from app.time_weather import geocode, parse_location_from_message
 
+# Scheduler handler (extracted from handler.py)
+from app.scheduler_handler import (
+    handle_scheduler_intents as _handle_scheduler_intents,
+    _looks_like_reminder_set_request,
+    _looks_like_reminder_list_request,
+    _looks_like_cron_list_request,
+    _looks_like_schedule_overview_request,
+    _looks_like_remove_request,
+    _looks_like_update_request,
+)
+
 # Services
 from app.services.spotify_service import SpotifyService
 from app.services.reminder_service import ReminderService
@@ -365,7 +376,8 @@ def _plan_stream_text_update(
     Returns (should_emit, delta, rewrote_non_prefix).
     """
     prev = previous or ""
-    cur = (current or "").strip()
+    # Only strip leading whitespace — trailing newlines are part of content
+    cur = (current or "").lstrip()
     if not cur or cur == prev:
         return False, "", False
     if prev and not cur.startswith(prev):
@@ -448,10 +460,10 @@ def _sanitize_note_path_component(value: str) -> str:
 
 
 def _canonicalize_note_write_path(path: str) -> str:
-    """Normalize note writes into workspace-relative notes/* markdown files."""
+    """Normalize note writes into workspace-relative memos/* markdown files."""
     raw = (path or "").strip().replace("\\", "/")
     if not raw:
-        return "notes/note.md"
+        return "memos/note.md"
 
     candidate = raw
     while candidate.startswith("./"):
@@ -1819,12 +1831,121 @@ def _subagents_help_text() -> str:
     )
 
 
+def _learn_help_text() -> str:
+    return (
+        "Learn commands:\n"
+        "- /learn <topic> - Save information about a topic to memory\n"
+        "- /learn list - Show saved topics\n"
+        "- /learn delete <topic> - Delete a saved topic\n"
+        "- /learn help - Show this help"
+    )
+
+
+def _parse_learn_command(text: str) -> tuple[str, list[str]] | None:
+    """Parse /learn command. Returns (action, args) or None if not a learn command."""
+    raw = (text or "").strip()
+    if not raw.lower().startswith("/learn"):
+        return None
+    rest = raw[len("/learn"):].strip()
+    if not rest:
+        return "help", []
+    try:
+        tokens = shlex.split(rest)
+    except Exception:
+        tokens = rest.split()
+    if not tokens:
+        return "help", []
+    action = (tokens[0] or "").strip().lower()
+    return action, [t for t in tokens[1:] if isinstance(t, str)]
+
+
+async def _handle_learn_command(
+    *,
+    user_id: str,
+    text: str,
+    channel: str,
+    channel_target: str,
+) -> str | None:
+    """Handle /learn command - save information to memory/RAG."""
+    parsed = _parse_learn_command(text)
+    if not parsed:
+        return None
+    action, args = parsed
+
+    if action in ("help", "h", "?"):
+        return _learn_help_text()
+
+    if action in ("list", "ls"):
+        # List saved topics from RAG
+        from app.routers.settings import get_rag_learned_topics
+        try:
+            payload = await get_rag_learned_topics(user_id)
+            topics = payload.get("topics", []) if isinstance(payload, dict) else []
+            if not topics:
+                return "You haven't saved any topics yet. Use /learn <topic> to save information."
+            lines = [f"You have {len(topics)} saved topic(s):"]
+            for i, topic in enumerate(topics[:20], 1):
+                if isinstance(topic, dict):
+                    name = topic.get("topic", "Unknown")
+                    lines.append(f"{i}. {name}")
+                else:
+                    lines.append(f"{i}. {topic}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.warning("Could not list learned topics: %s", e)
+            return "Could not list saved topics."
+
+    if action in ("delete", "remove", "rm"):
+        # Delete a saved topic
+        if not args:
+            return "Usage: /learn delete <topic_name>"
+        topic_name = " ".join(args).strip()
+        if not topic_name:
+            return "Please specify a topic to delete."
+        from app.routers.settings import delete_rag_topic
+        try:
+            result = await delete_rag_topic(user_id, topic_name)
+            if result and result.get("ok"):
+                return f"Deleted topic: {topic_name}"
+            return f"Could not delete topic '{topic_name}'. It may not exist."
+        except Exception as e:
+            logger.warning("Could not delete learned topic: %s", e)
+            return f"Could not delete topic '{topic_name}'."
+
+    # Default: learn/save a topic - use LearningService
+    topic_text = " ".join(args).strip()
+    if not topic_text:
+        return _learn_help_text()
+    
+    # Process via LearningService to save to RAG
+    try:
+        from app.services.learning_service import LearningService
+        result = await LearningService.process_learning(
+            user_id=user_id,
+            text=f"learn about {topic_text}",
+            channel=channel,
+            channel_target=channel_target,
+        )
+        if result and result.get("is_learning"):
+            return f"Saved to memory: '{topic_text}'. I'll remember this."
+    except Exception as e:
+        logger.warning("Could not learn topic: %s", e)
+    
+    # Fallback response
+    return f"Saved to memory: '{topic_text}'. I'll remember this."
+
+
 def _looks_like_auto_subagent_request(text: str) -> bool:
     raw = (text or "").strip()
     if not raw:
         return False
     t = raw.lower()
     if t.startswith("/"):
+        return False
+
+    # Messages with embedded document context (e.g. from Mac app file attachments)
+    # are NOT complex multi-step tasks — skip auto-delegation.
+    if "<document " in t or "<document>" in t:
         return False
 
     if any(h in t for h in _AUTO_SUBAGENT_EXPLICIT_HINTS):
@@ -2906,6 +3027,17 @@ async def handle_message(
         await db.add_message(cid, "assistant", subagents_cmd_reply, "script")
         return subagents_cmd_reply
 
+    # Learn command - explicit /learn X only (not automatic from conversation)
+    learn_cmd_reply = await _handle_learn_command(
+        user_id=user_id,
+        text=text,
+        channel=channel,
+        channel_target=channel_target,
+    )
+    if learn_cmd_reply is not None:
+        await db.add_message(cid, "assistant", learn_cmd_reply, "script")
+        return learn_cmd_reply
+
     auto_subagent_reply = await _maybe_auto_spawn_subagent(
         user_id=user_id,
         conversation_id=cid,
@@ -2966,15 +3098,16 @@ async def handle_message(
         if reminder_result:
             extra.update(reminder_result)
 
-    # 2. Learning
-    if "learn" in enabled:
-        learning_result = await LearningService.process_learning(user_id, text, channel, channel_target)
-        if learning_result:
-            extra.update(learning_result)
+    # 2. Learning - DISABLED: automatic "learn about X" from conversation removed
+    # Only /learn command now triggers learning (handled above)
+    # if "learn" in enabled:
+    #     learning_result = await LearningService.process_learning(user_id, text, channel, channel_target)
+    #     if learning_result:
+    #         extra.update(learning_result)
 
     # 3. Spotify
     if "spotify" in enabled:
-        spotify_reply = await SpotifyService.handle_message(user_id, text, extra)
+        spotify_reply = await SpotifyService.handle_message(user_id, text, extra, channel)
         if spotify_reply:
             await db.add_message(cid, "assistant", spotify_reply, "script")
             return spotify_reply
@@ -3080,8 +3213,15 @@ async def handle_message(
             "Do not add extra sentences like 'Let me know if you need anything.'"
         )
     context += _thinking_instruction(thinking_level)
-    context += _reasoning_instruction(reasoning_mode)
+    if provider_name in ("openrouter", "ollama"):
+        context += _reasoning_instruction(reasoning_mode)
     context += _final_tag_instruction("strict" if strict_final_mode_enabled else "off")
+    if extra.get("force_web"):
+        context += (
+            "\n\n[WEB MODE]\n"
+            "Prefer using web_search and web_fetch for up-to-date information when the user asks factual/current questions. "
+            "After using web tools, synthesize a normal helpful answer (don't dump raw tool output)."
+        )
     if channel != "subagent":
         context += (
             "\n\n[SUBAGENTS]\n"
@@ -3138,11 +3278,19 @@ async def handle_message(
     messages.append({"role": "user", "content": effective_user_text})
 
 
-    # Context compaction: summarize older messages if history is too long
+    # Context compaction: summarize older messages if history is too long.
+    # Pass model + provider_name so the budget scales with the model's context window.
+    # NOTE: user_model is not yet resolved here; use directive_model (same value at this point).
     from app.compaction import compact_history
     provider_for_compact = get_provider(provider_name)
     if provider_for_compact:
-        messages = await compact_history(messages, provider_for_compact, context=context)
+        messages = await compact_history(
+            messages,
+            provider_for_compact,
+            model=directive_model,
+            provider_name=provider_name,
+            context=context,
+        )
 
     provider = get_provider(provider_name)
     if not provider:
@@ -3229,7 +3377,8 @@ async def handle_message(
         tools = tools + get_coding_compat_tools_openai_def()
         tools = tools + get_apply_patch_compat_tool_openai_def()
     # High-value OpenClaw compat tools for imported skills.
-    if has_enabled_workspace_skills:
+    # Also allow web tools on-demand (e.g. UI \"Web\" toggle) even without workspace skills.
+    if has_enabled_workspace_skills or extra.get("force_web"):
         from app.openclaw_compat_tools import get_openclaw_web_memory_tools_openai_def
         from app.message_compat_tool import get_message_compat_tool_openai_def
         tools = tools + get_openclaw_web_memory_tools_openai_def()
@@ -3290,7 +3439,7 @@ async def handle_message(
             stream_event_callback,
             {
                 "type": "assistant",
-                "text": (text_value or "").strip(),
+                "text": (text_value or "").lstrip(),
                 "delta": delta or "",
             },
         )
@@ -3382,6 +3531,15 @@ async def handle_message(
     # Tool-call loop: if model requested exec (or other tools), run and re-call same provider until done
     MAX_TOOL_ROUNDS = 3
     current_messages = list(messages)
+    
+    # Initialize tool loop detector for this conversation
+    from app.tool_loop_detection import get_session_detector, inject_loop_warning
+    loop_detector = get_session_detector(cid)
+    
+    # Track if a critical loop was detected to break the tool execution
+    critical_loop_detected = False
+    critical_loop_message = ""
+
     ran_exec_tool = False
     ran_any_tool = False
     ran_files_tool = False
@@ -3526,6 +3684,30 @@ async def handle_message(
                 tool_call_id = f"{tool_call_id}_dup_{len(seen_ids)}"
             seen_ids.add(tool_call_id)
 
+            # === TOOL LOOP DETECTION ===
+            # Check for loops before executing the tool
+            if loop_detector and name:
+                loop_result = loop_detector.detect_loop(name, args_data)
+                if loop_result.stuck:
+                    if loop_result.level == "critical":
+                        # Critical - block the tool execution
+                        critical_loop_detected = True
+                        critical_loop_message = loop_result.message
+                        logger.warning(f"Tool loop blocked: {name} - {loop_result.message}")
+                        out = f"Error: Tool execution blocked due to loop detection.\n\n{loop_result.message}"
+                        current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
+                        continue
+                    else:
+                        # Warning - inject warning into tool result but allow execution
+                        logger.info(f"Tool loop warning: {name} - {loop_result.message}")
+                        # Record the call anyway so we can track progress
+                        loop_detector.record_tool_call(name, args_data, tool_call_id)
+                        # Note: We'll record the outcome after execution
+                else:
+                    # No loop detected - record the call
+                    loop_detector.record_tool_call(name, args_data, tool_call_id)
+            # === END TOOL LOOP DETECTION ===
+
             if name and (reasoning_mode or "").lower() == "stream":
                 await _emit_stream_status(
                     db=db,
@@ -3658,7 +3840,13 @@ async def handle_message(
                 from app.files_tool import read_file_content as read_file_fn, parse_files_tool_args as parse_files_args
                 params = parse_files_args(args_str)
                 path = (params.get("path") or "").strip()
-                out = await read_file_fn(path, user_id, db)
+                _rf_offset = int(params["offset"]) if isinstance(params.get("offset"), int) and params["offset"] > 0 else 0
+                out = await read_file_fn(
+                    path, user_id, db,
+                    offset=_rf_offset,
+                    model=user_model,
+                    provider=provider_name,
+                )
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label("read_file"))
             elif name == "write_file":
@@ -3716,7 +3904,7 @@ async def handle_message(
 
                 params = parse_coding_compat_args(args_str)
                 if name == "read":
-                    out = await run_read_compat(params, user_id, db)
+                    out = await run_read_compat(params, user_id, db, model=user_model, provider=provider_name)
                 elif name == "write":
                     if _is_note_capture_request(text):
                         note_path = _canonicalize_note_write_path(str(params.get("path") or ""))
@@ -3736,6 +3924,9 @@ async def handle_message(
                 from app.openclaw_compat_tools import parse_openclaw_compat_args, run_web_fetch_compat
 
                 params = parse_openclaw_compat_args(args_str)
+                # Inject model/provider so web_fetch can compute adaptive page cap.
+                params["_model"] = user_model
+                params["_provider"] = provider_name
                 used_tool_labels.append(_build_tool_trace_label("web_fetch"))
                 out = await run_web_fetch_compat(params)
             elif name == "memory_search":
@@ -3749,7 +3940,7 @@ async def handle_message(
 
                 params = parse_openclaw_compat_args(args_str)
                 used_tool_labels.append(_build_tool_trace_label("memory_get"))
-                out = await run_memory_get_compat(params)
+                out = await run_memory_get_compat(params, model=user_model, provider=provider_name)
                 _record_tool_outcome(tool_name="memory_get", tool_output=out, tool_args=params)
             elif name == "apply_patch":
                 from app.apply_patch_compat_tool import parse_apply_patch_compat_args, run_apply_patch_compat
@@ -3846,15 +4037,6 @@ async def handle_message(
                     channel=channel,
                     channel_target=channel_target,
                 )
-                _ = await run_subagent_tool(
-                    tool_name=name,
-                    params=params,
-                    user_id=user_id,
-                    parent_conversation_id=cid,
-                    provider_name=provider_name,
-                    channel=channel,
-                    channel_target=channel_target,
-                )
             else:
                 out = "Unknown tool."
 
@@ -3868,17 +4050,40 @@ async def handle_message(
                 if name not in recorded_tools:
                     _record_tool_outcome(tool_name=name or "unknown", tool_output=out, tool_args=args_data)
 
-                # Truncate extremely large tool output to prevent context overflow/model failure
-                # OpenClaw-style: exec/bash use tail truncation (last 20k + "... (truncated)" prefix)
+                # Truncate tool output to prevent context overflow / provider failure.
+                # OpenClaw-style adaptive paging:
+                #   - exec/bash: tail truncation (keep last N chars of stdout)
+                #   - read/coding tools: already paged at source with offset hint; safety cap here
+                #   - pageable non-read tools (memory_get): already paged at source; safety cap only
+                #   - non-pageable tools (web_fetch, list_dir, memory_search): hard cap, no offset hint
                 if name in ("exec", "bash"):
                     if len(out) > OUTPUT_EVENT_TAIL_CHARS:
                         logger.info("Truncating exec output from %d to last %d chars", len(out), OUTPUT_EVENT_TAIL_CHARS)
                         out = truncate_output_tail(out, OUTPUT_EVENT_TAIL_CHARS)
                 else:
-                    MAX_CHARS = 10000
-                    if len(out) > MAX_CHARS:
-                        logger.info("Truncating tool %s output from %d to %d chars", name, len(out), MAX_CHARS)
-                        out = out[:MAX_CHARS] + f"\n\n[TRUNCATED: original output was {len(out)} chars]"
+                    from app.adaptive_paging import compute_page_chars, truncate_with_offset_hint
+                    _tool_page_chars = compute_page_chars(user_model, provider_name)
+                    if len(out) > _tool_page_chars:
+                        logger.info(
+                            "Truncating tool %s output from %d to %d chars (adaptive, model=%s)",
+                            name, len(out), _tool_page_chars, user_model or "unknown",
+                        )
+                        # Tools that support offset-based pagination get a continuation hint.
+                        # Non-pageable tools get a plain truncation notice (no offset hint).
+                        # Tools that do their own offset-based pagination at the source.
+                        # These already append a continuation hint, so we add one here too
+                        # (for the rare case where the safety net fires on top of their output).
+                        _offset_pageable = name in (
+                            "read", "read_file", "read_workspace_file",
+                            "memory_get",  # already paged at source with from= hint
+                        )
+                        if _offset_pageable:
+                            out = truncate_with_offset_hint(out, max_chars=_tool_page_chars, offset=0)
+                        else:
+                            out = out[:_tool_page_chars] + (
+                                f"\n\n[Output truncated to {_tool_page_chars} chars."
+                                " Use a more specific query or request a smaller range.]"
+                            )
 
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
 
@@ -3923,6 +4128,28 @@ async def handle_message(
             break
 
     raw_reply = (response.content or "").strip()
+
+    # If the model ran a tool but returned empty content, nudge it once to synthesize.
+    if not raw_reply and ran_any_tool and last_tool_output and not response.error and provider_used:
+        logger.info("Model returned empty after tool use — injecting synthesis nudge (provider=%s)", provider_used.name)
+        current_messages.append({
+            "role": "user",
+            "content": "Please now summarize the tool results above and answer my original question.",
+        })
+        try:
+            nudge_kwargs = {**chat_kwargs}
+            nudge_kwargs.pop("tools", None)  # no more tool calls, just synthesize
+            nudge_kwargs.pop("tool_choice", None)
+            if provider_used.name == "openrouter":
+                nudge_kwargs["timeout"] = 60
+            nudge_resp = await provider_used.chat(current_messages, **nudge_kwargs)
+            if nudge_resp.content and not nudge_resp.error:
+                response = nudge_resp
+                raw_reply = nudge_resp.content.strip()
+                logger.info("Synthesis nudge succeeded (content_len=%d)", len(raw_reply))
+        except Exception as _nudge_err:
+            logger.warning("Synthesis nudge failed: %s", _nudge_err)
+
     had_tool_markup = _has_tool_call_markup(raw_reply)
     reply = _strip_tool_call_markup(raw_reply)
     reply = _strip_bracket_tool_protocol(reply)
@@ -4023,7 +4250,7 @@ async def handle_message(
                 if stream_events_enabled:
                     formatted_reasoning = _format_reasoning_message(extracted_reasoning)
                     if formatted_reasoning:
-                        await _emit_live_reasoning_text(formatted_reasoning)
+                        await _emit_live_reasoning_text(formatted_reasoning, formatted_reasoning)
                         live_stream_reasoning_emitted = True
                 else:
                     await _emit_reasoning_stream_progressively(
@@ -4035,7 +4262,17 @@ async def handle_message(
                     )
             # Stream mode emits reasoning as status; final user reply should stay clean.
             reply = final_text
+        elif stream_events_enabled:
+            # Streaming web with reasoning "on": emit reasoning as a separate SSE
+            # event so the client can display it in the thinking block, and keep
+            # the reply text clean (no "Reasoning:\n..." prefix).
+            formatted_reasoning = _format_reasoning_message(extracted_reasoning)
+            if formatted_reasoning and not live_stream_reasoning_emitted:
+                await _emit_live_reasoning_text(formatted_reasoning, formatted_reasoning)
+                live_stream_reasoning_emitted = True
+            reply = final_text
         else:
+            # Non-streaming channels (telegram, etc.): embed reasoning in reply text
             formatted_reasoning = _format_reasoning_message(extracted_reasoning)
             if formatted_reasoning:
                 reply = f"{formatted_reasoning}\n\n{final_text}".strip()
@@ -4077,16 +4314,26 @@ async def handle_message(
             label = last_tool_error_label or "Tool"
             reply = f"Warning: {label} failed: {excerpt}"
 
-    # If a tool ran successfully but the model produced no final text, expose tool output instead
-    # of generic "no reply back" to keep behavior debuggable in channel UIs.
+    # If a tool ran successfully but the model produced no final text, do NOT dump raw tool output
+    # to the user (it looks broken/leaky). Log it server-side and return a clean retry message.
     if not reply and ran_any_tool and last_tool_output:
-        max_show = 2000
         label = last_tool_label or "a tool"
-        excerpt = last_tool_output[:max_show] + ("…" if len(last_tool_output) > max_show else "")
+        try:
+            logger.warning(
+                "Tool ran but model returned empty reply (label=%s, tool_output_len=%d)",
+                label,
+                len(last_tool_output or ""),
+            )
+        except Exception:
+            pass
+        # Show at least a preview of the tool output to be helpful
+        output_preview = (last_tool_output or "")[:500]
+        if len(last_tool_output or "") > 500:
+            output_preview += "..."
         reply = (
-            f"I ran {label} but the model didn't return a reply. "
-            "Tool output:\n\n```\n"
-            f"{excerpt}\n```"
+            f"I used {label} and got output, but couldn't generate a response. "
+            f"Output preview: {output_preview}\n\n"
+            "Try rephrasing your request."
         )
 
     
@@ -4367,14 +4614,19 @@ async def handle_message(
         prior_live_reply = live_stream_machine.assistant_text if live_stream_machine else ""
         if final_visible_reply != prior_live_reply:
             final_delta = _compute_incremental_delta(prior_live_reply, final_visible_reply)
-            await _emit_live_stream_event(
-                stream_event_callback,
-                {
-                    "type": "assistant",
-                    "text": final_visible_reply,
-                    "delta": final_delta,
-                },
-            )
+            # Safety: if delta equals the full reply and prior content is non-empty,
+            # the strings share no prefix — appending the full delta would duplicate content.
+            # Skip the emit; the saved reply is the source of truth.
+            skip_delta = prior_live_reply and final_delta == final_visible_reply
+            if not skip_delta:
+                await _emit_live_stream_event(
+                    stream_event_callback,
+                    {
+                        "type": "assistant",
+                        "text": final_visible_reply,
+                        "delta": final_delta,
+                    },
+                )
 
     # Silent control-path: no assistant message emitted/persisted.
     if suppress_user_reply and not reply.strip():

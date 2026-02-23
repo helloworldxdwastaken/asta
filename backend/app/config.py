@@ -242,6 +242,8 @@ class Settings(BaseSettings):
     # Subagent orchestration (single-user OpenClaw-style)
     asta_subagents_auto_spawn: bool = True
     asta_subagents_max_concurrent: int = 3
+    asta_subagents_max_depth: int = 1  # Maximum nesting depth for subagents (1 = no nesting)
+    asta_subagents_max_children: int = 5  # Maximum concurrent children per agent
     asta_subagents_archive_after_minutes: int = 60
     # Vision pipeline:
     # - preprocess=True: run a low-cost vision model first, then pass analysis to the main agent model.
@@ -260,6 +262,12 @@ class Settings(BaseSettings):
     # Spotify (search only; playback control would need user OAuth)
     spotify_client_id: str | None = None
     spotify_client_secret: str | None = None
+
+    # Vercel API
+    vercel_api_token: str | None = None
+
+    # GitHub API
+    github_api_token: str | None = None
 
     class Config:
         env_file = ".env"

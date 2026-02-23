@@ -100,8 +100,6 @@ class _NonStreamProvider:
 
     async def chat(self, messages, **kwargs):
         return ProviderResponse(content=self._content)
-
-
 class _RuntimeStateDB:
     def __init__(self, *, states=None):
         self.states = states or {}

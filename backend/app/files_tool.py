@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from app.config import get_settings
+from app.adaptive_paging import compute_page_chars, truncate_with_offset_hint
 
 if TYPE_CHECKING:
     from app.db import Db
@@ -74,8 +75,24 @@ async def list_directory(path: str, user_id: str, db: "Db | None") -> str:
     return json.dumps({"path": str(p), "entries": entries[:200]}, indent=0)
 
 
-async def read_file_content(path: str, user_id: str, db: "Db | None", max_chars: int = 50000) -> str:
-    """Read file content. Returns content or error message."""
+async def read_file_content(
+    path: str,
+    user_id: str,
+    db: "Db | None",
+    max_chars: int | None = None,
+    offset: int = 0,
+    *,
+    model: str | None = None,
+    provider: str | None = None,
+) -> str:
+    """Read file content with adaptive paging. Returns content or error message.
+
+    Args:
+        max_chars: Hard cap on chars. If None, derives from model context window.
+        offset:    Character offset for pagination (0 = start of file).
+        model:     Model name for adaptive page cap.
+        provider:  Provider name for adaptive page cap.
+    """
     path = (path or "").strip()
     if not path:
         return "Error: path is required."
@@ -90,9 +107,10 @@ async def read_file_content(path: str, user_id: str, db: "Db | None", max_chars:
         )
     try:
         content = p.read_text(encoding="utf-8", errors="replace")
-        if len(content) > max_chars:
-            content = content[:max_chars] + "\n... (truncated)"
-        return content
+        page_chars = max_chars if max_chars and max_chars > 0 else compute_page_chars(model, provider)
+        if offset > 0:
+            content = content[offset:]
+        return truncate_with_offset_hint(content, max_chars=page_chars, offset=offset)
     except Exception as e:
         return f"Error reading file: {e}"
 
@@ -278,12 +296,17 @@ def get_files_tools_openai_def() -> list[dict]:
                 "name": "read_file",
                 "description": (
                     "Read the text content of a file. Use when the user asks to open, read, or show a file. "
-                    "Path must be in the user's allowed list (or they can say 'allow my Desktop' first)."
+                    "Path must be in the user's allowed list (or they can say 'allow my Desktop' first). "
+                    "If output ends with a continuation hint, call again with offset=N to read the next page."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "Full path to the file"},
+                        "offset": {
+                            "type": "integer",
+                            "description": "Character offset to start reading from (for pagination, default 0)",
+                        },
                     },
                     "required": ["path"],
                 },

@@ -17,6 +17,7 @@ from app.skills.markdown_skill import MarkdownSkill
 from app.skills.vercel import VercelSkill
 from app.skills.github import GitHubSkill
 from app.skills.gog import GoogleWorkspaceSkill
+from app.skills.research_skill import ResearchSkill
 from app.workspace import discover_workspace_skills_runtime
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,7 @@ _BUILTIN_SKILLS: list[Skill] = [
     VercelSkill(),
     GitHubSkill(),
     GoogleWorkspaceSkill(),
+    ResearchSkill(),
 ]
 
 

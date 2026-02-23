@@ -2,22 +2,44 @@
 from app.lib.skill import Skill
 from typing import Any
 
+
 class SillyGifSkill(Skill):
+
     @property
     def name(self) -> str:
         return "silly_gif"
 
     def check_eligibility(self, text: str, user_id: str) -> bool:
-        # Proactive skill: conversational messages, not questions. GIF rate is controlled by the 10–20% instruction in the handler.
         t = (text or "").strip()
-        if len(t) < 5 or len(t) >= 100 or "?" in t:
+        t_lower = t.lower()
+
+        # Too short or too long to be a casual conversational message
+        if len(t) < 8 or len(t) > 120:
             return False
-        return True
+
+        # Skip anything that looks like a question or task request
+        if "?" in t:
+            return False
+        if any(t_lower.startswith(k) for k in (
+            "what", "how", "why", "when", "where", "who", "can you", "could you",
+            "please", "remind", "set", "create", "make", "write", "send", "search",
+            "find", "play", "list", "show", "get", "tell", "give", "open", "check",
+            "delete", "remove", "add", "update", "change", "fix", "help",
+        )):
+            return False
+
+        # Only fire on casual / social messages
+        casual_keywords = (
+            "haha", "lol", "lmao", "hehe", "nice", "cool", "awesome", "great",
+            "thanks", "thank you", "cheers", "yay", "woo", "amazing", "love it",
+            "good morning", "good night", "good evening", "hey", "hi there",
+            "happy", "sad", "excited", "bored", "tired", "hungry", "good job",
+            "well done", "congrats", "congratulations", "that's funny", "funny",
+        )
+        return any(k in t_lower for k in casual_keywords)
 
     async def execute(self, user_id: str, text: str, extra: dict[str, Any]) -> dict[str, Any]:
-        # No data to gather; handler adds proactive instruction when this skill is in use
         return {}
 
     async def get_context_section(self, db, user_id: str, extra: dict[str, Any]) -> str | None:
-        # Instruction is injected by handler when silly_gif in skills_to_use
         return None

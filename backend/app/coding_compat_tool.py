@@ -8,12 +8,13 @@ from typing import TYPE_CHECKING
 from app.config import get_settings
 from app.files_tool import _allowed_paths, _path_is_allowed
 from app.routers.files import write_to_allowed_path
+from app.adaptive_paging import compute_page_chars, truncate_with_offset_hint, DEFAULT_PAGE_CHARS
 
 if TYPE_CHECKING:
     from app.db import Db
 
-DEFAULT_MAX_READ_CHARS = 60_000
-MAX_READ_CHARS_CAP = 200_000
+DEFAULT_MAX_READ_CHARS = DEFAULT_PAGE_CHARS  # legacy alias; real limit is now adaptive
+MAX_READ_CHARS_CAP = 512_000  # matches adaptive_paging.MAX_PAGE_CHARS
 
 
 def get_coding_compat_tools_openai_def() -> list[dict]:
@@ -25,7 +26,8 @@ def get_coding_compat_tools_openai_def() -> list[dict]:
                 "name": "read",
                 "description": (
                     "Read a text file. Supports both `path` and `file_path` parameter names. "
-                    "Relative paths resolve under workspace."
+                    "Relative paths resolve under workspace. "
+                    "If output ends with a continuation hint, call again with offset=N to read the next page."
                 ),
                 "parameters": {
                     "type": "object",
@@ -34,6 +36,10 @@ def get_coding_compat_tools_openai_def() -> list[dict]:
                         "file_path": {"type": "string", "description": "Alias for path"},
                         "max_chars": {"type": "integer", "description": "Optional max output characters"},
                         "maxChars": {"type": "integer", "description": "CamelCase alias for max_chars"},
+                        "offset": {
+                            "type": "integer",
+                            "description": "Character offset to start reading from (for pagination, default 0)",
+                        },
                     },
                 },
             },
@@ -140,7 +146,19 @@ async def _resolve_compatible_path(
     return candidate, None
 
 
-async def run_read_compat(params: dict, user_id: str, db: "Db | None") -> str:
+async def run_read_compat(
+    params: dict,
+    user_id: str,
+    db: "Db | None",
+    *,
+    model: str | None = None,
+    provider: str | None = None,
+) -> str:
+    """Read a file with adaptive paging.
+
+    Supports `offset` param for pagination: the model can call read again with
+    offset=N after seeing the continuation hint.
+    """
     path, err = await _resolve_compatible_path((params.get("path") or ""), user_id, db)
     if err:
         return f"Error: {err}"
@@ -150,13 +168,21 @@ async def run_read_compat(params: dict, user_id: str, db: "Db | None") -> str:
         content = path.read_text(encoding="utf-8", errors="replace")
     except Exception as e:
         return f"Error reading file: {e}"
+
+    # Explicit max_chars from caller overrides adaptive logic.
     max_chars_raw = params.get("max_chars")
-    max_chars = DEFAULT_MAX_READ_CHARS
-    if isinstance(max_chars_raw, int):
-        max_chars = max(1, min(max_chars_raw, MAX_READ_CHARS_CAP))
-    if len(content) > max_chars:
-        return content[:max_chars] + "\n... (truncated)"
-    return content
+    if isinstance(max_chars_raw, int) and max_chars_raw > 0:
+        page_chars = max(1, min(max_chars_raw, MAX_READ_CHARS_CAP))
+    else:
+        page_chars = compute_page_chars(model, provider)
+
+    # Offset pagination: model gets continuation hint and calls again with offset=N.
+    offset_raw = params.get("offset")
+    offset = int(offset_raw) if isinstance(offset_raw, int) and offset_raw > 0 else 0
+    if offset > 0:
+        content = content[offset:]
+
+    return truncate_with_offset_hint(content, max_chars=page_chars, offset=offset)
 
 
 async def run_write_compat(params: dict, user_id: str, db: "Db | None") -> str:

@@ -2,7 +2,38 @@
 
 All notable changes to Asta are documented here.
 
-## [Unreleased]
+## [1.3.20] - 2026-02-23
+
+### Added
+
+- **macOS app: persistent chat history** — Each new conversation now gets a unique UUID-based ID (`user:web:abcd1234`). The sidebar fetches and displays all past conversations from the backend with title (first message) and relative timestamp. Click any conversation to reload its messages. Right-click → Delete to remove.
+- **Chat history API** — New backend endpoints:
+  - `GET /api/chat/conversations` — list conversations ordered by last activity, with title from first user message.
+  - `DELETE /api/chat/conversations/{id}` — delete a conversation and all its messages.
+- **macOS app: remote backend support (ATS fix)** — Added `NSAllowsArbitraryLoads` to Info.plist so the app can connect to HTTP backends on Tailscale IPs and LAN addresses.
+- **macOS app: Tailscale HTTPS tunnel** — Connection tab now has "Enable HTTPS Tunnel" button that runs `tailscale serve --bg http://localhost:<port>` to expose the backend via a real TLS certificate at `https://machine.tailnet.ts.net`. Shows HTTPS or HTTP badge on the remote link. "Disable" runs `tailscale serve --https=443 off`.
+- **macOS app: onboarding URL input** — Backend URL field is now visible in the onboarding "Connect Backend" step so users can enter a Tailscale or LAN URL and continue without needing a local backend running.
+
+### Changed
+
+- **macOS app: agent list real-time sync** — Chat agent picker now updates immediately when agents are added or deleted in Settings (uses `appState.agentsList` as single source of truth, no local state copy).
+- **macOS app: sidebar loads on connect** — Conversation history now loads as soon as the app connects to the backend, not only after sending the first message.
+- **Conversations are session-scoped** — New chat sessions create unique conversation IDs instead of reusing a single `default:web` conversation, enabling proper per-session history.
+- **Google Workspace skill: removed hardcoded email** — Default account fallback (`dronx.enmanuel@gmail.com`) removed; set `GOG_ACCOUNT` env variable or use `gog auth add` to configure your account. `gog auth remove` now uses `--force` flag to avoid interactive confirmation hangs.
+- **Backend synthesis nudge** — When a model returns empty content after tool use, handler injects a follow-up user message ("Please now summarize…") and retries once without tools to recover from silent empty responses.
+- **Skills audit and fixes**:
+  - `notes` skill: replaced `[ASTA_WRITE_FILE: ...]` syntax (OpenClaw-only) with `write_file` tool instructions.
+  - `competitor` skill: rewrote to use `write_file` tool at `research/[topic]_report.md`, marked `is_agent: true`.
+  - `apple-notes` skill: replaced interactive `memo -a` flags with `osascript` for non-interactive note creation.
+  - `things-mac` skill: added THINGSDB path documentation.
+  - `auto-updater-100` skill: removed (Clawdbot-specific, not applicable to Asta).
+  - Added `osascript` and `open` to `ASTA_EXEC_ALLOWED_BINS`.
+
+### Fixed
+
+- **macOS app: TailscaleSettingsTab** missing `appState` parameter (compile error).
+- **macOS app: Google Workspace disconnect** button was hanging silently — fixed with `gog auth remove --force`.
+- **Tailscale serve syntax** updated to current CLI (`--bg http://localhost:PORT` instead of deprecated `https:443 / http://...`).
 
 ---
 
@@ -10,7 +41,7 @@ All notable changes to Asta are documented here.
 
 ### Added
 
-- **Google Workspace (gog) skill** — New skill for Gmail, Google Calendar, and Google Drive via `gog` CLI. Supports searching emails, listing/creating calendar events, and searching Drive files. Uses your authenticated `gog` account (currently `dronx.enmanuel@gmail.com`).
+- **Google Workspace (gog) skill** — New skill for Gmail, Google Calendar, and Google Drive via `gog` CLI. Supports searching emails, listing/creating calendar events, and searching Drive files. Configure your account via `GOG_ACCOUNT` env variable or `gog auth add`.
 - **Tool loop detection** — Added `backend/app/tool_loop_detection.py` to detect and warn when the model repeatedly calls the same tool with identical arguments (e.g., stuck in a read_file loop). Emits warning at 10 calls and critical at 20 calls.
 - **Enhanced Spotify service** — Spotify service now includes:
   - Intent parsing with confidence scores (control/playlist/track/search)
@@ -31,7 +62,20 @@ All notable changes to Asta are documented here.
 
 ---
 
-## [Unreleased]
+## [1.3.19] - 2026-02-22
+
+### Added
+
+- **Agents API** — New CRUD endpoints for named agents backed by workspace skills:
+  - `GET /api/agents` — list all agent-flagged skills (`is_agent: true` in frontmatter).
+  - `POST /api/agents` — create a new agent (writes `workspace/skills/<slug>/SKILL.md`).
+  - `PATCH /api/agents/{slug}` — update agent name, description, or instructions.
+  - `DELETE /api/agents/{slug}` — remove an agent skill directory.
+  - Agent picker in macOS app and web UI reads from this endpoint.
+- **Adaptive paging (OpenClaw-style)** — Tool output is now capped to 20% of the active model's context window (`adaptive_paging.py`). Minimum 50 KB, hard ceiling 512 KB. Per-model context sizes table covers Groq, Ollama, Claude, OpenAI, OpenRouter, and Gemini models. Prevents context overflow on small-context models (llama-3.1-8b, phi3:mini, etc.).
+- **Context compaction** — `compaction.py` integrates with adaptive paging: long conversation histories are summarised and trimmed to fit within context limits before each AI call, preserving the most recent turns and injecting a compaction notice.
+- **Research skill** — `ResearchSkill` (`backend/app/skills/research_skill.py`) handles research/market analysis requests. Saves reports to `workspace/research/<topic>_report.md` via the `write_file` tool.
+- **Scheduler handler intent parser** — `scheduler_handler.py` natural language intent parser for reminder and cron creation: parses phrasing like “remind me at 3pm”, “every day at 9am”, “set an alarm for tomorrow 11am” and routes directly to the cron/reminder tool path.
 
 ### Changed
 
@@ -51,7 +95,13 @@ All notable changes to Asta are documented here.
 - **Provider-aware thinking options** — `/api/settings/thinking` now returns active provider/model context plus supported thinking options (`options`, `supports_xhigh`), so UI/channel controls can reflect model capability.
 - **Thinking capability parity across surfaces** — Telegram and handler now use shared thinking-capability logic (including comma-separated model handling), reducing drift between command parsing and runtime gating.
 - **Settings UI thinking selector cleanup** — Thinking dropdown now renders provider-aware options from backend capability data and preserves current selection safely when providers/models change.
-- **Provider capability matrix** — Added `/api/settings/provider-capabilities` (and `/settings/provider-capabilities`) plus Settings UI "Provider behavior matrix" cards that show per-provider tools behavior, streaming behavior, and thinking capability summaries for the fixed `Claude -> Ollama -> OpenRouter` chain.
+- **Provider capability matrix** — Added `/api/settings/provider-capabilities` (and `/settings/provider-capabilities`) plus Settings UI “Provider behavior matrix” cards that show per-provider tools behavior, streaming behavior, and thinking capability summaries for the fixed `Claude -> Ollama -> OpenRouter` chain.
+- **New config env vars** — Added to `config.py` and `.env.example`:
+  - `ASTA_MEMORY_SEARCH_MODE` (`search` / `hybrid`) — lexical-first vs always-hybrid RAG search.
+  - `ASTA_SUBAGENTS_AUTO_SPAWN` — toggle auto-spawn for long/background tasks.
+  - `ASTA_SUBAGENTS_MAX_CONCURRENT` — max concurrent child runs.
+  - `ASTA_SUBAGENTS_ARCHIVE_AFTER_MINUTES` — auto-archive timer for keep-mode sessions.
+  - `ASTA_VISION_PREPROCESS`, `ASTA_VISION_PROVIDER_ORDER`, `ASTA_VISION_OPENROUTER_MODEL` — vision pipeline config.
 
 ### Tests
 

@@ -1,5 +1,6 @@
 """Chat and incoming webhook routes."""
 import asyncio
+import base64
 import json
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -36,6 +37,32 @@ def _whatsapp_sender_allowed(
     return (clean in whitelist) or (raw_number in whitelist)
 
 
+@router.get("/chat/conversations")
+async def list_conversations(
+    user_id: str = Query("default"),
+    channel: str = Query("web"),
+    limit: int = Query(50, ge=1, le=100),
+):
+    """Return list of conversations for the sidebar."""
+    db = get_db()
+    await db.connect()
+    convs = await db.list_conversations(user_id, channel, limit)
+    return {"conversations": convs}
+
+
+@router.delete("/chat/conversations/{conversation_id}")
+async def delete_conversation(
+    conversation_id: str,
+    user_id: str = Query("default"),
+):
+    db = get_db()
+    await db.connect()
+    if not conversation_id.startswith(user_id + ":"):
+        raise HTTPException(403, "Conversation does not belong to this user")
+    await db.delete_conversation(conversation_id)
+    return {"ok": True}
+
+
 @router.get("/chat/messages")
 async def get_chat_messages(
     conversation_id: str = Query(..., description="Conversation ID, e.g. default:web or default:telegram"),
@@ -57,6 +84,9 @@ class ChatIn(BaseModel):
     user_id: str = "default"
     conversation_id: str | None = None
     mood: str | None = None  # serious | friendly | normal
+    web: bool = False  # if true, prefer web_search/web_fetch tools
+    image_base64: str | None = None  # optional image payload for vision
+    image_mime: str | None = None
 
 
 class ChatOut(BaseModel):
@@ -70,10 +100,16 @@ async def chat(body: ChatIn):
     try:
         db = get_db()
         await db.connect()
-        cid = body.conversation_id or await db.get_or_create_conversation(body.user_id, "web")
+        cid = body.conversation_id or await db.create_new_conversation(body.user_id, "web")
         provider = body.provider
         if provider == "default":
             provider = await db.get_user_default_ai(body.user_id)
+        image_bytes = None
+        if body.image_base64:
+            try:
+                image_bytes = base64.b64decode(body.image_base64)
+            except Exception:
+                image_bytes = None
         async with queue_key(f"web:{cid}"):
             reply = await handle_message(
                 body.user_id, "web", body.text,
@@ -81,6 +117,9 @@ async def chat(body: ChatIn):
                 conversation_id=cid,
                 channel_target="web",
                 mood=body.mood,
+                extra_context={"force_web": bool(body.web)} if body.web else None,
+                image_bytes=image_bytes,
+                image_mime=body.image_mime,
             )
         return ChatOut(reply=reply, conversation_id=cid, provider=provider)
     except Exception as e:
@@ -95,7 +134,7 @@ async def chat_stream(body: ChatIn):
     """Streaming chat endpoint (SSE): emits assistant/reasoning/status/done events."""
     db = get_db()
     await db.connect()
-    cid = body.conversation_id or await db.get_or_create_conversation(body.user_id, "web")
+    cid = body.conversation_id or await db.create_new_conversation(body.user_id, "web")
     provider = body.provider
     if provider == "default":
         provider = await db.get_user_default_ai(body.user_id)
@@ -107,6 +146,12 @@ async def chat_stream(body: ChatIn):
 
     async def _run_chat() -> None:
         try:
+            image_bytes = None
+            if body.image_base64:
+                try:
+                    image_bytes = base64.b64decode(body.image_base64)
+                except Exception:
+                    image_bytes = None
             async with queue_key(f"web:{cid}"):
                 reply = await handle_message(
                     body.user_id,
@@ -116,7 +161,12 @@ async def chat_stream(body: ChatIn):
                     conversation_id=cid,
                     channel_target="web",
                     mood=body.mood,
-                    extra_context={"_stream_event_callback": _emit_event},
+                    extra_context={
+                        "_stream_event_callback": _emit_event,
+                        **({"force_web": True} if body.web else {}),
+                    },
+                    image_bytes=image_bytes,
+                    image_mime=body.image_mime,
                 )
             await event_queue.put(
                 {

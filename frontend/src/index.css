@@ -1449,6 +1449,8 @@ textarea:focus {
   display: flex;
   flex-direction: column;
   gap: 0.9rem;
+  max-width: 1100px;
+  margin: 0 auto;
 }
 .settings-page-intro {
   margin-bottom: 0.6rem;
@@ -1752,7 +1754,7 @@ textarea:focus {
   margin-bottom: 0.35rem;
 }
 .settings-command-block {
-  max-width: 820px;
+  max-width: 1000px;
 }
 
 @media (max-width: 1180px) {

@@ -19,60 +19,71 @@ metadata:
 
 Use `things` to read your local Things database (inbox/today/search/projects/areas/tags) and to add/update todos via the Things URL scheme.
 
-## Setup
+## Requirements
 
-- Install (recommended, Apple Silicon): `GOBIN=/opt/homebrew/bin go install github.com/ossianhempel/things3-cli/cmd/things@latest`
-- If DB reads fail: grant **Full Disk Access** to the calling app (Terminal for manual runs; `OpenClaw.app` for gateway runs).
-- Optional: set `THINGSDB` (or pass `--db`) to point at your `ThingsData-*` folder.
-- Optional: set `THINGS_AUTH_TOKEN` to avoid passing `--auth-token` for update ops.
+- **Things 3 app** must be installed (Mac App Store). Without it, neither reads nor writes will work.
+- Install CLI: `GOBIN=/opt/homebrew/bin go install github.com/ossianhempel/things3-cli/cmd/things@latest`
+- **For DB reads:** set `THINGSDB` environment variable to your Things database folder.
+  - Typical path: `~/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-<hash>/`
+  - Find it: `ls ~/Library/Group\ Containers/JLMPQHK86H.com.culturedcode.ThingsMac/`
+  - Set in shell: `export THINGSDB="$HOME/Library/Group Containers/JLMPQHK86H.com.culturedcode.ThingsMac/ThingsData-<hash>/"`
+  - Or add to backend `.env`: `THINGSDB=/path/to/ThingsData-xxx`
+- **Full Disk Access** required for read operations: grant it to Terminal (or Asta.app) in System Settings → Privacy & Security → Full Disk Access.
+- Optional: set `THINGS_AUTH_TOKEN` for update/modify operations.
 
 ## Read-only (DB)
 
-- `things inbox --limit 50`
-- `things today`
-- `things upcoming`
-- `things search "query"`
-- `things projects` / `things areas` / `things tags`
+```bash
+things inbox --limit 50
+things today
+things upcoming
+things search "query"
+things projects
+things areas
+things tags
+```
 
-## Write (URL scheme)
+## Write (URL scheme — opens Things app)
 
-- Prefer safe preview: `things --dry-run add "Title"`
-- Add: `things add "Title" --notes "..." --when today --deadline 2026-01-02`
-- Bring Things to front: `things --foreground add "Title"`
+```bash
+# Preview without creating:
+things --dry-run add "Title"
 
-## Examples: add a todo
+# Add a task:
+things add "Title" --notes "notes here" --when today --deadline 2026-06-01
 
-- Basic: `things add "Buy milk"`
-- With notes: `things add "Buy milk" --notes "2% + bananas"`
-- Into a project/area: `things add "Book flights" --list "Travel"`
-- Into a project heading: `things add "Pack charger" --list "Travel" --heading "Before"`
-- With tags: `things add "Call dentist" --tags "health,phone"`
-- Checklist: `things add "Trip prep" --checklist-item "Passport" --checklist-item "Tickets"`
-- From STDIN (multi-line => title + notes):
-  - `cat <<'EOF' | things add -`
-  - `Title line`
-  - `Notes line 1`
-  - `Notes line 2`
-  - `EOF`
+# Bring Things to front when adding:
+things --foreground add "Title"
+```
 
-## Examples: modify a todo (needs auth token)
+## Add examples
 
-- First: get the ID (UUID column): `things search "milk" --limit 5`
-- Auth: set `THINGS_AUTH_TOKEN` or pass `--auth-token `
-- Title: `things update --id <UUID> --auth-token <TOKEN> "New title"`
-- Notes replace: `things update --id <UUID> --auth-token <TOKEN> --notes "New notes"`
-- Notes append/prepend: `things update --id <UUID> --auth-token <TOKEN> --append-notes "..."` / `--prepend-notes "..."`
-- Move lists: `things update --id <UUID> --auth-token <TOKEN> --list "Travel" --heading "Before"`
-- Tags replace/add: `things update --id <UUID> --auth-token <TOKEN> --tags "a,b"` / `things update --id <UUID> --auth-token <TOKEN> --add-tags "a,b"`
-- Complete/cancel (soft-delete-ish): `things update --id <UUID> --auth-token <TOKEN> --completed` / `--canceled`
-- Safe preview: `things --dry-run update --id <UUID> --auth-token <TOKEN> --completed`
+```bash
+things add "Buy milk"
+things add "Buy milk" --notes "2% + bananas"
+things add "Book flights" --list "Travel"
+things add "Pack charger" --list "Travel" --heading "Before"
+things add "Call dentist" --tags "health,phone"
+things add "Trip prep" --checklist-item "Passport" --checklist-item "Tickets"
+```
 
-## Delete a todo?
+## Modify a todo (needs auth token)
 
-- Not supported by `things3-cli` right now (no "delete/move-to-trash" write command; `things trash` is read-only listing).
-- Options: use Things UI to delete/trash, or mark as `--completed` / `--canceled` via `things update`.
+```bash
+# Get task ID first:
+things search "milk" --limit 5
+
+# Update:
+things update --id <UUID> --auth-token <TOKEN> "New title"
+things update --id <UUID> --auth-token <TOKEN> --notes "New notes"
+things update --id <UUID> --auth-token <TOKEN> --append-notes "extra"
+things update --id <UUID> --auth-token <TOKEN> --completed
+things update --id <UUID> --auth-token <TOKEN> --canceled
+```
 
 ## Notes
 
 - macOS-only.
 - `--dry-run` prints the URL and does not open Things.
+- Delete is not supported by the CLI; mark as `--completed` or `--canceled` instead.
+- If `THINGSDB` is not set, read operations fail with "Things database not found".

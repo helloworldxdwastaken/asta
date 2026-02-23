@@ -85,6 +85,9 @@ SKILLS = [
     {"id": "silly_gif", "name": "Silly GIF", "description": "Occasionally replies with a relevant GIF in friendly chats. Requires Giphy API key."},
     {"id": "self_awareness", "name": "Self Awareness", "description": "When asked about Asta (features, docs, how to use): injects README + CHANGELOG + docs/*.md and workspace context so the model answers from real docs. User context comes from workspace/USER.md."},
     {"id": "server_status", "name": "Server Status", "description": "Monitor system metrics like CPU, RAM, Disk and Uptime. Ask 'server status' or '/status'."},
+    {"id": "google_workspace", "name": "Google Workspace", "description": "Read Gmail, Google Calendar, Drive, and Contacts via the `gog` CLI. Install: brew install gogcli, then gog auth add your@gmail.com --services gmail,calendar,drive,contacts"},
+    {"id": "github", "name": "GitHub", "description": "Manage repos, issues, pull requests, and CI runs via the `gh` CLI. Install: brew install gh, then gh auth login"},
+    {"id": "vercel", "name": "Vercel", "description": "Check deployments and projects via the `vercel` CLI. Install: npm i -g vercel, then vercel login"},
 ]
 
 ALLOWED_API_KEY_NAMES = frozenset({
@@ -403,9 +406,16 @@ async def get_models(user_id: str = "default"):
 async def get_available_models():
     """List available tool-capable models per provider used by Settings/Dashboard pickers."""
     ollama_models = await _ollama_list_models()
+    # For cloud providers (openai, anthropic, google, groq), we return empty list
+    # as they use API keys and models are determined by the provider's API
+    # The user can set any model name for these providers
     return {
         "ollama": ollama_models,
         "openrouter": list(OPENROUTER_RECOMMENDED_MODELS),
+        "openai": [],  # Uses OpenAI API, user can specify any model
+        "claude": [],  # Uses Anthropic API, user can specify any model  
+        "google": [],   # Uses Google API, user can specify any model
+        "groq": [],    # Uses Groq API, user can specify any model
     }
 
 
@@ -545,6 +555,10 @@ async def get_status(user_id: str = "default"):
         "self_awareness": True,
         "silly_gif": api_status.get("giphy_api_key", False),
         "server_status": True,
+        # CLI-based skills: available if binary is found
+        "google_workspace": bool(__import__('shutil').which('gog') or __import__('os').path.isfile('/opt/homebrew/bin/gog')),
+        "github": bool(__import__('shutil').which('gh') or __import__('os').path.isfile('/opt/homebrew/bin/gh')),
+        "vercel": bool(__import__('shutil').which('vercel') or __import__('os').path.isfile('/usr/local/bin/vercel')),
     }
     skills = []
     for sk in _get_all_skill_defs():
@@ -913,6 +927,7 @@ async def get_skills(user_id: str = "default"):
         "rag": "Set up Ollama",
         "spotify": "Connect",
         "silly_gif": "Set API key",
+        "google_workspace": "Configure in Google tab (requires gog CLI)",
     }
     all_skill_defs = _get_all_skill_defs()
     from app.workspace import get_host_os_tag
@@ -1080,7 +1095,7 @@ async def get_workspace_notes(limit: int = 20):
         return {"notes": []}
 
     items: list[dict] = []
-    candidates = [workspace / "notes", workspace / "workspace" / "notes"]
+    candidates = [workspace / "memos", workspace / "notes", workspace / "workspace" / "notes"]
     for notes_dir in candidates:
         if not notes_dir.exists() or not notes_dir.is_dir():
             continue

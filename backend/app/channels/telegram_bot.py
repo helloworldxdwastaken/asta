@@ -24,6 +24,8 @@ from telegram.ext import (
 import asyncio
 import html
 
+from app.thinking_capabilities import supports_xhigh_thinking, get_thinking_options
+
 # Locks to ensure sequential processing per chat
 _chat_locks: dict[int, asyncio.Lock] = {}
 _chat_locks_lock = asyncio.Lock()
@@ -470,11 +472,165 @@ async def on_voice_or_audio(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         logger.info("Telegram audio notes sent to %s", user_id)
 
 
+# Provider labels for Telegram UI
+_PROVIDER_LABELS = {
+    "claude": "🧠 Claude",
+    "ollama": "💻 Ollama (Local)",
+    "openrouter": "🌐 OpenRouter (Kimi/Trinity)",
+    "openai": "🤖 OpenAI",
+    "google": "🔍 Google Gemini",
+    "groq": "⚡ Groq",
+}
+
+# Valid providers
+_VALID_PROVIDERS = frozenset(_PROVIDER_LABELS.keys())
+
+
+def _provider_markup(current: str | None = None) -> InlineKeyboardMarkup:
+    """Build inline keyboard with provider buttons."""
+    buttons = []
+    row = []
+    for provider, label in _PROVIDER_LABELS.items():
+        callback = f"provider:{provider}"
+        # Show checkmark for current provider
+        display = f"✅ {label}" if provider == current else label
+        row.append(InlineKeyboardButton(display, callback_data=callback))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    # Add model selection button
+    buttons.append([InlineKeyboardButton("🔧 Select Model", callback_data="provider:select_model")])
+    return InlineKeyboardMarkup(buttons)
+
+
+def _provider_text(current: str | None, model: str | None = None) -> str:
+    """Build text showing current provider/model."""
+    label = _PROVIDER_LABELS.get(current, current or "Not set")
+    model_line = f"\nModel: <code>{model}</code>" if model else ""
+    return (
+        f"<b>AI Provider</b>\n\n"
+        f"Current: {label}{model_line}\n\n"
+        "Select a provider below:"
+    )
+
+
+async def _get_current_provider_model() -> tuple[str, str | None]:
+    """Get current provider and model for user."""
+    from app.db import get_db
+    db = get_db()
+    await db.connect()
+    provider = await db.get_user_default_ai("default")
+    model = await db.get_user_provider_model("default", provider)
+    return provider, model
+
+
+async def _set_provider(provider: str) -> str:
+    """Set user's default provider."""
+    from app.db import get_db
+    db = get_db()
+    await db.connect()
+    await db.set_user_default_ai("default", provider)
+    await db.set_provider_runtime_enabled("default", provider, True)
+    return provider
+
+
+async def _set_model(provider: str, model: str) -> str:
+    """Set user's model for a provider."""
+    from app.db import get_db
+    db = get_db()
+    await db.connect()
+    await db.set_user_provider_model("default", provider, model)
+    return model
+
+
+async def provider_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /provider command - show provider selection buttons."""
+    if not update.message:
+        return
+    if not _telegram_user_allowed(update):
+        await update.message.reply_text("You're not authorized to use this bot.")
+        return
+    
+    current, model = await _get_current_provider_model()
+    await update.message.reply_text(
+        _provider_text(current, model),
+        reply_markup=_provider_markup(current),
+        parse_mode=constants.ParseMode.HTML,
+    )
+
+
+async def provider_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle provider selection inline button callbacks."""
+    query = update.callback_query
+    if not query:
+        return
+    if not _telegram_user_allowed(update):
+        await query.answer("Unauthorized", show_alert=True)
+        return
+    
+    data = (query.data or "").strip()
+    if not data.startswith("provider:"):
+        return
+    
+    action = data.split(":", 1)[1].strip().lower() if ":" in data else ""
+    
+    if action == "select_model":
+        # Show model selection
+        current, _ = await _get_current_provider_model()
+        await query.answer("Select a model from Settings or use /model command")
+        return
+    
+    # Handle provider selection
+    if action not in _VALID_PROVIDERS:
+        await query.answer("Invalid provider", show_alert=True)
+        return
+    
+    try:
+        await _set_provider(action)
+        current, model = await _get_current_provider_model()
+        await query.answer(f"Provider set to {action}")
+        await query.edit_message_text(
+            _provider_text(current, model),
+            reply_markup=_provider_markup(current),
+            parse_mode=constants.ParseMode.HTML,
+        )
+    except Exception as e:
+        await query.answer(f"Error: {str(e)[:100]}", show_alert=True)
+        logger.warning("Could not set provider from telegram callback: %s", e)
+
+
+async def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /model command - show current model info."""
+    if not update.message:
+        return
+    if not _telegram_user_allowed(update):
+        await update.message.reply_text("You're not authorized to use this bot.")
+        return
+    
+    provider, model = await _get_current_provider_model()
+    provider_label = _PROVIDER_LABELS.get(provider, provider)
+    
+    if model:
+        text = f"<b>Current Model</b>\n\nProvider: {provider_label}\nModel: <code>{model}</code>"
+    else:
+        text = f"<b>Current Model</b>\n\nProvider: {provider_label}\nModel: (default)"
+    
+    text += "\n\nTo change model, use Settings web panel or set a custom model per provider."
+    await update.message.reply_text(text, parse_mode=constants.ParseMode.HTML)
+
+
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message:
         await update.message.reply_text(
             "Hi, I'm Asta. Send me a message and I'll reply with context from your connected services. "
-            "You can also send a voice message or audio file (or paste a direct link to an audio file for long recordings over 20 MB) — I'll transcribe and format as meeting notes."
+            "You can also send a voice message or audio file (or paste a direct link to an audio file for long recordings over 20 MB) — I'll transcribe and format as meeting notes.\n\n"
+            "Commands:\n"
+            "• /provider - Change AI provider\n"
+            "• /model - Show current model\n"
+            "• /think - Set thinking level\n"
+            "• /reasoning - Set reasoning visibility"
         )
 
 
@@ -947,25 +1103,9 @@ def _thinking_markup(current: str, options: tuple[str, ...] | None = None) -> In
     return InlineKeyboardMarkup([buttons])
 
 
-def _supports_xhigh_thinking(provider: str | None, model: str | None) -> bool:
-    model_key = (model or "").strip().lower()
-    if not model_key:
-        return False
-    provider_key = (provider or "").strip().lower()
-    if model_key in _XHIGH_MODEL_SET:
-        return True
-    if provider_key and f"{provider_key}/{model_key}" in _XHIGH_MODEL_SET:
-        return True
-    if model_key in _XHIGH_MODEL_IDS:
-        return True
-    if "/" in model_key and model_key.split("/", 1)[1] in _XHIGH_MODEL_IDS:
-        return True
-    return False
-
-
+# Use the centralized thinking capabilities module
 def _thinking_options(provider: str | None, model: str | None) -> tuple[str, ...]:
-    base = ("off", "minimal", "low", "medium", "high")
-    return base + (("xhigh",) if _supports_xhigh_thinking(provider, model) else ())
+    return get_thinking_options(provider, model)
 
 
 def _thinking_text(current: str, *, options: tuple[str, ...] | None = None, provider: str | None = None, model: str | None = None) -> str:
@@ -1021,7 +1161,7 @@ async def thinking_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("You're not authorized to use this bot.")
         return
     current = await _get_thinking_level()
-    provider, model = await _get_default_provider_model()
+    provider, model = await _get_current_provider_model()
     available = _thinking_options(provider, model)
     arg = ((context.args[0] if context.args else "") or "").strip().lower()
     if arg:
@@ -1054,7 +1194,7 @@ async def thinking_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
     data = (query.data or "").strip()
     level = data.split(":", 1)[1].strip().lower() if ":" in data else ""
-    provider, model = await _get_default_provider_model()
+    provider, model = await _get_current_provider_model()
     available = _thinking_options(provider, model)
     if level not in available:
         await query.answer("Invalid level", show_alert=True)
@@ -1160,6 +1300,8 @@ def build_telegram_app(token: str) -> Application:
     app = Application.builder().token(token.strip()).rate_limiter(rate_limiter).build()
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
+    app.add_handler(CommandHandler("provider", provider_cmd))
+    app.add_handler(CommandHandler("model", model_cmd))
     app.add_handler(CommandHandler("exec_mode", exec_mode_cmd))
     app.add_handler(CommandHandler("allow", allow_cmd))
     app.add_handler(CommandHandler("approvals", approvals_cmd))
@@ -1169,6 +1311,8 @@ def build_telegram_app(token: str) -> Application:
     app.add_handler(CommandHandler("t", thinking_cmd))
     app.add_handler(CommandHandler("reasoning", reasoning_cmd))
     app.add_handler(CommandHandler("subagents", subagents_cmd))
+    app.add_handler(CommandHandler("learn", learn_cmd))
+    app.add_handler(CallbackQueryHandler(provider_callback, pattern=r"^provider:"))
     app.add_handler(CallbackQueryHandler(exec_mode_callback, pattern=r"^exec_mode:"))
     app.add_handler(CallbackQueryHandler(thinking_callback, pattern=r"^thinking:"))
     app.add_handler(CallbackQueryHandler(reasoning_callback, pattern=r"^reasoning:"))
@@ -1337,6 +1481,37 @@ async def subagents_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await update.message.reply_text(f"Error: {str(e)[:500]}")
 
 
+async def learn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /learn command - save information to memory/RAG."""
+    if not update.message:
+        return
+    if not _telegram_user_allowed(update):
+        await update.message.reply_text("You're not authorized to use this bot.")
+        return
+
+    user_id = "default"
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    lock = await _get_chat_lock(chat_id)
+    async with lock:
+        chat_id_str = str(chat_id)
+        suffix = " ".join(context.args or []).strip()
+        text = "/learn" + (f" {suffix}" if suffix else "")
+        try:
+            await update.message.chat.send_action("typing")
+            reply = await handle_message(
+                user_id,
+                "telegram",
+                text,
+                provider_name="default",
+                channel_target=chat_id_str,
+            )
+            out = (reply or "").strip()[:TELEGRAM_MAX_MESSAGE_LENGTH] or "No response."
+            await _reply_text_safe_html(update.message, out)
+        except Exception as e:
+            logger.exception("Telegram /learn handler error")
+            await update.message.reply_text(f"Error: {str(e)[:500]}")
+
+
 async def start_telegram_bot_in_loop(app: Application) -> None:
     """Initialize and start polling + processor. Run inside FastAPI lifespan (same event loop)."""
     await app.initialize()
@@ -1344,6 +1519,8 @@ async def start_telegram_bot_in_loop(app: Application) -> None:
         await app.bot.set_my_commands([
             BotCommand("start", "Start Asta"),
             BotCommand("status", "Show server status"),
+            BotCommand("provider", "Change AI provider"),
+            BotCommand("model", "Show current model"),
             BotCommand("exec_mode", "Set exec security mode (deny/allowlist/full)"),
             BotCommand("allow", "Allow binary in exec allowlist"),
             BotCommand("approvals", "List pending exec approvals"),

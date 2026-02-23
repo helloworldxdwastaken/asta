@@ -418,6 +418,55 @@ class Db:
         await self._conn.commit()
         return cid
 
+    async def create_new_conversation(self, user_id: str, channel: str) -> str:
+        """Create a brand-new conversation with a unique ID."""
+        if not self._conn:
+            await self.connect()
+        from uuid import uuid4
+        cid = f"{user_id}:{channel}:{uuid4().hex[:8]}"
+        await self._conn.execute(
+            "INSERT INTO conversations (id, user_id, channel, created_at) VALUES (?, ?, ?, datetime('now'))",
+            (cid, user_id, channel),
+        )
+        await self._conn.commit()
+        return cid
+
+    async def list_conversations(self, user_id: str, channel: str = "web", limit: int = 50) -> list[dict[str, Any]]:
+        """List conversations ordered by most recent activity, with title from first user message."""
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute(
+            """
+            SELECT
+                c.id,
+                c.created_at,
+                (SELECT content FROM messages WHERE conversation_id = c.id AND role = 'user' ORDER BY id ASC LIMIT 1) AS title,
+                (SELECT created_at FROM messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) AS last_active
+            FROM conversations c
+            WHERE c.user_id = ? AND c.channel = ?
+              AND EXISTS (SELECT 1 FROM messages WHERE conversation_id = c.id)
+            ORDER BY COALESCE(
+                (SELECT created_at FROM messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1),
+                c.created_at
+            ) DESC
+            LIMIT ?
+            """,
+            (user_id, channel, limit),
+        )
+        rows = await cursor.fetchall()
+        result = []
+        for r in rows:
+            title = r["title"] or "New conversation"
+            if len(title) > 80:
+                title = title[:80] + "…"
+            result.append({
+                "id": r["id"],
+                "title": title,
+                "created_at": r["created_at"],
+                "last_active": r["last_active"] or r["created_at"],
+            })
+        return result
+
     async def add_message(self, conversation_id: str, role: str, content: str, provider_used: str | None = None) -> None:
         if not self._conn:
             await self.connect()

@@ -1,6 +1,6 @@
 # Asta
 
-A personal AI workspace that runs on **web**, **Telegram**, and **WhatsApp (Beta)** with one shared context.
+A personal AI workspace that runs on **macOS app**, **web**, **Telegram**, and **WhatsApp (Beta)** with one shared context and persistent chat history.
 
 ## Preview
 
@@ -8,11 +8,12 @@ A personal AI workspace that runs on **web**, **Telegram**, and **WhatsApp (Beta
 
 ## Why Asta
 
+- **Native macOS app** — menu-bar app with sidebar conversation history, agent picker, and Tailscale remote access.
 - Multi-provider AI: Groq, Google Gemini, Claude, OpenAI, OpenRouter, and Ollama.
 - OpenClaw-style skill flow: model selects the best workspace skill and reads its `SKILL.md` on demand.
 - Built-in skills: time/weather, web search, Spotify, reminders, audio notes, background learning, and Google Workspace (Gmail, Calendar, Drive via gog CLI).
 - Clear split between **built-in Python skills** (core/reliable) and **workspace `SKILL.md` skills** (import/custom).
-- Unified memory: chat history, allowed local files, learned knowledge (RAG), and channel history.
+- Unified memory: persistent chat history (per-session), allowed local files, learned knowledge (RAG), and channel history.
 - Native setup: no Docker required.
 
 ## Requirements
@@ -126,12 +127,29 @@ Then run `ollama serve` (or open Ollama app). If Ollama is not used, set OpenAI 
 - `docs/SPEC.md`: product behavior and implementation notes.
 - `docs/SECURITY.md`: secret handling and security guidance.
 
+## macOS App
+
+The native macOS app lives in `MACAPP/`. It's a menu-bar app built with SwiftUI.
+
+**Features:**
+- Sidebar with persistent conversation history (click to reload any past chat)
+- Agent picker (select custom agents defined in Settings → Agents)
+- Settings panel: API keys, providers, Tailscale remote access, Google Workspace
+- Remote access via Tailscale: "Enable HTTPS Tunnel" sets up `tailscale serve` for a proper `https://machine.ts.net` link to share with other devices
+
+**Build:**
+```bash
+cd MACAPP
+bash build-release.sh   # outputs Asta-VERSION.dmg to Desktop
+```
+
 ## Project Structure
 
 ```text
 asta/
 ├── backend/           # FastAPI backend
 ├── frontend/          # React + Vite web panel
+├── MACAPP/            # Native macOS app (SwiftUI)
 ├── services/whatsapp/ # WhatsApp bridge (Node)
 ├── scripts/           # helper scripts (RAG/Ollama setup)
 ├── docs/              # install, spec, errors, security

@@ -1,6 +1,6 @@
 ---
 name: apple-notes
-description: Mac only. Manage Apple Notes via the `memo` CLI on macOS (create, view, edit, delete, search, move, and export notes). Use only when the user explicitly asks for Apple Notes / Notes.app / iCloud Notes / `memo`.
+description: Mac only. Manage Apple Notes via the `memo` CLI on macOS (list, search notes) and osascript (create notes). Use only when the user explicitly asks for Apple Notes / Notes.app / iCloud Notes.
 homepage: https://github.com/antoniorodr/memo
 metadata:
   openclaw:
@@ -15,55 +15,67 @@ metadata:
         label: Install memo via Homebrew
 ---
 
-# Apple Notes CLI
+# Apple Notes
 
-Use `memo notes` to manage Apple Notes directly from the terminal. Create, view, edit, delete, search, move notes between folders, and export to HTML/Markdown.
+Manage Apple Notes using `memo` (list/search) and `osascript` (create).
 
 ## Setup
 
 - Install (Homebrew): `brew tap antoniorodr/memo && brew install antoniorodr/memo/memo`
-- Manual (pip): `pip install .` (after cloning the repo)
-- macOS-only; if prompted, grant Automation access to Notes.app.
+- Grant Automation access to Notes.app in System Settings → Privacy & Security → Automation.
+- macOS-only.
 
-## View Notes
+## List Notes
 
-- List all notes: `memo notes`
-- Filter by folder: `memo notes -f "Folder Name"`
-- Search notes (fuzzy): `memo notes -s "query"`
+List all notes:
+```bash
+memo notes
+```
 
-## Create Notes
+Filter by folder:
+```bash
+memo notes -f "Work"
+```
 
-- Add a new note: `memo notes -a`
-  - Opens an interactive editor to compose the note.
-- Quick add with title: `memo notes -a "Note Title"`
+List all folders:
+```bash
+memo notes -fl
+```
 
-## Edit Notes
+## Create a Note (non-interactive)
 
-- Edit existing note: `memo notes -e`
-  - Interactive selection of note to edit.
+Use `osascript` to create a note without needing a TTY:
+```bash
+osascript -e 'tell application "Notes"
+  tell account "iCloud"
+    make new note at folder "Notes" with properties {name:"Note Title", body:"Note body here"}
+  end tell
+end tell'
+```
 
-## Delete Notes
+Create in a specific folder:
+```bash
+osascript -e 'tell application "Notes"
+  tell account "iCloud"
+    make new note at folder "Work" with properties {name:"Meeting notes", body:"- Item 1\n- Item 2"}
+  end tell
+end tell'
+```
 
-- Delete a note: `memo notes -d`
-  - Interactive selection of note to delete.
+**Important:** Escape any single quotes in the content by ending the string, inserting `"'"`, and re-opening:
+- `body:"It'"'"'s a note"` → `It's a note`
 
-## Move Notes
+## Search Notes
 
-- Move note to folder: `memo notes -m`
-  - Interactive selection of note and destination folder.
+Fuzzy search:
+```bash
+memo notes -s "search term"
+```
 
-## Export Notes
-
-- Export to HTML/Markdown: `memo notes -ex`
-  - Exports selected note; uses Mistune for markdown processing.
+Note: `-s` opens an interactive selector. For non-interactive search, use `memo notes` and filter output.
 
 ## Limitations
 
-- Cannot edit notes containing images or attachments.
-- Interactive prompts may require terminal access.
-
-## Notes
-
-- macOS-only.
-- Requires Apple Notes.app to be accessible.
-- For automation, grant permissions in System Settings > Privacy & Security > Automation.
+- `memo notes -a`, `-e`, `-d`, `-m`, `-ex` require an interactive TTY — they **cannot be run from Asta**. For editing or deleting, tell the user to open Notes.app manually.
+- Notes containing images or attachments cannot be edited via CLI.
+- For automation, confirm Asta has Automation access to Notes.app in System Settings.

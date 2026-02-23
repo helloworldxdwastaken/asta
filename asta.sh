@@ -529,7 +529,19 @@ start_backend() {
     
     echo "--- Restart: $(date) ---" >> "$LOG_FILE"
 
-    nohup bash -c "source '$BACKEND_DIR/.venv/bin/activate' && cd '$BACKEND_DIR' && exec uvicorn app.main:app --host 0.0.0.0 --port $BACKEND_PORT" >> "$LOG_FILE" 2>&1 &
+    # Auto-start Tailscale on this machine so it's reachable remotely
+    if command -v tailscale &>/dev/null || [ -f /Applications/Tailscale.app/Contents/MacOS/Tailscale ]; then
+        TS_BIN=$(command -v tailscale 2>/dev/null || echo "/Applications/Tailscale.app/Contents/MacOS/Tailscale")
+        TS_STATE=$("$TS_BIN" status --json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('BackendState',''))" 2>/dev/null || echo "")
+        if [ "$TS_STATE" = "Stopped" ] || [ "$TS_STATE" = "" ]; then
+            print_sub "Starting Tailscale..."
+            "$TS_BIN" up --accept-routes 2>/dev/null &
+        fi
+        TS_IP=$("$TS_BIN" ip --4 2>/dev/null | head -1)
+        [ -n "$TS_IP" ] && print_sub "Tailscale IP: $TS_IP (port $BACKEND_PORT)"
+    fi
+
+    nohup bash -c "source '$BACKEND_DIR/.venv/bin/activate' && export PATH='$BACKEND_DIR/.venv/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin' && cd '$BACKEND_DIR' && exec uvicorn app.main:app --host 0.0.0.0 --port $BACKEND_PORT" >> "$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
     pid=$(cat "$PID_FILE")
 

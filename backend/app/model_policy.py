@@ -1,19 +1,23 @@
-"""Provider model policy helpers (OpenClaw-style capability guardrails)."""
+"""Provider model policy helpers.
+
+Single-user Asta — OpenRouter supports ANY model the user selects.
+We still keep a default chain for when no model is specified.
+"""
 
 from __future__ import annotations
 
-OPENROUTER_ALLOWED_MODEL_PREFIXES: tuple[str, ...] = (
-    "moonshotai/kimi-k2",
-    "arcee-ai/trinity",
-)
+# Default chain used when no model is specified by the user.
+# Primary: Kimi K2.5 (strong tool use), fallback: Trinity (free tier).
+OPENROUTER_DEFAULT_MODEL_CHAIN = "moonshotai/kimi-k2.5,arcee-ai/trinity-large-preview:free"
 
 OPENROUTER_RECOMMENDED_MODELS: tuple[str, ...] = (
     "moonshotai/kimi-k2.5",
     "moonshotai/kimi-k2-thinking",
     "arcee-ai/trinity-large-preview:free",
+    "openai/gpt-4o",
+    "anthropic/claude-sonnet-4-5",
+    "google/gemini-2.0-flash-001",
 )
-
-OPENROUTER_DEFAULT_MODEL_CHAIN = "moonshotai/kimi-k2.5,arcee-ai/trinity-large-preview:free"
 
 
 def _dedupe_preserve_order(values: list[str]) -> list[str]:
@@ -37,28 +41,28 @@ def split_model_csv(raw: str | None) -> list[str]:
     return _dedupe_preserve_order([chunk.strip() for chunk in str(raw).split(",") if chunk.strip()])
 
 
-def is_openrouter_tool_model(model: str) -> bool:
-    key = (model or "").strip().lower()
-    if key.startswith("openrouter/"):
-        key = key.split("/", 1)[1]
-    if not key:
-        return False
-    return any(key.startswith(prefix) for prefix in OPENROUTER_ALLOWED_MODEL_PREFIXES)
-
-
 def classify_openrouter_model_csv(raw: str | None) -> tuple[list[str], list[str]]:
+    """Return (allowed, rejected) model lists.
+
+    All user-specified models are allowed. We only strip the 'openrouter/' prefix
+    if present (since OpenRouter's own API doesn't want it in the model field).
+    Nothing is rejected by policy — the user knows what they want.
+    """
     values = split_model_csv(raw)
     allowed: list[str] = []
-    rejected: list[str] = []
     for model in values:
         canonical = model.strip()
+        # Strip redundant 'openrouter/' prefix if present
         if canonical.lower().startswith("openrouter/"):
             canonical = canonical.split("/", 1)[1].strip()
-        if is_openrouter_tool_model(canonical):
+        if canonical:
             allowed.append(canonical)
-        else:
-            rejected.append(model)
-    return _dedupe_preserve_order(allowed), _dedupe_preserve_order(rejected)
+    return _dedupe_preserve_order(allowed), []  # nothing rejected
+
+
+def is_openrouter_tool_model(model: str) -> bool:
+    """Legacy helper kept for compatibility — always returns True now."""
+    return bool((model or "").strip())
 
 
 def coerce_openrouter_model_csv(raw: str | None) -> tuple[str, list[str]]:
