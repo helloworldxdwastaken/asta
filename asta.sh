@@ -1,6 +1,6 @@
 #!/bin/bash
 #═══════════════════════════════════════════════════════════════════════════════
-#  Asta - Backend + Frontend control script
+#  Asta - Backend control script
 #═══════════════════════════════════════════════════════════════════════════════
 
 # Resolve symlink to find real source dir
@@ -12,17 +12,9 @@ while [ -h "$SOURCE" ]; do
 done
 SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
 BACKEND_DIR="$SCRIPT_DIR/backend"
-FRONTEND_DIR="$SCRIPT_DIR/frontend"
-WHATSAPP_DIR="$SCRIPT_DIR/services/whatsapp"
 PID_FILE="$SCRIPT_DIR/.asta.pid"
-FRONTEND_PID_FILE="$SCRIPT_DIR/.asta-frontend.pid"
-WHATSAPP_PID_FILE="$SCRIPT_DIR/.asta-whatsapp.pid"
 LOG_FILE="$SCRIPT_DIR/backend.log"
-FRONTEND_LOG_FILE="$SCRIPT_DIR/frontend.log"
-WHATSAPP_LOG_FILE="$SCRIPT_DIR/whatsapp.log"
 BACKEND_PORT=8010
-FRONTEND_PORT=5173
-WHATSAPP_PORT=3001
 
 # Colors
 RED='\033[38;5;196m'
@@ -101,26 +93,6 @@ pid_cwd() {
     lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1
 }
 
-is_whatsapp_bridge_pid() {
-    local pid=$1
-    local pcmd
-    pcmd=$(ps -p "$pid" -o args= 2>/dev/null)
-    if [ -z "$pcmd" ]; then
-        return 1
-    fi
-    if [[ "$pcmd" == *"$WHATSAPP_DIR"*"/index.js"* ]]; then
-        return 0
-    fi
-    if [[ "$pcmd" != *"node"* ]] || [[ "$pcmd" != *"index.js"* ]]; then
-        return 1
-    fi
-    local cwd
-    cwd=$(pid_cwd "$pid" 2>/dev/null)
-    if [ -n "$cwd" ] && [ "$cwd" = "$WHATSAPP_DIR" ]; then
-        return 0
-    fi
-    return 1
-}
 
 # Kill any process on a specific port (lsof works reliably across systems)
 kill_port() {
@@ -142,14 +114,8 @@ kill_port() {
             # Whitelist approach: Only kill if it looks like OUR specific app
             # Generic "node" or "python" is too broad — could match IDE/editor processes
             if [[ "$pcmd" == *"uvicorn"*"app.main"* ]] || \
-               [[ "$pcmd" == *"vite"* ]] || \
-               [[ "$pcmd" == *"npm run dev"* ]] || \
-               [[ "$pcmd" == *"$BACKEND_DIR"* ]] || \
-               [[ "$pcmd" == *"$FRONTEND_DIR"* ]]; then
+               [[ "$pcmd" == *"$BACKEND_DIR"* ]]; then
                 # Safe to kill — matches our app
-                 :
-            elif [ "$port" = "$WHATSAPP_PORT" ] && is_whatsapp_bridge_pid "$pid"; then
-                # Safe to kill WhatsApp bridge on dedicated port.
                  :
             else
                 print_warning "Port $port is held by unknown process (PID $pid: $pcmd). Skipping kill to protect SSH/System."
@@ -249,6 +215,44 @@ safe_kill_pid() {
     return 0
 }
 
+# Kill stale backend-local processes that still hold sqlite files
+# even when they no longer listen on the backend port.
+release_backend_db_locks() {
+    local db_path="$BACKEND_DIR/asta.db"
+    if [ ! -f "$db_path" ] || ! command -v lsof >/dev/null 2>&1; then
+        return 1
+    fi
+
+    local pids
+    pids=$(lsof -t "$db_path" 2>/dev/null | sort -u)
+    if [ -z "$pids" ]; then
+        return 1
+    fi
+
+    local released=0
+    for p in $pids; do
+        if ! kill -0 "$p" 2>/dev/null; then
+            continue
+        fi
+        local cwd pcmd
+        cwd=$(pid_cwd "$p" 2>/dev/null || true)
+        pcmd=$(ps -p "$p" -o args= 2>/dev/null)
+
+        # Safety: only kill if it clearly belongs to this backend workspace.
+        if [[ "$cwd" == "$BACKEND_DIR" ]] || [[ "$pcmd" == *"$BACKEND_DIR"* ]]; then
+            if safe_kill_pid "$p" "python" "uvicorn" "$BACKEND_DIR"; then
+                print_sub "Released DB lock holder (PID: $p)"
+                released=1
+            fi
+        fi
+    done
+
+    if [ "$released" -eq 1 ]; then
+        return 0
+    fi
+    return 1
+}
+
 update_asta() {
     print_status "Updating Asta..."
     cd "$SCRIPT_DIR" || exit 1
@@ -340,7 +344,6 @@ update_asta() {
         cecho "  ${GRAY}─────────────────────────────────────────${NC}"
         echo ""
         start_backend
-        start_frontend
         echo ""
         cecho "  ${GRAY}─────────────────────────────────────────${NC}"
         show_status
@@ -401,7 +404,24 @@ stop_backend() {
     if kill_port "$BACKEND_PORT"; then
         print_sub "Freed port $BACKEND_PORT"
     fi
-    
+
+    # Kill any root-owned uvicorn on our port (can happen if asta was once started with sudo)
+    local root_pids
+    root_pids=$(pgrep -f "uvicorn.*app.main:app" 2>/dev/null)
+    for p in $root_pids; do
+        local owner
+        owner=$(ps -o user= -p "$p" 2>/dev/null | tr -d ' ')
+        if [ "$owner" = "root" ]; then
+            sudo kill -9 "$p" 2>/dev/null && print_sub "Killed root uvicorn (PID: $p)" \
+                || print_warning "Could not kill root process $p — run: sudo kill -9 $p"
+        fi
+    done
+
+    # If a stale backend-local python process still holds sqlite, release it.
+    if release_backend_db_locks; then
+        print_sub "Cleared stale SQLite lock holder(s)"
+    fi
+
     # Check if really stopped
     if lsof -Pi ":$BACKEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
         print_warning "Port $BACKEND_PORT still in use!"
@@ -410,89 +430,21 @@ stop_backend() {
     fi
 }
 
-stop_frontend() {
-    print_status "Stopping Frontend..."
-
-    if [ -f "$FRONTEND_PID_FILE" ]; then
-        pid=$(cat "$FRONTEND_PID_FILE")
-        if safe_kill_pid "$pid" "node" "vite" "npm"; then
-            print_sub "Killed process (PID: $pid)"
-        fi
-        rm -f "$FRONTEND_PID_FILE"
-    fi
-
-    # Safely kill any remaining vite processes (validate each PID)
-    local vite_pids
-    vite_pids=$(pgrep -f "vite.*$FRONTEND_DIR" 2>/dev/null)
-    for p in $vite_pids; do
-        safe_kill_pid "$p" "node" "vite" "npm"
-    done
-
-    if kill_port "$FRONTEND_PORT"; then
-        print_sub "Freed port $FRONTEND_PORT"
-    fi
-    
-    # Check if really stopped
-    if lsof -Pi ":$FRONTEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
-       print_warning "Port $FRONTEND_PORT still in use!"
-    else
-	   print_success "Frontend stopped"
-	fi
-}
-
-stop_whatsapp_bridge() {
-    if [ ! -d "$WHATSAPP_DIR" ]; then
-        return 0
-    fi
-    print_status "Stopping WhatsApp bridge..."
-
-    if [ -f "$WHATSAPP_PID_FILE" ]; then
-        pid=$(cat "$WHATSAPP_PID_FILE")
-        if is_whatsapp_bridge_pid "$pid"; then
-            kill -15 "$pid" 2>/dev/null
-            sleep 0.5
-            if kill -0 "$pid" 2>/dev/null; then
-                kill -9 "$pid" 2>/dev/null
-            fi
-            print_sub "Killed process (PID: $pid)"
-        elif safe_kill_pid "$pid" "node" "index.js" "$WHATSAPP_DIR"; then
-            print_sub "Killed process (PID: $pid)"
-        fi
-        rm -f "$WHATSAPP_PID_FILE"
-    fi
-
-    local wa_pids
-    wa_pids=$(lsof -ti:"$WHATSAPP_PORT" 2>/dev/null)
-    for p in $wa_pids; do
-        if is_whatsapp_bridge_pid "$p"; then
-            kill -15 "$p" 2>/dev/null
-            sleep 0.5
-            if kill -0 "$p" 2>/dev/null; then
-                kill -9 "$p" 2>/dev/null
-            fi
-        fi
-    done
-
-    if kill_port "$WHATSAPP_PORT"; then
-        print_sub "Freed port $WHATSAPP_PORT"
-    fi
-
-    if lsof -Pi ":$WHATSAPP_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
-        print_warning "Port $WHATSAPP_PORT still in use!"
-    else
-        print_success "WhatsApp bridge stopped"
-    fi
-}
 
 stop_all() {
     stop_backend
-    stop_frontend
-    stop_whatsapp_bridge
 }
 
 start_backend() {
     echo ""
     print_status "Starting Backend..."
+
+    # Guard: running as root breaks macOS Automation (Apple Notes, osascript, etc.)
+    if [ "$(id -u)" = "0" ]; then
+        print_error "Do not run asta.sh as root (sudo). Apple Notes and other macOS integrations require running as your user account."
+        print_sub "Run without sudo: ./asta.sh start"
+        return 1
+    fi
 
     if [ ! -d "$BACKEND_DIR" ]; then
         print_error "Directory not found: $BACKEND_DIR"
@@ -562,108 +514,6 @@ start_backend() {
     return 1
 }
 
-start_frontend() {
-    echo ""
-    print_status "Starting Frontend..."
-
-    if [ ! -d "$FRONTEND_DIR" ]; then
-        print_warning "Directory not found (skipping)"
-        return 0
-    fi
-
-    # Ensure port free
-    kill_port "$FRONTEND_PORT"
-    sleep 1
-
-    cd "$FRONTEND_DIR" || return 0
-
-    # Auto-install dependencies if missing
-    if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
-        print_sub "Installing frontend dependencies..."
-        npm install >> "$FRONTEND_LOG_FILE" 2>&1
-        if [ $? -ne 0 ]; then
-            print_error "npm install failed. Check $FRONTEND_LOG_FILE"
-            return 1
-        fi
-        print_sub "Dependencies installed"
-    fi
-
-    echo "--- Restart: $(date) ---" >> "$FRONTEND_LOG_FILE"
-
-    nohup npm run dev >> "$FRONTEND_LOG_FILE" 2>&1 &
-    echo $! > "$FRONTEND_PID_FILE"
-    pid=$(cat "$FRONTEND_PID_FILE")
-
-    print_sub "Waiting for Vite..."
-    sleep 3
-
-    if lsof -Pi ":$FRONTEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
-        print_success "Frontend active (PID: $pid)"
-    else
-	    print_success "Frontend process started (PID: $pid)"
-	fi
-}
-
-start_whatsapp_bridge() {
-    # Default on: start bridge automatically if service folder exists.
-    # Set ASTA_AUTOSTART_WHATSAPP=0 to disable.
-    if [ "${ASTA_AUTOSTART_WHATSAPP:-1}" = "0" ]; then
-        print_sub "WhatsApp bridge autostart disabled (ASTA_AUTOSTART_WHATSAPP=0)"
-        return 0
-    fi
-    if [ ! -d "$WHATSAPP_DIR" ]; then
-        return 0
-    fi
-
-    echo ""
-    print_status "Starting WhatsApp bridge..."
-
-    kill_port "$WHATSAPP_PORT"
-    sleep 1
-    if lsof -Pi ":$WHATSAPP_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
-        local busy_pid
-        busy_pid=$(lsof -ti:"$WHATSAPP_PORT" 2>/dev/null | head -1)
-        if [ -n "$busy_pid" ] && is_whatsapp_bridge_pid "$busy_pid"; then
-            echo "$busy_pid" > "$WHATSAPP_PID_FILE"
-            print_success "WhatsApp bridge already active (PID: $busy_pid)"
-            return 0
-        fi
-        local busy_cmd
-        busy_cmd=$(ps -p "$busy_pid" -o args= 2>/dev/null)
-        print_error "Port $WHATSAPP_PORT is busy by another process (PID $busy_pid: $busy_cmd)."
-        print_sub "Stop it first or run './asta.sh whatsapp-stop' before starting."
-        return 1
-    fi
-
-    cd "$WHATSAPP_DIR" || return 0
-
-    if [ ! -d "$WHATSAPP_DIR/node_modules" ]; then
-        print_sub "Installing WhatsApp bridge dependencies..."
-        npm install >> "$WHATSAPP_LOG_FILE" 2>&1
-        if [ $? -ne 0 ]; then
-            print_error "npm install failed for WhatsApp bridge. Check $WHATSAPP_LOG_FILE"
-            return 1
-        fi
-        print_sub "Dependencies installed"
-    fi
-
-    echo "--- Restart: $(date) ---" >> "$WHATSAPP_LOG_FILE"
-    nohup bash -c "cd '$WHATSAPP_DIR' && exec node index.js" >> "$WHATSAPP_LOG_FILE" 2>&1 &
-    echo $! > "$WHATSAPP_PID_FILE"
-    pid=$(cat "$WHATSAPP_PID_FILE")
-
-    print_sub "Waiting for bridge..."
-    for _ in 1 2 3 4 5 6 7 8; do
-        sleep 1
-        if lsof -Pi ":$WHATSAPP_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
-            print_success "WhatsApp bridge active (PID: $pid)"
-            return 0
-        fi
-    done
-
-    print_warning "WhatsApp bridge started but port check not ready yet. Check $WHATSAPP_LOG_FILE"
-    return 0
-}
 
 # $1 = "full" to include skills list (only for `asta status`; restart/update/start use short)
 show_status() {
@@ -679,22 +529,6 @@ show_status() {
         print_success "backend   ${GREEN}up${NC}  ${GRAY}pid $pid${NC}"
     else
         print_error "backend   ${RED}down${NC}"
-    fi
-
-    # Frontend
-    if lsof -Pi ":$FRONTEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
-        pid=$(lsof -ti:"$FRONTEND_PORT" 2>/dev/null | head -1)
-        print_success "frontend  ${GREEN}up${NC}  ${GRAY}pid $pid${NC}"
-    else
-        print_error "frontend  ${RED}down${NC}"
-    fi
-
-    # WhatsApp bridge (beta)
-    if lsof -Pi ":$WHATSAPP_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
-        pid=$(lsof -ti:"$WHATSAPP_PORT" 2>/dev/null | head -1)
-        print_success "whatsapp(beta)  ${GREEN}up${NC}  ${GRAY}pid $pid${NC}"
-    else
-        print_warning "whatsapp(beta)  ${YELLOW}off${NC}  ${GRAY}(start with ./asta.sh whatsapp-start)${NC}"
     fi
 
     # Separator before server/channels/skills
@@ -723,16 +557,14 @@ show_status() {
 
 print_commands() {
     cecho "${WHITE}Commands:${NC}"
-    cecho "  ${CYAN}start${NC}    Start backend + frontend"
+    cecho "  ${CYAN}start${NC}    Start backend"
     cecho "  ${CYAN}stop${NC}     Stop all services"
     cecho "  ${CYAN}restart${NC}  Restart all services"
     cecho "  ${CYAN}status${NC}   Show service status + integrations"
     cecho "  ${CYAN}doc${NC}      Safe diagnostics (alias: doctor). Use --fix to auto-fix setup/deps"
     cecho "  ${CYAN}update${NC}   Pull latest code and restart"
     cecho "  ${CYAN}install${NC}  Symlink asta to /usr/local/bin"
-    cecho "  ${CYAN}setup${NC}    Create backend venv (Python 3.12/3.13) + frontend deps"
-    cecho "  ${CYAN}whatsapp-start${NC}  Start WhatsApp (beta) bridge in background"
-    cecho "  ${CYAN}whatsapp-stop${NC}   Stop WhatsApp (beta) bridge"
+    cecho "  ${CYAN}setup${NC}    Create backend venv (Python 3.12/3.13)"
     cecho "  ${CYAN}version${NC}  Show version"
     echo ""
 }
@@ -927,23 +759,6 @@ run_doc() {
         fi
     fi
 
-    if [ -d "$FRONTEND_DIR/node_modules" ]; then
-        print_success "frontend deps  ${GREEN}present${NC}"
-    else
-        if [ "$fix_mode" -eq 1 ] && command -v npm >/dev/null 2>&1; then
-            print_warning "frontend deps  ${YELLOW}missing${NC}  ${GRAY}attempting auto-fix${NC}"
-            if (cd "$FRONTEND_DIR" && npm install >/dev/null 2>&1); then
-                print_success "frontend deps  ${GREEN}fixed${NC}"
-            else
-                print_error "frontend deps  ${RED}failed to fix${NC}  ${GRAY}run: cd frontend && npm install${NC}"
-                issues=1
-            fi
-        else
-            print_warning "frontend deps  ${YELLOW}missing${NC}  ${GRAY}run ./asta.sh setup${NC}"
-            issues=1
-        fi
-    fi
-
     if [ -f "$BACKEND_DIR/.env" ]; then
         print_success "backend .env   ${GREEN}present${NC}"
     else
@@ -1028,8 +843,6 @@ case "$1" in
         cecho "  ${GRAY}─────────────────────────────────────────${NC}"
         echo ""
         start_backend
-        start_frontend
-        start_whatsapp_bridge
         echo ""
         cecho "  ${GRAY}─────────────────────────────────────────${NC}"
         show_status
@@ -1047,8 +860,6 @@ case "$1" in
         cecho "  ${GRAY}─────────────────────────────────────────${NC}"
         echo ""
         start_backend
-        start_frontend
-        start_whatsapp_bridge
         echo ""
         cecho "  ${GRAY}─────────────────────────────────────────${NC}"
         show_status
@@ -1088,20 +899,7 @@ case "$1" in
             print_error "Install Python 3.12 or 3.13 (e.g. brew install python@3.12), then run ./asta.sh setup again."
             exit 1
         fi
-        if [ ! -d "$FRONTEND_DIR/node_modules" ] && [ -d "$FRONTEND_DIR" ]; then
-            print_status "Installing frontend dependencies..."
-            (cd "$FRONTEND_DIR" && npm install) || { print_error "npm install failed."; exit 1; }
-            print_success "Frontend deps installed."
-        fi
         print_success "Setup complete. Run ./asta.sh start"
-        ;;
-    whatsapp-start)
-        print_asta_banner
-        start_whatsapp_bridge
-        ;;
-    whatsapp-stop)
-        print_asta_banner
-        stop_whatsapp_bridge
         ;;
     version)
         print_asta_banner
