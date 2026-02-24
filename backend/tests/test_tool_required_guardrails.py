@@ -28,7 +28,7 @@ class _DummyOpenRouterProvider:
         return ProviderResponse(content="")
 
 
-async def _fake_compact_history(messages, provider, context=None, max_tokens=None):
+async def _fake_compact_history(messages, provider, context=None, max_tokens=None, **kwargs):
     return messages
 
 
@@ -239,3 +239,39 @@ async def test_workspace_notes_list_uses_deterministic_fallback(monkeypatch):
     assert "You have 2 workspace note(s)" in reply
     assert "work-door-design.md" in reply
     assert "notes/work-door-design.md" in reply
+
+
+@pytest.mark.asyncio
+async def test_image_generation_fallback_runs_when_model_claims_no_tool_access():
+    async def _fake_chat_with_no_image_tool_access(primary, messages, fallback_names, **kwargs):
+        return ProviderResponse(
+            content=(
+                "I can't generate images yet — I don't have access to an image generation tool "
+                "in this environment. The image_gen tool isn't available to me right now."
+            )
+        ), primary
+
+    async def _fake_run_image_gen(user_id: str, prompt: str) -> str:
+        assert user_id == "test-image-fallback"
+        assert "make a picture" in prompt.lower()
+        return json.dumps(
+            {
+                "ok": True,
+                "image_markdown": "![cyborg](data:image/png;base64,AAA)",
+            }
+        )
+
+    with (
+        patch("app.handler.get_provider", return_value=_DummyProvider()),
+        patch("app.compaction.compact_history", side_effect=_fake_compact_history),
+        patch("app.providers.fallback.chat_with_fallback", side_effect=_fake_chat_with_no_image_tool_access),
+        patch("app.image_gen_tool.run_image_gen", side_effect=_fake_run_image_gen),
+    ):
+        reply = await handle_message(
+            user_id="test-image-fallback",
+            channel="web",
+            text="Can you make a picture of a cyberpunk city at night?",
+            provider_name="openai",
+        )
+
+    assert reply == "![cyborg](data:image/png;base64,AAA)"

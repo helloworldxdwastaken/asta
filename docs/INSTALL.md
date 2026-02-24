@@ -52,7 +52,7 @@ npm run dev
 
 ### 5. Optional
 
-In the panel: **Settings** → add API keys (Groq, Gemini, Claude, OpenAI, OpenRouter, Telegram, Spotify), set default AI (main runtime chain is fixed to `Claude -> Ollama -> OpenRouter`), choose **Thinking level** (`off/minimal/low/medium/high/xhigh`), **Reasoning visibility** (`off/on/stream`), and **Final tag mode** (`off/strict`), adjust **Vision controls** (preprocess toggle with fixed Nemotron model), and toggle skills. Set your **location** in Chat (e.g. “Holon, Israel”) for time and weather.
+In the panel: **Settings** → add API keys (Groq, Gemini, Claude, OpenAI, OpenRouter, Hugging Face, Telegram, Spotify), set default AI (main runtime chain is fixed to `Claude -> Google -> OpenRouter -> Ollama`), choose **Thinking level** (`off/minimal/low/medium/high/xhigh`), **Reasoning visibility** (`off/on/stream`), and **Final tag mode** (`off/strict`), adjust **Vision controls** (preprocess toggle with fixed Nemotron model), and toggle skills. Set your **location** in Chat (e.g. “Holon, Israel”) for time and weather.
 
 **Telegram commands:** `/status`, `/exec_mode`, `/allow`, `/allowlist`, `/approvals` (inline `Once/Always/Deny` actions, with automatic post-approval continuation), `/think` (aliases: `/thinking`, `/t`), `/reasoning`, `/subagents`.
 `/reasoning stream` emits live reasoning status on OpenAI/Groq/OpenRouter provider paths.
@@ -111,6 +111,7 @@ From the repo root, **`./asta.sh`** starts/stops both backend and frontend:
 | `ANTHROPIC_API_KEY` | Claude |
 | `OPENAI_API_KEY` | OpenAI |
 | `OPENROUTER_API_KEY` | OpenRouter |
+| `HUGGINGFACE_API_KEY` | Hugging Face image fallback (FLUX.1-dev via inference providers) |
 | `OLLAMA_BASE_URL` | e.g. `http://localhost:11434` (Ollama) |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot ([@BotFather](https://t.me/BotFather)) |
 | `ASTA_ALLOWED_PATHS` | Comma-separated dirs for file access |
@@ -118,12 +119,16 @@ From the repo root, **`./asta.sh`** starts/stops both backend and frontend:
 | `ASTA_PROCESS_TTL_SECONDS` | Keep finished background process sessions in memory for process tool (`list/poll/log`) before cleanup (default: 1800). |
 | `ASTA_SUBAGENTS_AUTO_SPAWN` | Enable deterministic auto-spawn for explicit/complex long-task prompts (default: `true`). |
 | `ASTA_SUBAGENTS_MAX_CONCURRENT` | Max concurrent subagent runs from `sessions_spawn` (default: `3`). |
+| `ASTA_SUBAGENTS_MAX_DEPTH` | Maximum subagent nesting depth (default: `1`, meaning no nested subagents). |
+| `ASTA_SUBAGENTS_MAX_CHILDREN` | Maximum concurrent children per parent subagent run (default: `5`). |
 | `ASTA_SUBAGENTS_ARCHIVE_AFTER_MINUTES` | Auto-archive keep-mode subagent child sessions after N minutes (default: `60`, set `0` to disable). |
 | `ASTA_VISION_PREPROCESS` | Run hybrid vision flow: image analyzed by vision provider first, then main agent answers from analysis (default: `true`). |
 | `ASTA_VISION_PROVIDER_ORDER` | Advanced override for vision provider priority (default: `openrouter,claude,openai`). Settings UI keeps this fixed. |
 | `ASTA_VISION_OPENROUTER_MODEL` | Advanced override for vision preprocessor model (default: `nvidia/nemotron-nano-12b-v2-vl:free`). Settings UI keeps this fixed. |
 | `ASTA_CORS_ORIGINS` | Extra origins (e.g. LAN or Tailscale) |
-| `ASTA_WHATSAPP_BRIDGE_URL` | e.g. `http://localhost:3001` (WhatsApp) |
+| `ASTA_OWNER_PHONE_NUMBER` | Default E.164 phone for Pingram reminder/job voice calls (e.g. `+15551234567`). |
+| `ASTA_PINGRAM_CLIENT_ID` / `ASTA_PINGRAM_CLIENT_SECRET` / `ASTA_PINGRAM_API_KEY` | Pingram credentials (client pair or API key). |
+| `ASTA_PINGRAM_NOTIFICATION_ID` / `ASTA_PINGRAM_TEMPLATE_ID` | Pingram sender notification/template IDs. |
 | `ASTA_SHOW_TOOL_TRACE` | Append `Tools used: ...` footer (debug) |
 | `ASTA_TOOL_TRACE_CHANNELS` | Trace footer channels, default `web` (Telegram footer suppressed; Telegram already gets skill-status pings) |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | Or set in Settings → Spotify |
@@ -135,7 +140,7 @@ Many keys can also be set in **Settings → API keys** or **Settings → Spotify
 
 **Vision flow:** Telegram photos are supported. By default, Asta runs a low-cost vision model first, then gives that analysis to your selected main model for the final response/tool actions.
 
-**Main AI provider flow:** runtime priority is fixed to `Claude -> Ollama -> OpenRouter` (OpenClaw-style). Billing/auth failures can auto-disable a provider until it is re-enabled from Settings (or key test succeeds).
+**Main AI provider flow:** runtime priority is fixed to `Claude -> Google -> OpenRouter -> Ollama` (OpenClaw-style). Billing/auth failures can auto-disable a provider until it is re-enabled from Settings (or key test succeeds).
 
 ---
 

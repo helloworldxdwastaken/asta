@@ -6,9 +6,9 @@
 
 ## 1. Vision
 
-Asta is a **personal control plane**: one place to talk to AI (Google, Claude, Ollama, etc.), automate tasks, manage files and cloud storage, and communicate via WhatsApp (Beta) and Telegram. It has a **web control panel** to manage everything, and can **learn** topics over time (RAG) so you can ask it to become an “expert” on a subject and answer from that knowledge.
+Asta is a **personal control plane**: one place to talk to AI (Google, Claude, Ollama, etc.), automate tasks, manage files and cloud storage, and communicate via Telegram and the web panel. It has a **web control panel** to manage everything, and can **learn** topics over time (RAG) so you can ask it to become an “expert” on a subject and answer from that knowledge.
 
-**Core idea:** You control things by chatting (WhatsApp (Beta), Telegram, or the panel). The bot reads your messages, runs tasks (files, Drive, learning, scheduled jobs), and uses the right AI backend to reply.
+**Core idea:** You control things by chatting (Telegram or the panel). The bot reads your messages, runs tasks (files, Drive, learning, scheduled jobs), and uses the right AI backend to reply.
 
 ---
 
@@ -19,14 +19,17 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 ### 2.1 Implemented
 
 - **Control panel** — `frontend/`: Dashboard, Chat, Files, Drive, Learning (RAG), Audio notes, Skills, Channels, **Cron**, Settings. Dashboard: Brain (AI providers), Body (CPU/RAM/disk, CPU model), Eyes (vision), Channels, Notes (latest `workspace/notes/*.md`), Schedule (pending reminders + recurring cron jobs), Capabilities (active skills count). Cron tab: list/delete/update recurring jobs (plus scheduler-backed run actions via tool); auto-updater creates "Daily Auto-Update" on startup when skill present. Settings → Auto-updater for schedule/timezone.
-- **AI providers** — `backend/app/providers/`: Groq, Google (Gemini), Claude, OpenAI, OpenRouter, Ollama. Main runtime chain is fixed (OpenClaw-style) to `Claude -> Ollama -> OpenRouter`; users pick default + per-provider models in Settings. Set keys in Settings or `backend/.env`.
+- **AI providers** — `backend/app/providers/`: Groq, Google (Gemini), Claude, OpenAI, OpenRouter, Ollama. Main runtime chain is fixed (OpenClaw-style) to `Claude -> Google -> OpenRouter -> Ollama`; users pick default + per-provider models in Settings. Set keys in Settings or `backend/.env`.
 - **Hybrid vision pipeline (Telegram photos)** — Image turns are preprocessed by a vision-capable model first (default priority: OpenRouter → Claude → OpenAI; OpenRouter default model: `nvidia/nemotron-nano-12b-v2-vl:free`). The extracted analysis is then passed to the user’s main agent model for final reply and tool actions. Settings UI keeps the vision model fixed to Nemotron for consistency.
 - **Unified context** — AI receives recent conversation, connected channels, ground-truth state (pending reminders count, location), allowed file paths, Google Workspace summary (Gmail, Calendar, Drive via gog), RAG snippets, time/weather/Spotify context, and tool instructions. Workspace `SKILL.md` bodies are not pre-injected; they are read on demand via tool call. `backend/app/context.py`, `handler.py`.
-- **Intent-based built-in skills** — `backend/app/skill_router.py`: only relevant built-in skills run per message (time, weather, Spotify, Google Workspace via gog, etc.). Saves tokens; status in Telegram/WhatsApp shows only used skills. Service handlers are gated by skill toggles.
+- **Intent-based built-in skills** — `backend/app/skill_router.py`: only relevant built-in skills run per message (time, weather, Spotify, Google Workspace via gog, etc.). Saves tokens; status in Telegram shows only used skills. Service handlers are gated by skill toggles.
 - **OpenClaw-style workspace skill flow** — Context exposes `<available_skills>` (enabled workspace skills only). Model selects one relevant skill, calls `read(path)` for that skill’s `SKILL.md`, then follows it. This avoids context pollution from loading all enabled workspace skills.
 - **Workspace skill host gating** — Skills declaring `metadata.openclaw.os` and `requires.bins` are runtime-gated by host OS + required binaries (OpenClaw-style). This keeps macOS-only skills (e.g. Apple Notes) out of Linux runtime prompts.
 - **Notes behavior** — Default notes are markdown files in `workspace/notes/` (via `notes` skill). Apple Notes (`memo`) is only used when explicitly requested.
 - **Structured tool loop** — Handler executes provider tool calls for exec/files/reminders/cron/read, appends tool results, and re-calls the same provider for final user text.
+- **Image generation tool path** — `backend/app/image_gen_tool.py`: `image_gen` uses Gemini first, then Hugging Face FLUX.1-dev fallback. Hugging Face now uses provider-aware `InferenceClient` routing (live provider discovery + retries) instead of deprecated direct endpoints, with an in-process 5 req/min guardrail.
+- **Image fallback guardrail in handler** — `backend/app/handler.py`: if a tool-capable model skips `image_gen` and incorrectly says it has no image-tool access, Asta runs deterministic image fallback and returns real tool output.
+- **Telegram media rendering for generated images** — `backend/app/channels/telegram_bot.py`: markdown image replies (`![alt](url)`), including inline `data:image/...` payloads, are sent as native Telegram photos/animations instead of raw markdown text.
 - **Single-user subagent orchestration (OpenClaw-style)** — Added `agents_list`, `sessions_spawn`, `sessions_list`, `sessions_history`, `sessions_send`, and `sessions_stop` tools. `sessions_spawn` creates an isolated child conversation that runs in background and announces completion back to the parent conversation/channel. Includes max-concurrency guard, per-spawn model/thinking overrides, and auto-archive timers for keep-mode runs.
 - **Reliability guardrails for skipped tools** — Deterministic fallback paths handle scheduler list/remove and desktop/file-check intents when a tool-capable model skips tool calls, preventing fake "done/checked" responses.
 - **Reasoning controls** — Per-user `thinking_level` (`off/minimal/low/medium/high/xhigh`) and `reasoning_mode` (`off/on/stream`) are stored in `user_settings`, exposed in Settings API/UI, and applied to provider calls/context instructions. **OpenRouter**: supports `reasoning_effort` and `include_reasoning=True` for Kimi (`moonshotai/kimi-k2.5`) and Trinity models. The provider adapter injects `<think>...</think>` tags around `delta.reasoning` fields to ensure visibility in raw outputs (Telegram) while the stream state machine parses them for the UI. Stream mode runs through a dedicated OpenClaw-style stream state machine (`message_start/text_start/text_delta/text_end/message_end`) so assistant/reasoning updates stay monotonic across fallback/provider switches and tool-loop re-calls. Web chat supports SSE streaming via `POST /api/chat/stream` (`assistant`/`reasoning`/`status` events). Optional `final_mode` (`off|strict`) enforces visibility to `<final>...</final>` content only.
@@ -35,10 +38,9 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 - **Web search** — `backend/app/search_web.py`: ddgs multi-backend search (no API key). Triggered mainly on explicit search intent ("search for", "look up", "check the web", "latest"), with RAG prioritized first when relevant.
 - **Google Workspace (gog)** — `backend/app/skills/gog.py`: Gmail, Calendar, and Drive via `gog` CLI. Search emails, list/create calendar events, search Drive files. Requires `gog` CLI installed and authenticated (`gog auth add`).
 - **Spotify** — `backend/app/spotify_client.py`, `services/spotify_service.py`: search (Client ID/Secret in Settings → Spotify or `.env`). Playback: OAuth connect, list devices, "play X on Spotify" with device picker. If no track matches, **artist search** and play via `context_uri=spotify:artist:...`. `GET /api/spotify/connect`, `/api/spotify/callback`, `/api/spotify/devices`, `POST /api/spotify/play`.
-- **Reminders** — `backend/app/reminders.py`: "Wake me up at 7am", "remind me tomorrow at 8am to X", "remind me in 30 min", "alarm in 5 min to X", "timer 10 min", "set alarm for 2h". User timezone from location (DB or workspace/USER.md). Absolute-time reminders (like "at 7am") require location; if missing, Asta asks for location first instead of scheduling in UTC. Friendly message at trigger time (Telegram/WhatsApp or web). **OpenClaw-style internals**: one-shot reminders are stored as one-shot cron entries (`@at <ISO-UTC>`) and fired by the cron scheduler path. **Cron Visibility**: one-shot reminders are now visible on the Cron page with a dedicated "One-Shot" badge. **Automated Voice Calls**: triggers a Pingram (NotificationAPI) voice call for both recurring jobs and one-shot reminders if an owner phone number is configured. Supports custom template IDs. **On startup**, legacy pending reminder rows are migrated into one-shot cron entries before cron reload. **Post-reply validation**: if AI claims it set a reminder but the parser didn't match, a correction is appended.
+- **Reminders** — `backend/app/reminders.py`: "Wake me up at 7am", "remind me tomorrow at 8am to X", "remind me in 30 min", "alarm in 5 min to X", "timer 10 min", "set alarm for 2h". User timezone from location (DB or workspace/USER.md). Absolute-time reminders (like "at 7am") require location; if missing, Asta asks for location first instead of scheduling in UTC. Friendly message at trigger time (Telegram or web). **OpenClaw-style internals**: one-shot reminders are stored as one-shot cron entries (`@at <ISO-UTC>`) and fired by the cron scheduler path. **Cron Visibility**: one-shot reminders are now visible on the Cron page with a dedicated "One-Shot" badge. **Automated Voice Calls**: triggers a Pingram (NotificationAPI) voice call for both recurring jobs and one-shot reminders if an owner phone number is configured. Supports custom template IDs. **On startup**, legacy pending reminder rows are migrated into one-shot cron entries before cron reload. **Post-reply validation**: if AI claims it set a reminder but the parser didn't match, a correction is appended.
 - **Audio notes** — `backend/app/audio_transcribe.py`, `app/audio_notes.py`, `routers/audio.py`: Upload audio (meetings, voice memos); transcribe with faster-whisper (local; model choice: base/small/medium); format with default AI. `POST /api/audio/process` (multipart: file, instruction, whisper_model, async_mode). With `async_mode=1`, returns 202 + job_id; poll `GET /api/audio/status/{job_id}` for progress (transcribing → formatting → done). Meeting notes (when instruction is "meeting") are saved in DB so user can ask "last meeting?" in Chat; context injects recent saved meetings. Telegram: voice/audio and audio-from-URL with progress messages ("Transcribing…", "Formatting…"). UI shows progress bar. Dependencies: `faster-whisper`, `python-multipart` (see `backend/requirements.txt`).
-- **WhatsApp bridge (Beta)** — `services/whatsapp/` (Baileys): receives messages, POSTs to `/api/incoming/whatsapp`, sends reply. Run with `ASTA_API_URL=http://localhost:8010 npm run start`.
-- **Telegram bot** — `backend/app/channels/telegram_bot.py`: long polling when `TELEGRAM_BOT_TOKEN` set; same message handler as panel/WhatsApp. Built-in commands include `/status`, `/exec_mode`, `/allow`, `/allowlist`, `/approvals` (with inline `Once/Always/Deny` actions and automatic post-approval continuation), `/think` (aliases: `/thinking`, `/t`), `/reasoning`, `/subagents`.
+- **Telegram bot** — `backend/app/channels/telegram_bot.py`: long polling when `TELEGRAM_BOT_TOKEN` set; same message handler as panel. Built-in commands include `/status`, `/exec_mode`, `/allow`, `/allowlist`, `/approvals` (with inline `Once/Always/Deny` actions and automatic post-approval continuation), `/think` (aliases: `/thinking`, `/t`), `/reasoning`, `/subagents`.
 - **File management** — `backend/app/routers/files.py`: list/read under `ASTA_ALLOWED_PATHS` and workspace. **Virtual root**: "Asta knowledge" (`README.md`, `CHANGELOG.md`, and `docs/*.md`). **User context** = workspace/USER.md only (name, location, timezone, preferences); location there is used for time, weather, and reminders if DB location is empty.
 - **Google Drive** — Stub in `routers/drive.py`; OAuth and list can be wired next.
 - **RAG / Learning** — `backend/app/rag/service.py`: Chroma + Ollama embeddings (`nomic-embed-text`). Status label: "Checking learned knowledge". `POST /api/rag/learn`, `POST /api/tasks/learn`.
@@ -70,7 +72,7 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 
 ```
 [ User ]
-   | WhatsApp / Telegram / Web panel
+   | Telegram / Web panel
    v
 [ Asta Backend (FastAPI) ]
    | - Message router (which channel, which provider)
@@ -80,17 +82,16 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 [ External services ]
    - Google AI, Claude, Ollama
    - Google Drive, local filesystem
-   - WhatsApp, Telegram APIs
+   - Telegram API
 ```
 
 ### 3.2 Components
 
 | Component | Tech | Responsibility |
 |-----------|------|----------------|
-| **API** | FastAPI (Python 3.11+) | REST + WebSocket; auth; route to providers and tasks. |
+| **API** | FastAPI (Python 3.12/3.13) | REST + WebSocket; auth; route to providers and tasks. |
 | **Panel** | React (Vite), TypeScript | Dashboard: chats, settings, file browser, Drive, learning jobs. |
 | **AI adapters** | Python modules | One module per provider (Groq, Google, Claude, OpenAI, OpenRouter, Ollama); same interface: `chat(messages) -> response`. |
-| **WhatsApp (Beta)** | Baileys bridge service | Receive/send messages; forward to core message handler. |
 | **Telegram** | python-telegram-bot | Webhook or long polling; forward to core message handler. |
 | **Files** | Python (pathlib, aiofiles) | Local file ops in allowed dirs; list, read, search. |
 | **Google Drive** | Google Drive API + OAuth2 | List, search, download; optional upload. |
@@ -102,7 +103,7 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 
 - **Users / settings:** user_settings (mood, default_ai_provider, thinking_level, reasoning_mode), provider_models, provider_runtime_state (enabled/auto-disabled state + reason), skill_toggles, api_keys (stored keys: Groq, Gemini, etc., Spotify Client ID/Secret).
 - **User location:** user_location (user_id, location_name, lat, lon) for timezone and weather.
-- **Conversations:** id, user_id, channel (web | telegram | whatsapp), created_at.
+- **Conversations:** id, user_id, channel (web | telegram | subagent), created_at.
 - **Messages:** id, conversation_id, role (user | assistant), content, provider_used, created_at.
 - **Tasks:** id, user_id, type (learn | schedule), payload (JSON), status, run_at.
 - **Reminders:** pending one-shots live in `cron_jobs` as `cron_expr='@at <ISO-UTC>'`; sent history is persisted in `reminders` table (`status='sent'`) for notifications/history APIs.
@@ -117,8 +118,7 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 
 - **New AI provider:** Implement `backend/app/providers/base.py` interface; add under `backend/app/providers/`. Register in provider registry.
 - **New skill:** Add intent and label in `skill_router.py`, run in `handler.py` (set `extra`), context in `context.py`, and entry in `routers/settings.py` SKILLS.
-- **WhatsApp:** `services/whatsapp/` (Node + Baileys) — receives messages, POSTs to backend `/api/incoming/whatsapp`; outbound reminders use `ASTA_WHATSAPP_BRIDGE_URL` + `/send`.
-- **Telegram:** `backend/app/channels/telegram_bot.py` — long polling; same message handler as panel/WhatsApp.
+- **Telegram:** `backend/app/channels/telegram_bot.py` — long polling; same message handler as panel.
 - **Panel:** `frontend/` — React app; new pages under `src/pages/`, API client in `src/api/`.
 - **RAG:** `backend/app/rag/` — ingest pipeline, embedding (Ollama or API), vector store; expose “learn” and “ask about topic” endpoints.
 - **Scheduler:** `backend/app/tasks/` — APScheduler jobs; “learn for X hours” = enqueue ingestion job with end_time.
@@ -131,7 +131,7 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 - **Vision flow:** For image turns, `handler.py` runs a dedicated vision preprocessor (`_run_vision_preprocessor`) and injects `[VISION_ANALYSIS ...]` into the user message. Final reasoning/tool execution remains on the main selected provider.
 - **Allowlist:** Env `ASTA_EXEC_ALLOWED_BINS` plus DB `exec_allowed_bins_extra`. Enabling a skill that declares `required_bins` (e.g. Apple Notes) adds those bins. Binary is resolved with `resolve_executable()` (PATH plus `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`).
 - **Output limits (OpenClaw-style):** Combined stdout+stderr is capped at 200k chars (tail retained). Before sending to the model, exec output is truncated to the last 20k chars with a “… (truncated)” prefix so context stays bounded. Applies to both the exec/bash tool result and the `[ASTA_EXEC]` fallback path.
-- **Fallback:** We still parse `[ASTA_EXEC: command][/ASTA_EXEC]` in the reply, run the command, and re-call with the output (now guarded to exec-intent requests only). Main-provider failover order is fixed (`claude -> ollama -> openrouter`) and runtime-state-aware (manual disable + auto-disable on auth/billing). Stream fallback now emits explicit lifecycle events per provider attempt, which the handler state machine consumes for live assistant/reasoning output consistency. See `exec_tool.py`, `process_tool.py`, `provider_flow.py`, `providers/fallback.py`, `handler.py`, `stream_state_machine.py`.
+- **Fallback:** We still parse `[ASTA_EXEC: command][/ASTA_EXEC]` in the reply, run the command, and re-call with the output (now guarded to exec-intent requests only). Main-provider failover order is fixed (`claude -> google -> openrouter -> ollama`) and runtime-state-aware (manual disable + auto-disable on auth/billing). Stream fallback now emits explicit lifecycle events per provider attempt, which the handler state machine consumes for live assistant/reasoning output consistency. See `exec_tool.py`, `process_tool.py`, `provider_flow.py`, `providers/fallback.py`, `handler.py`, `stream_state_machine.py`.
 
 ### 4.3 Subagent orchestration tools (OpenClaw-style, single-user)
 
@@ -140,12 +140,12 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 - **Command UX:** deterministic `/subagents` commands are handled in-core (`list/spawn/info/send/stop/help`) so orchestration control works even when model tool-calling is inconsistent.
 - **Send wait option:** `/subagents send <runId> <message> --wait <seconds>` (and `sessions_send.timeoutSeconds`) can wait for a direct follow-up reply, returning `completed` or `timeout`.
 - **Auto-spawn policy:** explicit background requests (and clearly complex long multi-step prompts) can auto-spawn a subagent without waiting for model tool-calls; controlled by `ASTA_SUBAGENTS_AUTO_SPAWN`.
-- **Isolation:** child runs use channel `subagent` and a dedicated queue key (`subagent:<child_conversation_id>`) so they do not block inbound web/Telegram/WhatsApp turn handling.
+- **Isolation:** child runs use channel `subagent` and a dedicated queue key (`subagent:<child_conversation_id>`) so they do not block inbound web/Telegram turn handling.
 - **Lifecycle:** run metadata is persisted in `subagent_runs` (status/result/error/timestamps plus model/thinking overrides and archive state). On startup, unfinished runs are marked `interrupted`.
 - **Concurrency cap:** `ASTA_SUBAGENTS_MAX_CONCURRENT` limits active running subagents; over-cap `sessions_spawn` calls return `busy`.
 - **Per-run overrides:** `sessions_spawn` accepts `model` and `thinking` (`off|minimal|low|medium|high|xhigh`) and applies them to child runs (also reused by `sessions_send`).
 - **Auto-archive:** `ASTA_SUBAGENTS_ARCHIVE_AFTER_MINUTES` controls timed cleanup for `cleanup=keep` child sessions (set `0` to disable).
-- **Announce:** when a subagent ends, Asta writes an assistant update to the parent conversation and also sends it to Telegram/WhatsApp when applicable.
+- **Announce:** when a subagent ends, Asta writes an assistant update to the parent conversation and also sends it to Telegram when applicable.
 
 ### 4.4 Named Agents (workspace skills with `is_agent: true`)
 
@@ -176,7 +176,7 @@ is_agent: true
 
 - Never commit API keys. Use env vars or a secrets store; document in README.
 - Restrict file access to configured directories (e.g. `ASTA_ALLOWED_PATHS`).
-- Validate and sanitize all user input; rate-limit public endpoints (Telegram/WhatsApp).
+- Validate and sanitize all user input; rate-limit public endpoints (Telegram).
 - Prefer read-only Drive scope if only “see what’s on the drive” is needed.
 
 ### 4.5 Easy install (planned)
@@ -215,7 +215,7 @@ asta/
 │   │   ├── time_weather.py  # Geocode, timezone, weather (Open-Meteo)
 │   │   ├── search_web.py   # DuckDuckGo search
 │   │   ├── providers/   # AI adapters
-│   │   ├── channels/    # Telegram (WhatsApp via bridge)
+│   │   ├── channels/    # Telegram bot adapter
 │   │   ├── routers/     # chat, files, drive, rag, settings, spotify
 │   │   ├── rag/         # Ingest, embed, retrieve
 │   │   └── tasks/       # Scheduler (learning, reminders)
@@ -225,7 +225,6 @@ asta/
 │   │   ├── pages/       # Dashboard, Chat, Files, Drive, Learning, Settings, Skills
 │   │   └── api/         # API client
 │   ├── package.json
-├── services/whatsapp/   # WhatsApp bridge (Node)
 ├── asta.sh              # Start/stop/restart backend + frontend
 ├── .env.example         # Template; copy to backend/.env
 └── README.md
@@ -235,4 +234,5 @@ asta/
 
 ## 6. Changelog (spec)
 
-- **Current (1.3.17):** Added support for automated voice calls via Pingram (NotificationAPI) for both recurring jobs and one-shot reminders. Improved one-shot reminder visibility on the Cron page with descriptive "One-Shot" badges and updated header context. Introduced custom Pingram Template ID support via Settings API and Channels UI. Reordered Channels UI to prioritize Telegram and Voice Calls. Fixed issue where reminders defaulted to Telegram instead of voice calls by injecting the owner's phone number as a default target when applicable. OpenClaw-style workspace skill selection (`<available_skills>` + on-demand `read`), strict frontmatter metadata parsing for required bins, and structured tool loop across OpenAI/Groq/OpenRouter/Claude/Google/Ollama. Added structured `files`, `reminders`, and `cron` tools, OpenClaw-style `process` tool for background exec session management (`list/poll/log/write/kill/clear/remove`), and single-user subagent orchestration tools (`sessions_spawn/list/history/send/stop`, plus `agents_list`) with persisted lifecycle + completion announcements. Subagents include max-concurrency guard, per-spawn model/thinking overrides, and auto-archive timers for keep-mode sessions. Main-provider failover uses a fixed runtime chain (`claude -> ollama -> openrouter`) with provider runtime states (`enabled/auto_disabled/disabled_reason`) and auto-disable on billing/auth failures. Settings expose this fixed provider flow directly, with model policy hardened for reliability (OpenRouter restricted to Kimi/Trinity families; Ollama overrides restricted to locally detected tool-capable models). Thinking/reasoning controls remain in Settings + Telegram (`/think` with `/thinking`/`/t` aliases, plus `/reasoning`) with levels `off/minimal/low/medium/high/xhigh`. Reasoning stream mode now runs through a dedicated stream event state machine with explicit provider-attempt lifecycle events, improving chunk-time assistant/reasoning consistency across fallback and tool-loop streaming paths; web SSE remains `/api/chat/stream`. Strict `<final>` mode (`final_mode=strict`) enforces output visibility to `<final>...</final>` content only (including stream-time assistant text). Cron tool parity includes `run`, `runs`, and `wake` actions with normalized flattened argument recovery and persisted `cron_job_runs` history. Hybrid vision preprocessing remains enabled for Telegram photos (vision model first, main model final response), with Settings UI fixed to Nemotron for consistent vision behavior. Dashboard and Settings UI include additional medium/small-screen hardening and provider-flow load resilience. Skills catalog/runtime dedupe colliding IDs to prevent duplicate or missing cards in the Skills UI. Drive OAuth is still planned.
+- **Current (1.3.43):** Image generation reliability updates: Gemini-first image tool now falls back to Hugging Face FLUX.1-dev using provider-aware Hugging Face routing (`InferenceClient`) with live provider mapping discovery, retry across providers, and in-process 5 req/min throttling. Added deterministic handler fallback when a model incorrectly claims image tools are unavailable despite `image_gen` being configured. Telegram now sends markdown image outputs (including inline base64 `data:image/...`) as native photos/animations instead of plain text markdown. Added regression tests for HF routing/rate-limit hooks, image-intent guardrails, and Telegram markdown-media delivery.
+- **Previous (1.3.17):** Added support for automated voice calls via Pingram (NotificationAPI) for both recurring jobs and one-shot reminders. Improved one-shot reminder visibility on the Cron page with descriptive "One-Shot" badges and updated header context. Introduced custom Pingram Template ID support via Settings API and Channels UI. Reordered Channels UI to prioritize Telegram and Voice Calls. Fixed issue where reminders defaulted to Telegram instead of voice calls by injecting the owner's phone number as a default target when applicable. OpenClaw-style workspace skill selection (`<available_skills>` + on-demand `read`), strict frontmatter metadata parsing for required bins, and structured tool loop across OpenAI/Groq/OpenRouter/Claude/Google/Ollama. Added structured `files`, `reminders`, and `cron` tools, OpenClaw-style `process` tool for background exec session management (`list/poll/log/write/kill/clear/remove`), and single-user subagent orchestration tools (`sessions_spawn/list/history/send/stop`, plus `agents_list`) with persisted lifecycle + completion announcements. Subagents include max-concurrency guard, per-spawn model/thinking overrides, and auto-archive timers for keep-mode sessions. Main-provider failover uses a fixed runtime chain (`claude -> google -> openrouter -> ollama`) with provider runtime states (`enabled/auto_disabled/disabled_reason`) and auto-disable on billing/auth failures. Settings expose this fixed provider flow directly, with model policy hardened for reliability (OpenRouter restricted to Kimi/Trinity families; Ollama overrides restricted to locally detected tool-capable models). Thinking/reasoning controls remain in Settings + Telegram (`/think` with `/thinking`/`/t` aliases, plus `/reasoning`) with levels `off/minimal/low/medium/high/xhigh`. Reasoning stream mode now runs through a dedicated stream event state machine with explicit provider-attempt lifecycle events, improving chunk-time assistant/reasoning consistency across fallback and tool-loop streaming paths; web SSE remains `/api/chat/stream`. Strict `<final>` mode (`final_mode=strict`) enforces output visibility to `<final>...</final>` content only (including stream-time assistant text). Cron tool parity includes `run`, `runs`, and `wake` actions with normalized flattened argument recovery and persisted `cron_job_runs` history. Hybrid vision preprocessing remains enabled for Telegram photos (vision model first, main model final response), with Settings UI fixed to Nemotron for consistent vision behavior. Dashboard and Settings UI include additional medium/small-screen hardening and provider-flow load resilience. Skills catalog/runtime dedupe colliding IDs to prevent duplicate or missing cards in the Skills UI. Drive OAuth is still planned.

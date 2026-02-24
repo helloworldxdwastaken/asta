@@ -20,6 +20,7 @@ groq
 google-generativeai
 anthropic
 openai
+huggingface-hub
 # NLP / RAG
 chromadb
 sentence-transformers

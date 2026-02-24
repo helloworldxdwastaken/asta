@@ -102,23 +102,6 @@ def set_env_value(key: str, value: str, *, allow_empty: bool = False) -> None:
 
 
 class Settings(BaseSettings):
-    # WhatsApp Whitelist (comma-separated numbers or list)
-    asta_whatsapp_allowed_numbers: str | int | list[str] = []
-    # WhatsApp policy: if true, only reply to the detected owner/self number.
-    asta_whatsapp_self_chat_only: bool = False
-
-    @property
-    def whatsapp_whitelist(self) -> set[str]:
-        val = self.asta_whatsapp_allowed_numbers
-        if not val:
-            return set()
-        if isinstance(val, (str, int)):
-            nums = str(val).split(",")
-        else:
-            nums = val
-        # Clean up
-        return {str(n).strip() for n in nums if str(n).strip()}
-
     @property
     def telegram_allowlist_configured(self) -> bool:
         return bool((self.asta_telegram_allowed_ids or "").strip())
@@ -197,6 +180,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     google_ai_key: str | None = None
     gemini_api_key: str | None = None
+    huggingface_api_key: str | None = None
     groq_api_key: str | None = None
     anthropic_api_key: str | None = None
     openrouter_api_key: str | None = None  # OpenRouter (300+ models)
@@ -213,10 +197,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str | None = None
     # OpenClaw-style: comma-separated Telegram user IDs allowed to use the bot (e.g. 6168747695). If empty, everyone with the token can use it.
     asta_telegram_allowed_ids: str = ""
-    # Local default keeps WhatsApp setup simple on single-machine installs.
-    asta_whatsapp_bridge_url: str | None = "http://localhost:3001"
-
-    # OpenClaw-style workspace: AGENTS.md, USER.md, TOOLS.md, SOUL.md and workspace/skills/*/SKILL.md
+# OpenClaw-style workspace: AGENTS.md, USER.md, TOOLS.md, SOUL.md and workspace/skills/*/SKILL.md
     # If empty, defaults to project root "workspace" (parent of backend).
     asta_workspace_dir: str = ""
 

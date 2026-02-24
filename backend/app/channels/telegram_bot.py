@@ -1,4 +1,6 @@
 """Telegram bot: receive messages, call handler, reply. Runs in FastAPI event loop (no thread)."""
+import base64
+import io
 import logging
 import re
 from urllib.parse import urlparse
@@ -95,6 +97,8 @@ _ALLOWLIST_BLOCKED_BINS = {
 }
 _ALLOWLIST_BIN_RE = re.compile(r"^[a-z0-9._+-]+$")
 _APPROVAL_CALLBACK_RE = re.compile(r"^approval:(once|always|deny):(app_[a-z0-9]{8})$")
+_MARKDOWN_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(((?:https?://|data:image/)[^\)]+)\)")
+_GIPHY_OR_GIF_RE = re.compile(r"^https?://(?:media\d?\.giphy\.com/media/|.*\.gif(?:\?.*)?$)", re.IGNORECASE)
 
 
 def to_telegram_format(text: str) -> str:
@@ -177,6 +181,84 @@ async def _reply_text_safe_html(message, text: str, reply_markup: InlineKeyboard
             await message.reply_text(plain, reply_markup=reply_markup)
             return
         raise
+
+
+def _strip_markdown_images(text: str) -> str:
+    return _MARKDOWN_IMAGE_RE.sub("", text or "").strip()
+
+
+def _decode_data_image_url(url: str) -> tuple[bytes, str] | None:
+    if not url.startswith("data:image/") or "," not in url:
+        return None
+    header, encoded = url.split(",", 1)
+    lower_header = header.lower()
+    if ";base64" not in lower_header:
+        return None
+    mime = "image/png"
+    try:
+        mime_part = header.split(":", 1)[1].split(";", 1)[0].strip()
+        if mime_part:
+            mime = mime_part
+    except Exception:
+        mime = "image/png"
+    try:
+        data = base64.b64decode(encoded, validate=False)
+    except Exception:
+        return None
+    if not data:
+        return None
+    return data, mime
+
+
+async def _send_markdown_media_reply(message, reply: str, user_id: str) -> bool:
+    """Send markdown image payloads (GIF/data URL/URL) as Telegram media. Returns True if any media was sent."""
+    text = reply or ""
+    matches = list(_MARKDOWN_IMAGE_RE.finditer(text))
+    if not matches:
+        return False
+
+    text_reply = _strip_markdown_images(text)
+    if text_reply:
+        await _reply_text_safe_html(message, text_reply)
+
+    media_sent = False
+    for m in matches:
+        alt = (m.group(1) or "").strip()
+        url = (m.group(2) or "").strip()
+        if not url:
+            continue
+        try:
+            if _GIPHY_OR_GIF_RE.match(url):
+                await message.reply_animation(url)
+                media_sent = True
+                continue
+
+            decoded = _decode_data_image_url(url)
+            if decoded:
+                data, mime = decoded
+                ext = "png"
+                if "/" in mime:
+                    ext = (mime.split("/", 1)[1] or "png").split("+", 1)[0].split(";", 1)[0].strip() or "png"
+                buf = io.BytesIO(data)
+                buf.name = f"generated.{ext}"
+                caption = alt[:1024] if alt else None
+                await message.reply_photo(photo=buf, caption=caption)
+                media_sent = True
+                continue
+
+            # Regular remote image URL (png/jpg/webp/etc)
+            caption = alt[:1024] if alt else None
+            await message.reply_photo(photo=url, caption=caption)
+            media_sent = True
+        except Exception as e:
+            logger.warning("Failed to send markdown media to %s: %s", user_id, e)
+            # Fallback: send URL for remote assets if media upload fails.
+            if url.startswith("http://") or url.startswith("https://"):
+                try:
+                    await message.reply_text(url[:TELEGRAM_MAX_MESSAGE_LENGTH])
+                except Exception:
+                    pass
+    return media_sent
 
 
 # Max length for a single Telegram message
@@ -332,27 +414,10 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             if not (reply or "").strip():
                 logger.info("Telegram reply suppressed (silent control token) for %s", user_id)
                 return
-            
-            # Check for markdown GIF (Giphy or .gif) and send as animation
-            # Regex matches ![alt](url) where url contains giphy.com or ends in .gif
-            gif_match = re.search(r"!\[.*?\]\((https?://(?:media\d?\.giphy\.com/media/|.*\.gif).*?)\)", reply)
-            
-            if gif_match:
-                gif_url = gif_match.group(1)
-                # Remove the markdown image from the text to avoid duplicate/ugly link
-                text_reply = reply.replace(gif_match.group(0), "").strip()
-                
-                if text_reply:
-                    await _reply_text_safe_html(update.message, text_reply)
-                
-                try:
-                    await update.message.reply_animation(gif_url)
-                    logger.info("Telegram reply sent to %s (with animation)", user_id)
-                except Exception as e:
-                    logger.warning("Failed to send animation to %s: %s", user_id, e)
-                    # Fallback: if we haven't sent text yet (e.g. only gif), send the link
-                    if not text_reply:
-                        await update.message.reply_text(gif_url)
+
+            sent_media = await _send_markdown_media_reply(update.message, reply, user_id)
+            if sent_media:
+                logger.info("Telegram reply sent to %s (with media)", user_id)
             else:
                 out = (reply or "").strip()[:TELEGRAM_MAX_MESSAGE_LENGTH] or "No response."
                 await _reply_text_safe_html(update.message, out)

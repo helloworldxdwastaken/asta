@@ -29,7 +29,6 @@ from app.ollama_catalog import (
     ollama_list_tool_models,
     resolve_ollama_model_name,
 )
-from app.whatsapp_bridge import get_whatsapp_bridge_status
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -92,6 +91,7 @@ SKILLS = [
 
 ALLOWED_API_KEY_NAMES = frozenset({
     "groq_api_key", "gemini_api_key", "google_ai_key",
+    "huggingface_api_key",
     "anthropic_api_key", "openai_api_key", "openrouter_api_key",
     "telegram_bot_token", "giphy_api_key",
     "spotify_client_id", "spotify_client_secret",
@@ -377,7 +377,7 @@ async def set_fallback_providers(body: FallbackProvidersIn, user_id: str = "defa
 # Default models per provider (used when user has not set a custom model)
 DEFAULT_MODELS = {
     "groq": "llama-3.3-70b-versatile",
-    "google": "gemini-1.5-flash",
+    "google": "gemini-2.5-flash",
     "claude": "claude-3-5-sonnet-20241022",
     "ollama": "auto (tool-capable local model)",
     "openai": "gpt-4o-mini",
@@ -519,7 +519,6 @@ async def get_status(user_id: str = "default"):
     s = get_settings()
     api_status = await db.get_api_keys_status()
     ollama_ok = await _ollama_reachable()
-    whatsapp = await get_whatsapp_bridge_status(s.asta_whatsapp_bridge_url)
     from app.memory_health import get_memory_health
     from app.security_audit import collect_security_warnings
     memory = await get_memory_health()
@@ -530,6 +529,7 @@ async def get_status(user_id: str = "default"):
     apis = {
         "groq": api_status.get("groq_api_key", False),
         "gemini": api_status.get("gemini_api_key", False) or api_status.get("google_ai_key", False),
+        "huggingface": api_status.get("huggingface_api_key", False),
         "claude": api_status.get("anthropic_api_key", False),
         "openai": api_status.get("openai_api_key", False),
         "openrouter": api_status.get("openrouter_api_key", False),
@@ -537,8 +537,6 @@ async def get_status(user_id: str = "default"):
     }
     integrations = {
         "telegram": bool(api_status.get("telegram_bot_token") or s.telegram_bot_token),
-        # Single-user semantics: integration is "on" only when linked and connected.
-        "whatsapp": bool(whatsapp.get("connected")),
     }
     toggles = await db.get_all_skill_toggles(user_id)
     files_avail = bool(s.asta_allowed_paths and s.asta_allowed_paths.strip()) or bool(s.workspace_path)
@@ -599,7 +597,6 @@ async def get_status(user_id: str = "default"):
             "telegram": {
                 "configured": bool(api_status.get("telegram_bot_token") or s.telegram_bot_token),
             },
-            "whatsapp": whatsapp,
         },
         "skills": skills,
         "app": s.app_name,
@@ -640,6 +637,7 @@ class ApiKeysIn(BaseModel):
     groq_api_key: str | None = None
     gemini_api_key: str | None = None
     google_ai_key: str | None = None
+    huggingface_api_key: str | None = None
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
     openrouter_api_key: str | None = None
@@ -661,84 +659,6 @@ async def set_api_keys(body: ApiKeysIn):
             await db.set_stored_api_key(name, val)
     return {"ok": True}
 
-
-@router.post("/settings/whatsapp/logout")
-@router.post("/api/settings/whatsapp/logout")
-async def whatsapp_logout():
-    """Logout WhatsApp session (clear auth)."""
-    s = get_settings()
-    url = s.asta_whatsapp_bridge_url
-    if not url:
-        return {"ok": False, "error": "WhatsApp bridge not configured"}
-    
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            r = await client.post(f"{url.rstrip('/')}/logout")
-            if r.status_code == 200:
-                return {"ok": True}
-            return {"ok": False, "error": f"Bridge error: {r.text}"}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
-
-
-class WhatsAppOwnerIn(BaseModel):
-    number: str
-
-
-class WhatsAppPolicyIn(BaseModel):
-    allowed_numbers: str = ""
-    self_chat_only: bool = False
-    owner_number: str | None = None
-
-
-@router.post("/settings/whatsapp/owner")
-@router.post("/api/settings/whatsapp/owner")
-async def set_whatsapp_owner(body: WhatsAppOwnerIn):
-    """Set the auto-detected WhatsApp owner number."""
-    db = get_db()
-    await db.connect()
-    # Normalize: remove non-digits just in case, or trust the bridge
-    num = "".join(filter(str.isdigit, body.number))
-    await db.set_system_config("whatsapp_owner", num)
-    return {"ok": True, "number": num}
-
-
-@router.get("/settings/whatsapp/policy")
-@router.get("/api/settings/whatsapp/policy")
-async def get_whatsapp_policy():
-    """Return WhatsApp sender policy controls for UI."""
-    s = get_settings()
-    db = get_db()
-    await db.connect()
-    owner = (await db.get_system_config("whatsapp_owner")) or ""
-    return {
-        "allowed_numbers": sorted(s.whatsapp_whitelist),
-        "self_chat_only": bool(s.asta_whatsapp_self_chat_only),
-        "owner_number": owner,
-    }
-
-
-@router.put("/settings/whatsapp/policy")
-@router.put("/api/settings/whatsapp/policy")
-async def set_whatsapp_policy(body: WhatsAppPolicyIn):
-    """Update WhatsApp sender policy controls."""
-    # Normalize comma/newline separated numbers into digits-only CSV.
-    parts = re.split(r"[\s,]+", body.allowed_numbers or "")
-    nums = sorted({"".join(ch for ch in p if ch.isdigit()) for p in parts if p.strip()})
-    set_env_value("ASTA_WHATSAPP_ALLOWED_NUMBERS", ",".join(nums), allow_empty=True)
-    set_env_value("ASTA_WHATSAPP_SELF_CHAT_ONLY", "1" if body.self_chat_only else "0")
-
-    owner = "".join(ch for ch in (body.owner_number or "") if ch.isdigit())
-    db = get_db()
-    await db.connect()
-    if owner:
-        await db.set_system_config("whatsapp_owner", owner)
-    return {
-        "ok": True,
-        "allowed_numbers": nums,
-        "self_chat_only": bool(body.self_chat_only),
-        "owner_number": owner or ((await db.get_system_config("whatsapp_owner")) or ""),
-    }
 
 
 @router.get("/settings/test-key")
@@ -822,6 +742,31 @@ async def test_api_key(provider: str = "groq", user_id: str = "default"):
             msg = str(e).strip() or repr(e)
             return {"ok": False, "error": msg[:500]}
 
+    if provider == "huggingface":
+        key = await get_api_key("huggingface_api_key")
+        if not key:
+            return {
+                "ok": False,
+                "error": (
+                    "No Hugging Face API key set. Add one in Settings and save first. "
+                    "Get a token at https://huggingface.co/settings/tokens"
+                ),
+            }
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(
+                    "https://huggingface.co/api/whoami-v2",
+                    headers={"Authorization": f"Bearer {key}"},
+                )
+            if r.status_code in (401, 403):
+                return {"ok": False, "error": f"Hugging Face token invalid or unauthorized ({r.status_code})."}
+            if r.status_code >= 400:
+                return {"ok": False, "error": f"Hugging Face token check failed ({r.status_code}): {r.text[:300]}"}
+            return {"ok": True, "message": "Hugging Face token works."}
+        except Exception as e:
+            msg = str(e).strip() or repr(e)
+            return {"ok": False, "error": msg[:500]}
+
     if provider == "claude":
         key = await get_api_key("anthropic_api_key")
         if not key:
@@ -856,7 +801,7 @@ async def test_api_key(provider: str = "groq", user_id: str = "default"):
         await db.clear_provider_auto_disabled(user_id, "ollama")
         return {"ok": True, "message": "Ollama is reachable."}
 
-    return {"ok": False, "error": f"Test not implemented for {provider}. Use claude, ollama, groq, openai, openrouter, or spotify."}
+    return {"ok": False, "error": f"Test not implemented for {provider}. Use claude, huggingface, ollama, groq, openai, openrouter, or spotify."}
 
 
 class SkillToggleIn(BaseModel):
@@ -1328,6 +1273,46 @@ async def set_telegram_username(body: TelegramUsernameIn):
     
     set_env_value("ASTA_TELEGRAM_USERNAME", username, allow_empty=True)
     return {"ok": True, "username": username}
+
+
+# ── Persona (SOUL.md + USER.md) ──────────────────────────────────────────────
+
+class PersonaIn(BaseModel):
+    soul: str | None = None
+    user: str | None = None
+
+
+def _workspace_path() -> Path:
+    ws = get_settings().workspace_path
+    if ws:
+        return ws
+    return Path(__file__).resolve().parents[3] / "workspace"
+
+
+@router.get("/settings/persona")
+@router.get("/api/settings/persona")
+async def get_persona():
+    """Return contents of workspace/SOUL.md and workspace/USER.md."""
+    ws = _workspace_path()
+    soul_path = ws / "SOUL.md"
+    user_path = ws / "USER.md"
+    return {
+        "soul": soul_path.read_text(encoding="utf-8") if soul_path.is_file() else "",
+        "user": user_path.read_text(encoding="utf-8") if user_path.is_file() else "",
+    }
+
+
+@router.put("/settings/persona")
+@router.put("/api/settings/persona")
+async def set_persona(body: PersonaIn):
+    """Write workspace/SOUL.md and/or workspace/USER.md."""
+    ws = _workspace_path()
+    ws.mkdir(parents=True, exist_ok=True)
+    if body.soul is not None:
+        (ws / "SOUL.md").write_text(body.soul, encoding="utf-8")
+    if body.user is not None:
+        (ws / "USER.md").write_text(body.user, encoding="utf-8")
+    return {"ok": True}
 
 
 @router.get("/settings/usage")

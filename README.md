@@ -1,6 +1,6 @@
 # Asta
 
-A personal AI workspace that runs on **macOS app**, **web**, **Telegram**, and **WhatsApp (Beta)** with one shared context and persistent chat history.
+A personal AI workspace that runs on **macOS app**, **web**, and **Telegram** with one shared context and persistent chat history.
 
 ## Preview
 
@@ -88,15 +88,16 @@ If the panel shows "API off", start the backend first or use **Settings -> Run t
 - **Reasoning controls**: per-user **Thinking level** (`off/minimal/low/medium/high/xhigh`) and **Reasoning visibility** (`off/on/stream`) in Settings and Telegram commands. Now supports **OpenRouter Kimi/Trinity** (via `reasoning_effort` + auto-injected `<think>` tags) and Ollama. Stream mode now uses a dedicated message event state machine for chunk-time reasoning/assistant updates (with post-generation fallback when providers do not stream).
 - **Strict final mode**: optional `final_mode=strict` in Settings to show only text inside `<final>...</final>` blocks (OpenClaw-style enforcement).
 - **Web live streaming**: Chat UI uses `POST /api/chat/stream` (SSE) for real-time `assistant` and `reasoning` updates powered by OpenClaw-style stream lifecycle events (`message_start/text_delta/text_end/message_end`).
-- **OpenClaw-style main provider flow**: fixed priority chain `Claude -> Ollama -> OpenRouter`, with per-provider runtime enable/disable controls and auto-disable on billing/auth failures.
+- **OpenClaw-style main provider flow**: fixed priority chain `Claude -> Google -> OpenRouter -> Ollama`, with per-provider runtime enable/disable controls and auto-disable on billing/auth failures.
 - **Hybrid vision pipeline**: Telegram image turns run through a low-cost vision model first (default: OpenRouter Nemotron free), then your main agent model handles the final reply/tool flow using the extracted vision notes.
 - **Tool-first execution**: structured tools for exec/files/reminders/cron, OpenClaw-style `process` background session management, and single-user subagent orchestration (`sessions_spawn/list/history/send/stop`).
+- **Image generation fallback**: `image_gen` tool uses Gemini first and Hugging Face FLUX.1-dev fallback (provider-aware routing + 5 req/min guardrail). If a model incorrectly claims image tools are unavailable, backend now runs deterministic image fallback instead of returning a false denial.
 - **Subagent control UX**: deterministic `/subagents` command flow (`list/spawn/info/send/stop`, optional `--wait` on send) plus conservative auto-spawn for explicit long/background requests (toggle: `ASTA_SUBAGENTS_AUTO_SPAWN`).
 - **Files**: local knowledge files + allowed paths. User context (who you are) lives in **workspace/USER.md**.
 - **Learning**: "learn about X for Y minutes" (also: "research/study/become an expert on X") with retrievable context.
 - **Schedule (Reminders + Cron)**: list, add, update, remove, and run recurring jobs or one-shot reminders. One-shot reminders (created via "Remind me at...") are now visible on the **Cron** page with a **One-Shot** badge for easier management.
 - **Automated Voice Calls (Pingram)**: triggering reliable phone calls for reminders and jobs via NotificationAPI (integration: Pingram). Supports custom **Pingram Templates** and fallback to default messages. Configure your phone number and credentials in the **Channels** page.
-- **Channels**: Telegram, Voice Calls (Pingram), and WhatsApp (Beta) integrations in one place.
+- **Channels**: Telegram and Voice Calls (Pingram) integrations in one place.
 - **Settings/Skills**: key management, fixed main-provider flow, model policy controls, toggles, and backend controls.
 - **Vision controls in Settings**: preprocess toggle with fixed model `nvidia/nemotron-nano-12b-v2-vl:free` for UI consistency.
 
@@ -104,21 +105,21 @@ If the panel shows "API off", start the backend first or use **Settings -> Run t
 
 - Telegram: set `TELEGRAM_BOT_TOKEN` in `backend/.env` or configure it in **Channels**.
 - Telegram bot commands: `/status`, `/exec_mode`, `/allow`, `/allowlist`, `/approvals` (inline `Once/Always/Deny` actions, with automatic post-approval continuation), `/think` (aliases: `/thinking`, `/t`), `/reasoning`, `/subagents`.
+- Telegram markdown image replies (`![...](...)`) are sent as native media (photos/animations), including inline `data:image/...` payloads from image generation.
 - Exec allowlist hardening: in `allowlist` mode, Asta accepts only a single direct command (no `|`, `&&`, `;`, redirects, command substitution, or multiline scripts), and blocks shell launchers (`bash`, `sh`, `zsh`, `pwsh`, `cmd`) even if manually allowlisted.
-- WhatsApp (Beta): run `services/whatsapp` (see `services/whatsapp/README.md`), scan QR in **Channels**, and set `ASTA_WHATSAPP_BRIDGE_URL`.
 - Vision input is currently supported on **Telegram photos** (web image upload is not implemented yet).
 - Optional debugging: set `ASTA_SHOW_TOOL_TRACE=true` and `ASTA_TOOL_TRACE_CHANNELS=web` to append `Tools used: ...` on replies (Telegram footer is suppressed because it already shows proactive skill-status pings).
 
 ## Learning / RAG Setup
 
-For learning, embeddings are required. Asta tries providers in this order: **Ollama -> OpenAI -> Google**.
+For learning, embeddings are required. Asta currently uses **Ollama** embeddings (`nomic-embed-text`).
 
 ```bash
 ./scripts/setup_ollama_rag.sh
 ./scripts/setup_ollama_rag.sh -i
 ```
 
-Then run `ollama serve` (or open Ollama app). If Ollama is not used, set OpenAI or Gemini keys in Settings.
+Then run `ollama serve` (or open Ollama app). If Ollama is unavailable, learning/RAG endpoints are unavailable until it is running.
 
 ## Docs
 
@@ -150,7 +151,6 @@ asta/
 ├── backend/           # FastAPI backend
 ├── frontend/          # React + Vite web panel
 ├── MACAPP/            # Native macOS app (SwiftUI)
-├── services/whatsapp/ # WhatsApp bridge (Node)
 ├── scripts/           # helper scripts (RAG/Ollama setup)
 ├── docs/              # install, spec, errors, security
 ├── asta.sh            # start/stop/restart/status/doc

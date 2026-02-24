@@ -25,8 +25,7 @@ This file records the latest documented smoke-test run. Re-run before release:
 | GET /api/spotify/setup | ✅ 200 | connect_url, steps |
 | POST /api/chat | ✅ 200 | reply, conversation_id, provider |
 | GET /api/notifications | ✅ 200 | reminders list |
-| GET /api/whatsapp/qr | ✅ 200 | qr/connected/error |
-| POST /api/rag/learn | ✅ 200 | Uses Ollama first; if not running, falls back to OpenAI (then Google) embeddings. Needs at least one of: Ollama with `nomic-embed-text`, or OpenAI key, or Gemini/Google AI key. |
+| POST /api/rag/learn | ✅ 200 | Uses Ollama embeddings (`nomic-embed-text`). Requires Ollama to be running and reachable. |
 
 ## Frontend
 
@@ -39,4 +38,21 @@ This file records the latest documented smoke-test run. Re-run before release:
 - **Chat**: Needs at least one AI provider (Groq, Gemini, Claude, or Ollama) configured; otherwise reply may be an error message.
 - **Spotify play**: Needs Client ID/Secret and user to click "Connect Spotify" once.
 - **Files**: Needs `ASTA_ALLOWED_PATHS` in backend/.env for non-empty list.
-- **Telegram/WhatsApp**: Need bot token and WhatsApp bridge running for those channels.
+- **Telegram**: Needs a valid `TELEGRAM_BOT_TOKEN` for bot channel features.
+
+## Backend regression tests (2026-02-24)
+
+Command run:
+
+```bash
+cd backend
+./.venv/bin/pytest \
+  tests/test_image_gen_tool.py \
+  tests/test_image_generation_guardrail.py \
+  tests/test_telegram_markdown_media.py -q
+```
+
+Result:
+
+- `13 passed`
+- `1 warning` (pydantic deprecation warning, non-blocking)

@@ -31,6 +31,7 @@ Quick reference for errors you might see and how to fix them.
 | **No AI provider found** | No API key set | Add at least one key in Settings → API keys: Groq, Gemini, Claude, OpenAI, OpenRouter, or run Ollama. |
 | **invalid or expired API key** | Key wrong or expired | Update the key in Settings → API keys or `backend/.env`, then restart. |
 | **Client error 404 for Ollama** | Ollama not running or wrong URL | Start Ollama (`ollama serve`) or set correct `OLLAMA_BASE_URL` in `backend/.env`. |
+| **Image generation service unavailable** | Gemini rate-limited and Hugging Face fallback not configured/unauthorized/deprecated route/credits exhausted. | Add `HUGGINGFACE_API_KEY` in Settings or `backend/.env`; verify key with `GET /api/settings/test-key?provider=huggingface`; ensure backend is up to date (provider-aware HF routing); if 402, top up HF credits; if 429, retry later. |
 | **Image reply says it only sees `image/jpeg` / generic image placeholder** | Vision preprocessor/provider path is not configured (or no vision-capable key available). | Add at least one vision-capable key (OpenRouter, Claude, or OpenAI). Keep `ASTA_VISION_PREPROCESS=true` (default). If using OpenRouter vision, ensure `OPENROUTER_API_KEY` is set and optionally set `ASTA_VISION_OPENROUTER_MODEL`. |
 | **`/reasoning stream` does not show live updates** | Provider path did not emit chunk deltas (or stream mode is off), or the model did not produce tagged reasoning text. | Use `reasoning_mode=stream` and a streaming-capable provider path (OpenAI, Groq, OpenRouter, or Ollama). Claude adapter is currently final-output style, so reasoning may appear only after completion. |
 | **Replies become empty / “I didn't get a reply back” in strict final mode** | `final_mode=strict` hides any text not wrapped in `<final>...</final>`. | Turn Final tag mode back to `off`, or keep `strict` and use models/prompts that reliably emit `<final>` tags. |
@@ -115,12 +116,13 @@ Quick reference for errors you might see and how to fix them.
 
 ---
 
-## WhatsApp / Telegram
+## Telegram / Channels
 
 | Symptom | Cause | Solution |
 |---------|-------|----------|
 | **Telegram handler error** | Bot token invalid or network issue | Check `TELEGRAM_BOT_TOKEN` in Settings or `backend/.env`. Get token from [@BotFather](https://t.me/BotFather). |
-| **WhatsApp QR / bridge not connecting** | Bridge not running | Start `services/whatsapp` with `ASTA_API_URL=http://localhost:8010`. Set `ASTA_WHATSAPP_BRIDGE_URL` in `.env` if bridge runs elsewhere. |
+| **Telegram shows raw `![...](...)` instead of image** | Running an older backend that only handled GIF links, not generic markdown images/data URLs. | Update backend to latest and restart (`./asta.sh restart`). Current builds send markdown image replies as native Telegram photos/animations. |
+| **Calling old WhatsApp endpoints returns 404** | WhatsApp bridge endpoints were removed from backend. | Use Telegram/web channels. If you still have old frontend code calling `/api/whatsapp/*`, update the client to current APIs. |
 | **Sent image in web chat but Asta cannot analyze it** | Web image upload path is not implemented yet. | Use Telegram photo input for vision turns. |
 
 ---

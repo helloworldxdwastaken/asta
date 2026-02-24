@@ -1,4 +1,5 @@
 """Core message handler: build context, call AI, persist. Handles mood and reminders."""
+import asyncio
 import logging
 import io
 import json
@@ -28,7 +29,6 @@ from app.scheduler_handler import (
 )
 
 # Services
-from app.services.spotify_service import SpotifyService
 from app.services.reminder_service import ReminderService
 from app.services.learning_service import LearningService
 from app.services.giphy_service import GiphyService
@@ -88,6 +88,32 @@ _WORKSPACE_NOTES_LIST_HINTS = (
     "do i have notes",
     "which notes",
 )
+_IMAGE_GEN_REQUEST_VERBS = (
+    "make",
+    "create",
+    "generate",
+    "draw",
+    "render",
+    "illustrate",
+    "design",
+    "paint",
+    "build",
+)
+_IMAGE_GEN_REQUEST_OBJECTS = (
+    "image",
+    "picture",
+    "photo",
+    "art",
+    "poster",
+    "banner",
+    "wallpaper",
+    "avatar",
+    "logo",
+    "mockup",
+    "thumbnail",
+    "cover",
+    "ad",
+)
 
 # Providers that can participate in tool/fallback guardrails.
 # Ollama is included because Asta uses text tool-call protocols with it.
@@ -98,7 +124,7 @@ _VISION_PROVIDER_KEY = {
     "claude": "anthropic_api_key",
     "openai": "openai_api_key",
 }
-_VISION_PROVIDER_ORDER_DEFAULT = ("openrouter", "claude", "openai")
+_VISION_PROVIDER_ORDER_DEFAULT = ("openrouter", "claude", "openai")  # Nemotron via OpenRouter first
 _VISION_OPENROUTER_MODEL_DEFAULT = "nvidia/nemotron-nano-12b-v2-vl:free"
 _GIF_COOLDOWN_SECONDS = 30 * 60
 _SILENT_REPLY_TOKEN = "NO_REPLY"
@@ -300,6 +326,92 @@ async def _emit_live_stream_event(
             await maybe
     except Exception as e:
         logger.debug("Live stream event callback failed: %s", e)
+
+
+async def _emit_tool_event(
+    *,
+    phase: str,          # "start" or "end"
+    name: str,
+    label: str,
+    channel: str,
+    channel_target: str,
+    stream_event_callback=None,
+) -> None:
+    """Emit an infrastructure-level tool event (OpenClaw style).
+    - web: SSE event with type=tool_start or tool_end
+    - telegram: send status message on start only (no noise on end)
+    """
+    event_type = "tool_start" if phase == "start" else "tool_end"
+    if callable(stream_event_callback):
+        await _emit_live_stream_event(
+            stream_event_callback,
+            {"type": event_type, "name": name, "label": label},
+        )
+    ch = (channel or "").strip().lower()
+    if ch == "telegram" and channel_target and phase == "start":
+        from app.reminders import send_notification
+        try:
+            await send_notification(ch, channel_target, f"🔧 {label}…")
+        except Exception as e:
+            logger.debug("Could not send tool status to telegram: %s", e)
+
+
+def _strip_think_blocks(text: str) -> str:
+    """Remove <think>...</think> reasoning blocks from text (case-insensitive, greedy)."""
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+
+
+async def _generate_conversation_title(
+    cid: str,
+    user_text: str,
+    assistant_reply: str,
+    provider_name: str,
+) -> None:
+    """Generate an AI title for a new conversation and persist it.
+    Fires as a background task after the first exchange completes.
+    """
+    try:
+        db = get_db()
+        # Guard: skip if title already set (e.g. parallel request)
+        existing = await db.get_conversation_title(cid)
+        if existing:
+            return
+        provider = get_provider(provider_name)
+        # Strip <think> blocks from the reply before using as context, and disable
+        # thinking for this call so the response itself won't contain reasoning blocks.
+        clean_reply = _strip_think_blocks(assistant_reply)
+        snippet = (user_text[:300] + "\n\n" + clean_reply[:300]).strip()
+        messages = [
+            {
+                "role": "user",
+                "content": (
+                    "Give this conversation a short title (3–6 words, sentence case, "
+                    "no punctuation at the end). Reply with ONLY the title, nothing else.\n\n"
+                    + snippet
+                ),
+            }
+        ]
+        response = await provider.chat(messages, thinking_level="off", reasoning_mode="off")
+        if response.error:
+            logger.debug("Auto-title provider error: %s", response.error_message or response.error)
+            return
+        raw = _strip_think_blocks(response.content or "")
+        title = raw.strip().strip('"').strip("'")
+        if len(title) > 80:
+            title = title[:80]
+        # Fallback: if model only generated thinking with no output (e.g. Ollama/DeepSeek),
+        # derive a title from the user's message instead.
+        if not title:
+            words = user_text.strip().split()
+            title = " ".join(words[:7])
+            if len(user_text.split()) > 7:
+                title += "…"
+            title = title[:80]
+        if title:
+            await db.set_conversation_title(cid, title)
+            logger.debug("Auto-titled conversation %s → %r", cid, title)
+    except Exception as e:
+        logger.debug("Could not auto-title conversation %s: %s", cid, e)
 
 
 def _longest_common_prefix_size(left: str, right: str) -> int:
@@ -1145,6 +1257,83 @@ def _looks_like_files_check_request(text: str) -> bool:
     return (has_verb or has_question_hint) and has_target
 
 
+def _looks_like_image_generation_request(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    if t.startswith("/imagine") or t.startswith("imagine "):
+        return True
+    # Pure capability questions should not trigger image generation fallback.
+    if any(
+        k in t
+        for k in (
+            "do you have access",
+            "have access to image",
+            "image generation tool",
+            "which model",
+            "what model",
+            "best model",
+            "api key",
+            "rate limit",
+            "how many steps",
+        )
+    ):
+        return False
+    has_request_verb = any(re.search(rf"\b{re.escape(v)}\b", t) for v in _IMAGE_GEN_REQUEST_VERBS)
+    has_image_object = any(re.search(rf"\b{re.escape(v)}\b", t) for v in _IMAGE_GEN_REQUEST_OBJECTS)
+    return has_request_verb and has_image_object
+
+
+def _reply_claims_image_tool_unavailable(reply: str) -> bool:
+    t = (reply or "").strip().lower()
+    if not t:
+        return False
+    denies_access = any(
+        k in t
+        for k in (
+            "don't have access",
+            "do not have access",
+            "isn't available",
+            "is not available",
+            "can't generate images",
+            "cannot generate images",
+            "image generation service is currently unavailable",
+            "image generation service unavailable",
+        )
+    )
+    image_context = any(
+        k in t
+        for k in (
+            "image_gen",
+            "image generation",
+            "generate images",
+            "generate an image",
+            "picture",
+        )
+    )
+    return denies_access and image_context
+
+
+def _extract_image_markdown_from_tool_output(tool_output: str) -> tuple[str | None, str | None]:
+    raw = (tool_output or "").strip()
+    if not raw:
+        return None, "Image generation returned empty output."
+    if raw.startswith("!["):
+        return raw, None
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return None, raw[:500]
+    if isinstance(payload, dict):
+        md = (payload.get("image_markdown") or "").strip()
+        if md:
+            return md, None
+        err = (payload.get("error") or "").strip()
+        if err:
+            return None, err
+    return None, raw[:500]
+
+
 def _extract_path_hint(text: str) -> str | None:
     t = (text or "").strip()
     if not t:
@@ -1498,6 +1687,10 @@ def _is_likely_mutating_tool_call(tool_name: str, args: dict[str, Any] | None = 
     action_norm = action.strip().lower() if isinstance(action, str) else ""
     if name in {"reminders", "cron", "message"}:
         return action_norm in _MUTATING_ACTION_NAMES
+    if name == "spotify":
+        # Read-only: search, now_playing, list_playlists, list_devices
+        # Mutating: play, control, volume, create_playlist, add_to_playlist
+        return action_norm not in {"search", "now_playing", "list_playlists", "list_devices"}
     return False
 
 
@@ -1561,7 +1754,7 @@ async def _emit_stream_status(
             },
         )
     ch = (channel or "").strip().lower()
-    if ch in ("telegram", "whatsapp") and channel_target:
+    if ch == "telegram" and channel_target:
         try:
             await send_notification(ch, channel_target, msg)
         except Exception as e:
@@ -1659,6 +1852,32 @@ def _extract_textual_tool_calls(
                 cleaned = (raw[: m.start()] + raw[m.end() :]).strip()
                 return tool_calls, cleaned
 
+    # Qwen/Trinity-style: <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+    tc_match = re.search(r"(?is)<tool_call>\s*(\{.*?\})\s*</tool_call>", raw)
+    if tc_match:
+        try:
+            payload = json.loads(tc_match.group(1).strip())
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            name = str(payload.get("name") or "").strip()
+            if name and (not allowed_names or name in allowed_names):
+                args = payload.get("arguments")
+                if not isinstance(args, dict):
+                    args = {}
+                tool_calls = [
+                    {
+                        "id": "text_tool_call_qwen",
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": json.dumps(args, ensure_ascii=False),
+                        },
+                    }
+                ]
+                cleaned = (raw[: tc_match.start()] + raw[tc_match.end() :]).strip()
+                return tool_calls, cleaned
+
     # OpenClaw/Claude-style text tool calls:
     # <function_calls><invoke name="read"><parameter name="path">...</parameter></invoke></function_calls>
     block_match = re.search(r"(?is)<function_calls>\s*(.*?)\s*</function_calls>", raw)
@@ -1751,6 +1970,9 @@ def _has_tool_call_markup(text: str) -> bool:
         return True
     if re.search(r"(?is)<function_calls>\s*.*?\s*</function_calls>", raw):
         return True
+    # Qwen/Trinity-style tool call XML
+    if re.search(r"(?is)<tool_call>\s*\{.*?\}\s*</tool_call>", raw):
+        return True
     return False
 
 
@@ -1760,6 +1982,8 @@ def _strip_tool_call_markup(text: str) -> str:
         return ""
     cleaned = re.sub(r"\[ASTA_TOOL_CALL\]\s*\{.*?\}\s*\[/ASTA_TOOL_CALL\]", "", raw, flags=re.DOTALL)
     cleaned = re.sub(r"(?is)<function_calls>\s*.*?\s*</function_calls>", "", cleaned)
+    # Qwen/Trinity-style tool call XML (emitted as text alongside structured tool_calls)
+    cleaned = re.sub(r"(?is)<tool_call>\s*\{.*?\}\s*</tool_call>", "", cleaned)
     return cleaned.strip()
 
 
@@ -2871,6 +3095,7 @@ async def handle_message(
     mood: str | None = None,
     image_bytes: bytes | None = None,
     image_mime: str | None = None,
+    _out: dict | None = None,
 ) -> str:
     """Process one user message: context + AI + save. Schedules reminders when requested. Returns assistant reply.
     Asta is the agent; it uses whichever AI provider you set (Groq, Gemini, Claude, Ollama)."""
@@ -3105,12 +3330,19 @@ async def handle_message(
     #     if learning_result:
     #         extra.update(learning_result)
 
-    # 3. Spotify
+    # 3. Spotify: populate connection status in extra so context section can inform the LLM.
+    # Actual Spotify actions are handled via the spotify LLM tool (Option B - tool-based).
     if "spotify" in enabled:
-        spotify_reply = await SpotifyService.handle_message(user_id, text, extra, channel)
-        if spotify_reply:
-            await db.add_message(cid, "assistant", spotify_reply, "script")
-            return spotify_reply
+        from app.spotify_client import get_user_access_token as _spotify_get_token
+        _spotify_token = await _spotify_get_token(user_id)
+        if _spotify_token:
+            extra["spotify_play_connected"] = True
+        else:
+            _spotify_row = await db.get_spotify_tokens(user_id)
+            if _spotify_row:
+                extra["spotify_reconnect_needed"] = True
+            else:
+                extra["spotify_play_connected"] = False
 
     # --- END SERVICE CALLS ---
 
@@ -3148,7 +3380,7 @@ async def handle_message(
 
     # Status: only the skills we're actually using, with emojis (workspace skills get generic label)
     skill_labels = [SKILL_STATUS_LABELS.get(s, f"📄 Using {s}…") for s in skills_to_use]
-    if skill_labels and channel in ("telegram", "whatsapp") and channel_target:
+    if skill_labels and channel == "telegram" and channel_target:
         await send_skill_status(channel, channel_target, skill_labels)
     if skill_labels and (reasoning_mode or "").lower() == "stream":
         await _emit_stream_status(
@@ -3263,7 +3495,14 @@ async def handle_message(
             recent = recent[:-1]
 
     messages = [
-        {"role": m["role"], "content": m["content"]}
+        {
+            "role": m["role"],
+            # Strip textual tool-call markup from saved assistant messages before sending to
+            # the model — older messages may have <tool_call> / [ASTA_TOOL_CALL] tags stored
+            # in the DB. If the model sees these in its own history it will try to re-execute
+            # them, causing repeated identical tool calls on every new request.
+            "content": _strip_tool_call_markup(m["content"]) if m["role"] == "assistant" else (m["content"] or ""),
+        }
         for m in recent
         # Simple heuristic for old string-based errors in DB, plus new structured ones if we saved them
         if not (
@@ -3395,6 +3634,17 @@ async def handle_message(
     # Cron tool: status/list/add/update/remove for recurring jobs
     from app.cron_tool import get_cron_tool_openai_def
     tools = tools + get_cron_tool_openai_def()
+    # Spotify tool: search/play/control/playlists — full LLM-driven integration.
+    if "spotify" in enabled:
+        from app.spotify_tool import get_spotify_tools_openai_def
+        tools = tools + get_spotify_tools_openai_def()
+    # Image generation tool — Gemini primary, Hugging Face FLUX.1-dev fallback.
+    from app.keys import get_api_key as _get_api_key_img
+    _gemini_key = await _get_api_key_img("gemini_api_key") or await _get_api_key_img("google_ai_key")
+    _hf_key = await _get_api_key_img("huggingface_api_key")
+    if _gemini_key or _hf_key:
+        from app.image_gen_tool import get_image_gen_tool_openai_def
+        tools = tools + get_image_gen_tool_openai_def()
     # Single-user OpenClaw-style subagent orchestration tools.
     if channel != "subagent":
         from app.subagent_orchestrator import get_subagent_tools_openai_def
@@ -3529,7 +3779,7 @@ async def handle_message(
         logger.info("Provider %s returned tool_calls=%s (count=%s)", provider_used.name, has_tc, len(response.tool_calls or []))
 
     # Tool-call loop: if model requested exec (or other tools), run and re-call same provider until done
-    MAX_TOOL_ROUNDS = 3
+    MAX_TOOL_ROUNDS = 20
     current_messages = list(messages)
     
     # Initialize tool loop detector for this conversation
@@ -3542,7 +3792,9 @@ async def handle_message(
 
     ran_exec_tool = False
     ran_any_tool = False
+    exec_tool_call_count = 0   # count exec calls within this request to trigger script nudge
     ran_files_tool = False
+    ran_image_gen_tool = False
     ran_reminders_tool = False
     ran_cron_tool = False
     used_tool_labels: list[str] = []
@@ -3615,7 +3867,11 @@ async def handle_message(
         if not response.tool_calls or not provider_used:
             break
         # Append assistant message (with content + tool_calls) and run each exec call
-        asst_content = response.content or ""
+        # Strip any textual tool-call markup (e.g. <tool_call> XML from Trinity/Qwen models)
+        # from the content before storing it in the conversation history. If the model
+        # sees its own <tool_call> tags in prior turns it will try to re-execute them,
+        # causing identical-command loops.
+        asst_content = _strip_tool_call_markup(response.content or "")
         asst_tool_calls = response.tool_calls
         current_messages.append({
             "role": "assistant",
@@ -3708,13 +3964,13 @@ async def handle_message(
                     loop_detector.record_tool_call(name, args_data, tool_call_id)
             # === END TOOL LOOP DETECTION ===
 
-            if name and (reasoning_mode or "").lower() == "stream":
-                await _emit_stream_status(
-                    db=db,
-                    conversation_id=cid,
+            if name:
+                await _emit_tool_event(
+                    phase="start",
+                    name=name,
+                    label=_build_tool_trace_label(name),
                     channel=channel,
                     channel_target=channel_target,
-                    text=f"Running {_build_tool_trace_label(name)}…",
                     stream_event_callback=stream_event_callback,
                 )
             if name in ("exec", "bash"):
@@ -3804,6 +4060,7 @@ async def handle_message(
                             workdir=workdir,
                         )
                     ran_exec_tool = True
+                    exec_tool_call_count += 1
                     used_tool_labels.append(_build_tool_trace_label(name))
                     last_exec_command = cmd
                     last_exec_stdout = stdout
@@ -4037,6 +4294,19 @@ async def handle_message(
                     channel=channel,
                     channel_target=channel_target,
                 )
+            elif name == "spotify":
+                from app.spotify_tool import parse_spotify_tool_args, run_spotify_tool
+                params = parse_spotify_tool_args(args_str)
+                used_tool_labels.append(
+                    _build_tool_trace_label("spotify", str(params.get("action") or ""))
+                )
+                out = await run_spotify_tool(params, user_id=user_id)
+            elif name == "image_gen":
+                from app.image_gen_tool import run_image_gen
+                prompt = (args_data.get("prompt") or "").strip() if isinstance(args_data, dict) else ""
+                used_tool_labels.append(_build_tool_trace_label("image_gen"))
+                out = await run_image_gen(user_id=user_id, prompt=prompt)
+                ran_image_gen_tool = True
             else:
                 out = "Unknown tool."
 
@@ -4085,7 +4355,31 @@ async def handle_message(
                                 " Use a more specific query or request a smaller range.]"
                             )
 
+                if name:
+                    await _emit_tool_event(
+                        phase="end",
+                        name=name,
+                        label=_build_tool_trace_label(name),
+                        channel=channel,
+                        channel_target=channel_target,
+                        stream_event_callback=stream_event_callback,
+                    )
                 current_messages.append({"role": "tool", "tool_call_id": tool_call_id, "content": out})
+
+        # If the model has made 6+ exec calls in a row, nudge it hard to write a script
+        SCRIPT_NUDGE_THRESHOLD = 6
+        if exec_tool_call_count == SCRIPT_NUDGE_THRESHOLD:
+            current_messages.append({
+                "role": "user",
+                "content": (
+                    f"[SYSTEM NOTICE] You have made {exec_tool_call_count} exec calls. "
+                    "Stop making individual exec calls now. "
+                    "Write a single bash script to workspace/scripts/tmp/ that does ALL remaining steps, "
+                    "then run it in one exec call. Use python3 -c to parse JSON and chain IDs. "
+                    "Do it now without explaining — just write_file then exec."
+                ),
+            })
+            logger.info("Script nudge injected after %d exec calls", exec_tool_call_count)
 
         # Re-call same provider with updated messages (no fallback switch); use that provider's model
         tool_kwargs = {**chat_kwargs}
@@ -4096,6 +4390,8 @@ async def handle_message(
         # Give the model more time when it has to summarize large tool output (e.g. memo notes)
         if provider_used.name == "openrouter":
             tool_kwargs["timeout"] = 90
+        elif provider_used.name == "claude":
+            tool_kwargs["timeout"] = 120
         if live_model_stream_enabled and hasattr(provider_used, "chat_stream"):
             if live_stream_machine:
                 await live_stream_machine.on_event(
@@ -4127,15 +4423,47 @@ async def handle_message(
         if response.error:
             break
 
+    # Detect if the tool loop was exhausted (hit MAX_TOOL_ROUNDS) while the model
+    # still had pending tool calls — i.e. the task needed more steps than allowed.
+    # In this case, tell the user clearly instead of silently dropping the work.
+    _tool_rounds_exhausted = ran_any_tool and bool(response.tool_calls)
+
     raw_reply = (response.content or "").strip()
 
-    # If the model ran a tool but returned empty content, nudge it once to synthesize.
-    if not raw_reply and ran_any_tool and last_tool_output and not response.error and provider_used:
+    if _tool_rounds_exhausted and not response.error:
+        exhausted_note = (
+            f"\n\n_(I hit my action limit ({MAX_TOOL_ROUNDS} steps) mid-task and couldn't finish. "
+            "For large bulk tasks like this, ask me to write a single script that does everything "
+            "in one go — I can handle hundreds of operations in one step that way.)_"
+        )
+        raw_reply = (raw_reply + exhausted_note).strip()
+        logger.info("Tool rounds exhausted (%d/%d) — appending user-facing note", MAX_TOOL_ROUNDS, MAX_TOOL_ROUNDS)
+
+    # If the model ran a tool but returned empty content (or content that is *only*
+    # tool-call markup, which will be empty after stripping), nudge it to synthesize.
+    # This handles Trinity/Qwen models that output <tool_call> XML as their entire
+    # response text alongside structured tool_calls — after stripping the XML the
+    # effective content is empty, so we need the same synthesis nudge.
+    _raw_reply_is_only_markup = (
+        bool(raw_reply)
+        and _has_tool_call_markup(raw_reply)
+        and not _strip_tool_call_markup(raw_reply).strip()
+    )
+    if (not raw_reply or _raw_reply_is_only_markup) and ran_any_tool and last_tool_output and not response.error and provider_used:
         logger.info("Model returned empty after tool use — injecting synthesis nudge (provider=%s)", provider_used.name)
-        current_messages.append({
-            "role": "user",
-            "content": "Please now summarize the tool results above and answer my original question.",
-        })
+        # For Anthropic/Claude: do NOT append an extra user message — tool_result messages are
+        # already wrapped as user messages in _to_anthropic_messages(), so adding another user
+        # message creates consecutive user messages which is invalid and causes a 400 error.
+        # Anthropic will naturally synthesize when re-called with tool_results present and no tools.
+        # For other providers: append an explicit synthesis request.
+        if provider_used.name != "claude":
+            current_messages.append({
+                "role": "user",
+                "content": (
+                    "The tool ran successfully. Now write your reply to the user based on the results above. "
+                    "Be direct and concrete — do not call any more tools, just respond."
+                ),
+            })
         try:
             nudge_kwargs = {**chat_kwargs}
             nudge_kwargs.pop("tools", None)  # no more tool calls, just synthesize
@@ -4153,7 +4481,10 @@ async def handle_message(
     had_tool_markup = _has_tool_call_markup(raw_reply)
     reply = _strip_tool_call_markup(raw_reply)
     reply = _strip_bracket_tool_protocol(reply)
-    if not reply and had_tool_markup and not response.error:
+    # Only show this error when NO tool was actually executed — if tools ran
+    # successfully and the model just returned markup with no surrounding text,
+    # the synthesis nudge above already handled producing a real reply.
+    if not reply and had_tool_markup and not response.error and not ran_any_tool:
         reply = "I couldn't execute that tool call format. Ask again and I'll retry with tools."
     reply, suppress_user_reply = _sanitize_silent_reply_markers(reply)
 
@@ -4214,6 +4545,32 @@ async def handle_message(
             fallback_reply, fallback_label = notes_fallback
             reply = fallback_reply
             used_tool_labels.append(fallback_label)
+
+    # Image generation guardrail: some fallback models occasionally reply with
+    # "I don't have access to image tools" even when image_gen is available.
+    # If image intent is clear and no image tool call ran, execute deterministic fallback.
+    if (
+        _provider_supports_tools(provider_name)
+        and not ran_image_gen_tool
+        and (_looks_like_image_generation_request(text) or _reply_claims_image_tool_unavailable(reply))
+    ):
+        from app.image_gen_tool import run_image_gen
+
+        image_prompt = (text or "").strip()
+        image_tool_output = await run_image_gen(user_id=user_id, prompt=image_prompt)
+        _record_tool_outcome(
+            tool_name="image_gen",
+            tool_output=image_tool_output,
+            tool_args={"prompt": image_prompt},
+            action="fallback",
+        )
+        image_markdown, image_error = _extract_image_markdown_from_tool_output(image_tool_output)
+        if image_markdown:
+            reply = image_markdown
+            used_tool_labels.append(_build_tool_trace_label("image_gen", "fallback"))
+        elif image_error:
+            reply = image_error
+            used_tool_labels.append(_build_tool_trace_label("image_gen", "fallback"))
 
     # Strict no-fake-check rule for exec-backed checks (Apple Notes/Things): if no exec tool ran,
     # do not allow unverified "I checked..." claims.
@@ -4630,8 +4987,22 @@ async def handle_message(
 
     # Silent control-path: no assistant message emitted/persisted.
     if suppress_user_reply and not reply.strip():
+        if _out is not None:
+            _out["provider"] = effective_reply_provider
         return ""
 
     # Always persist assistant reply (including errors) so web UI matches what user saw on Telegram
     await db.add_message(cid, "assistant", reply, provider.name if not reply.strip().startswith("Error:") and not reply.strip().startswith("No AI provider") else None)
+
+    # Auto-title: fire background task on first exchange only (no title stored yet)
+    if reply.strip() and not reply.strip().startswith("Error:"):
+        existing_title = await db.get_conversation_title(cid)
+        if not existing_title:
+            asyncio.create_task(
+                _generate_conversation_title(cid, text, reply, effective_reply_provider),
+                name=f"auto-title:{cid}",
+            )
+
+    if _out is not None:
+        _out["provider"] = effective_reply_provider
     return reply
