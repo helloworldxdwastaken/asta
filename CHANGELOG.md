@@ -2,6 +2,36 @@
 
 All notable changes to Asta are documented here.
 
+## [1.3.45] - 2026-02-25
+
+### Added
+
+- **Chat message actions (macOS app)** — Added inline actions under chat bubbles: copy for user/assistant messages, plus edit for user messages.
+- **Conversation rewind endpoint** — Added `POST /api/chat/conversations/{conversation_id}/truncate` to remove tail messages after a chosen keep count.
+- **Truncate flow regression tests** — Added `backend/tests/test_chat_truncate.py` to validate rewind behavior and ownership checks.
+
+### Changed
+
+- **Edit-in-place behavior (OpenClaw-style)** — Editing a previous user prompt now rewinds that conversation on the backend first, then resends the revised turn in the same chat so later context is not retained.
+- **Release packaging** — Built fresh macOS installer DMG for `1.3.45`.
+
+---
+
+## [1.3.44] - 2026-02-25
+
+### Added
+
+- **New agent: SEO Strategist** — Added a dedicated SEO planning agent focused on keyword clusters, on-page briefs, internal linking, and 30/60/90 execution roadmaps.
+- **New agent: Knowledge Curator** — Added a curation agent designed to build and maintain per-agent knowledge bases under `workspace/agent-knowledge/<agent-id>/{sources,references,notes}` with index/log discipline.
+
+### Changed
+
+- **Agent upgrade: Copywriter -> Performance Copywriter** — Reworked copywriting agent prompt for conversion-focused output, KPI-aware variants, and stronger A/B test contracts.
+- **Agent upgrade: Competitor -> Competitor Intelligence** — Reworked competitor agent prompt for structured market intelligence, evidence-based recommendations, and saved report workflows.
+- **Release packaging** — Built fresh macOS installer DMG for `1.3.44`.
+
+---
+
 ## [1.3.43] - 2026-02-25
 
 ### Added

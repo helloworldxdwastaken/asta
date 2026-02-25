@@ -315,15 +315,49 @@ final class AppState: ObservableObject {
         do { agentsList = try await client.agentsList().agents }
         catch { agentsError = error.localizedDescription }
     }
-    func createAgent(name: String, description: String, emoji: String, model: String, thinking: String, systemPrompt: String) async {
+    func createAgent(
+        name: String,
+        description: String,
+        emoji: String,
+        model: String,
+        thinking: String,
+        systemPrompt: String,
+        allowedSkills: [String]? = nil
+    ) async {
         do {
-            let r = try await client.agentCreate(name: name, description: description, emoji: emoji, model: model, thinking: thinking, systemPrompt: systemPrompt)
+            let r = try await client.agentCreate(
+                name: name,
+                description: description,
+                emoji: emoji,
+                model: model,
+                thinking: thinking,
+                systemPrompt: systemPrompt,
+                skills: allowedSkills
+            )
             agentsList.append(r.agent)
         } catch { agentsError = error.localizedDescription }
     }
-    func updateAgent(id: String, name: String, description: String, emoji: String, model: String, thinking: String, systemPrompt: String) async {
+    func updateAgent(
+        id: String,
+        name: String,
+        description: String,
+        emoji: String,
+        model: String,
+        thinking: String,
+        systemPrompt: String,
+        allowedSkills: [String]? = nil
+    ) async {
         do {
-            let r = try await client.agentUpdate(id: id, name: name, description: description, emoji: emoji, model: model, thinking: thinking, systemPrompt: systemPrompt)
+            let r = try await client.agentUpdate(
+                id: id,
+                name: name,
+                description: description,
+                emoji: emoji,
+                model: model,
+                thinking: thinking,
+                systemPrompt: systemPrompt,
+                skills: allowedSkills
+            )
             if let idx = agentsList.firstIndex(where: { $0.id == id }) { agentsList[idx] = r.agent }
         } catch { agentsError = error.localizedDescription }
     }

@@ -14,28 +14,6 @@ from app.message_queue import queue_key
 router = APIRouter()
 
 
-def _normalize_wa_number(raw: str) -> str:
-    base = (raw or "").strip()
-    if "@" in base:
-        base = base.split("@", 1)[0]
-    return "".join(ch for ch in base if ch.isdigit())
-
-
-def _whatsapp_sender_allowed(
-    *,
-    whitelist: set[str],
-    owner_number: str,
-    self_chat_only: bool,
-    raw_number: str,
-) -> bool:
-    clean = _normalize_wa_number(raw_number)
-    owner = _normalize_wa_number(owner_number)
-    if self_chat_only:
-        return bool(owner) and clean == owner
-    if not whitelist:
-        return True
-    return (clean in whitelist) or (raw_number in whitelist)
-
 
 @router.get("/chat/conversations")
 async def list_conversations(
@@ -63,13 +41,93 @@ async def delete_conversation(
     return {"ok": True}
 
 
+class ConversationTruncateIn(BaseModel):
+    keep_count: int = 0
+
+
+@router.post("/chat/conversations/{conversation_id}/truncate")
+async def truncate_conversation(
+    conversation_id: str,
+    body: ConversationTruncateIn,
+    user_id: str = Query("default"),
+):
+    db = get_db()
+    await db.connect()
+    if not conversation_id.startswith(user_id + ":"):
+        raise HTTPException(403, "Conversation does not belong to this user")
+    keep_count = max(0, int(body.keep_count or 0))
+    deleted = await db.truncate_conversation_messages(conversation_id, keep_count)
+    return {
+        "ok": True,
+        "conversation_id": conversation_id,
+        "keep_count": keep_count,
+        "deleted": deleted,
+    }
+
+
+# ── Conversation folders ─────────────────────────────────────────────────────
+
+class FolderIn(BaseModel):
+    name: str
+    color: str = "#6366F1"
+
+class FolderPatch(BaseModel):
+    name: str | None = None
+    color: str | None = None
+
+class FolderAssign(BaseModel):
+    folder_id: str | None = None
+
+
+@router.get("/chat/folders")
+async def list_folders(user_id: str = Query("default"), channel: str = Query("web")):
+    db = get_db(); await db.connect()
+    return {"folders": await db.list_folders(user_id, channel)}
+
+
+@router.post("/chat/folders")
+async def create_folder(body: FolderIn, user_id: str = Query("default"), channel: str = Query("web")):
+    import uuid
+    db = get_db(); await db.connect()
+    folder_id = str(uuid.uuid4())
+    result = await db.create_folder(user_id, channel, folder_id, body.name.strip(), body.color)
+    return result
+
+
+@router.patch("/chat/folders/{folder_id}")
+async def update_folder(folder_id: str, body: FolderPatch, user_id: str = Query("default")):
+    db = get_db(); await db.connect()
+    await db.update_folder(folder_id, user_id, name=body.name, color=body.color)
+    return {"ok": True}
+
+
+@router.delete("/chat/folders/{folder_id}")
+async def delete_folder(folder_id: str, user_id: str = Query("default")):
+    db = get_db(); await db.connect()
+    await db.delete_folder(folder_id, user_id)
+    return {"ok": True}
+
+
+@router.put("/chat/conversations/{conversation_id}/folder")
+async def set_conversation_folder(
+    conversation_id: str,
+    body: FolderAssign,
+    user_id: str = Query("default"),
+):
+    db = get_db(); await db.connect()
+    if not conversation_id.startswith(user_id + ":"):
+        raise HTTPException(403, "Conversation does not belong to this user")
+    await db.set_conversation_folder(conversation_id, user_id, body.folder_id)
+    return {"ok": True}
+
+
 @router.get("/chat/messages")
 async def get_chat_messages(
     conversation_id: str = Query(..., description="Conversation ID, e.g. default:web or default:telegram"),
     user_id: str = Query("default", description="User ID"),
     limit: int = Query(50, ge=1, le=100),
 ):
-    """Return recent messages for a conversation so the web UI can show Web vs Telegram thread."""
+    """Return recent messages for a conversation so clients can render the thread history."""
     if not conversation_id.startswith(user_id + ":"):
         raise HTTPException(403, "Conversation does not belong to this user")
     db = get_db()
@@ -110,6 +168,7 @@ async def chat(body: ChatIn):
                 image_bytes = base64.b64decode(body.image_base64)
             except Exception:
                 image_bytes = None
+        _out: dict = {}
         async with queue_key(f"web:{cid}"):
             reply = await handle_message(
                 body.user_id, "web", body.text,
@@ -120,8 +179,10 @@ async def chat(body: ChatIn):
                 extra_context={"force_web": bool(body.web)} if body.web else None,
                 image_bytes=image_bytes,
                 image_mime=body.image_mime,
+                _out=_out,
             )
-        return ChatOut(reply=reply, conversation_id=cid, provider=provider)
+        actual_provider = _out.get("provider", provider)
+        return ChatOut(reply=reply, conversation_id=cid, provider=actual_provider)
     except Exception as e:
         reply = str(e).strip() or "Unknown error"
         if not reply.startswith("Error:"):
@@ -152,6 +213,7 @@ async def chat_stream(body: ChatIn):
                     image_bytes = base64.b64decode(body.image_base64)
                 except Exception:
                     image_bytes = None
+            _out: dict = {}
             async with queue_key(f"web:{cid}"):
                 reply = await handle_message(
                     body.user_id,
@@ -167,13 +229,15 @@ async def chat_stream(body: ChatIn):
                     },
                     image_bytes=image_bytes,
                     image_mime=body.image_mime,
+                    _out=_out,
                 )
+            actual_provider = _out.get("provider", provider)
             await event_queue.put(
                 {
                     "type": "done",
                     "reply": reply,
                     "conversation_id": cid,
-                    "provider": provider,
+                    "provider": actual_provider,
                 }
             )
         except Exception as e:
@@ -217,51 +281,3 @@ async def chat_stream(body: ChatIn):
             "X-Accel-Buffering": "no",
         },
     )
-
-
-class IncomingWhatsApp(BaseModel):
-    from_number: str
-    reply_to: str | None = None
-    message: str
-
-
-@router.post("/incoming/whatsapp")
-async def incoming_whatsapp(body: IncomingWhatsApp):
-    """Called by WhatsApp bridge when a message is received. Reminders will be sent back to this number."""
-    from app.config import get_settings
-    from app.db import get_db
-    import logging
-    
-    settings = get_settings()
-    whitelist = set(settings.whatsapp_whitelist)
-    
-    # Add auto-detected owner from DB
-    owner = ""
-    try:
-        db = get_db()
-        await db.connect()
-        owner = (await db.get_system_config("whatsapp_owner")) or ""
-        if owner:
-            whitelist.add(owner)
-    except Exception as e:
-        logging.error(f"Failed to get whatsapp_owner: {e}")
-    
-    reply_target = (body.reply_to or body.from_number or "").strip()
-    user_id = f"wa:{body.from_number}"
-    # Strip suffix (e.g. @s.whatsapp.net or @lid) for whitelist check
-    if not _whatsapp_sender_allowed(
-        whitelist=whitelist,
-        owner_number=owner,
-        self_chat_only=bool(settings.asta_whatsapp_self_chat_only),
-        raw_number=body.from_number,
-    ):
-        logging.warning(f"WhatsApp message from {body.from_number} ignored by policy.")
-        return {"ignored": True}
-
-    async with queue_key(f"whatsapp:{reply_target or body.from_number}"):
-        reply = await handle_message(
-            user_id, "whatsapp", body.message, provider_name="default",
-            channel_target=reply_target or body.from_number,
-        )
-
-    return {"reply": reply}

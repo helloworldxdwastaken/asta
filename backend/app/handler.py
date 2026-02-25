@@ -3099,6 +3099,13 @@ def _append_selected_agent_context(context: str, extra: dict) -> str:
     sections.append(f"You are currently routed to agent '{name}' (id: {aid or 'unknown'}).")
     if desc:
         sections.append(f"Agent description: {desc}")
+    skills = selected.get("skills")
+    if isinstance(skills, list):
+        normalized = [str(s).strip() for s in skills if str(s).strip()]
+        if normalized:
+            sections.append(f"Allowed skills for this agent: {', '.join(normalized)}")
+        else:
+            sections.append("Allowed skills for this agent: (none)")
     sections.append(
         "Follow this agent's intent and style for this turn, while still obeying higher-priority safety/policy instructions."
     )
@@ -3131,6 +3138,26 @@ def _append_selected_agent_context(context: str, extra: dict) -> str:
     if not payload:
         return context
     return context + "\n\n" + payload
+
+
+def _selected_agent_skill_filter(extra: dict) -> list[str] | None:
+    selected = extra.get("selected_agent") if isinstance(extra, dict) else None
+    if not isinstance(selected, dict):
+        return None
+    raw = selected.get("skills")
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        return None
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        sid = str(item).strip().lower()
+        if not sid or sid in seen:
+            continue
+        seen.add(sid)
+        normalized.append(sid)
+    return normalized
 
 
 async def handle_message(
@@ -3196,6 +3223,17 @@ async def handle_message(
                 "description": str(selected_agent.get("description") or "").strip(),
                 "system_prompt": str(selected_agent.get("system_prompt") or "").strip(),
             }
+            agent_skills_raw = selected_agent.get("skills")
+            if isinstance(agent_skills_raw, list):
+                agent_skills = [
+                    str(s).strip().lower()
+                    for s in agent_skills_raw
+                    if str(s).strip()
+                ]
+                if agent_skills_raw == []:
+                    selected_payload["skills"] = []
+                elif agent_skills:
+                    selected_payload["skills"] = list(dict.fromkeys(agent_skills))
             knowledge_path = ensure_agent_knowledge_layout(aid)
             if knowledge_path:
                 selected_payload["knowledge_path"] = str(knowledge_path)
@@ -3414,6 +3452,14 @@ async def handle_message(
     for skill in _get_all_skills():
         if await db.get_skill_enabled(user_id, skill.name):
             enabled.add(skill.name)
+    agent_skill_filter = _selected_agent_skill_filter(extra)
+    if agent_skill_filter is not None:
+        enabled &= set(agent_skill_filter)
+        logger.info(
+            "Applied selected-agent skill filter: allowed=%s enabled_after_filter=%s",
+            agent_skill_filter,
+            sorted(enabled),
+        )
 
     # --- SERVICE CALLS (only when skill is enabled) ---
 

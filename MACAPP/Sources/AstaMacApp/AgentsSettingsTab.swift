@@ -11,6 +11,29 @@ struct AgentsSettingsTab: View {
     @ObservedObject var appState: AppState
     @State private var showCreate = false
     @State private var editingAgent: AstaAgent?
+    @State private var searchText = ""
+    @State private var filterMode: AgentFilter = .all
+
+    private enum AgentFilter: String, CaseIterable, Identifiable {
+        case all = "All"
+        case added = "Added"
+        case notAdded = "Not Added"
+        var id: String { rawValue }
+    }
+
+    private var filteredAgents: [AstaAgent] {
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return appState.agentsList
+            .filter { agent in
+                let enabled = agent.enabled ?? true
+                if filterMode == .added && !enabled { return false }
+                if filterMode == .notAdded && enabled { return false }
+                if q.isEmpty { return true }
+                let hay = [agent.id, agent.name, agent.description].joined(separator: " ").lowercased()
+                return hay.contains(q)
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -39,6 +62,20 @@ struct AgentsSettingsTab: View {
             .padding(.top, 20)
             .padding(.bottom, 14)
 
+            HStack(spacing: 10) {
+                TextField("Search agents…", text: $searchText)
+                    .textFieldStyle(.roundedBorder)
+                Picker("Filter", selection: $filterMode) {
+                    ForEach(AgentFilter.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 300)
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 10)
+
             Divider()
 
             if let err = appState.agentsError {
@@ -52,12 +89,18 @@ struct AgentsSettingsTab: View {
             // ── Agent list ────────────────────────────────────────────────
             if appState.agentsList.isEmpty && !appState.agentsLoading {
                 emptyState
+            } else if filteredAgents.isEmpty && !appState.agentsLoading {
+                searchEmptyState
             } else {
                 ScrollView {
                     LazyVStack(spacing: 1) {
-                        ForEach(appState.agentsList) { agent in
+                        ForEach(filteredAgents) { agent in
                             AgentRow(
                                 agent: agent,
+                                isEnabled: agent.enabled ?? true,
+                                onToggleEnabled: {
+                                    Task { await appState.setAgentEnabled(id: agent.id, enabled: !(agent.enabled ?? true)) }
+                                },
                                 onEdit: { editingAgent = agent },
                                 onDelete: { Task { await appState.deleteAgent(id: agent.id) } }
                             )
@@ -110,12 +153,28 @@ struct AgentsSettingsTab: View {
         .padding(.horizontal, 40)
     }
 
+    private var searchEmptyState: some View {
+        VStack(spacing: 8) {
+            Spacer(minLength: 32)
+            Text("No matching agents")
+                .font(.system(size: 13, weight: .semibold))
+            Text("Try a different search term or switch filter.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 40)
+    }
+
 }
 
 // MARK: - Agent Row
 
 private struct AgentRow: View {
     let agent: AstaAgent
+    let isEnabled: Bool
+    let onToggleEnabled: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
     @State private var isHovered = false
@@ -145,6 +204,13 @@ private struct AgentRow: View {
                             .background(Color.secondary.opacity(0.1))
                             .clipShape(Capsule())
                     }
+                    Text(isEnabled ? "Added" : "Not Added")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(isEnabled ? Color.green : .secondary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background((isEnabled ? Color.green : Color.secondary).opacity(0.12))
+                        .clipShape(Capsule())
                 }
                 if !agent.description.isEmpty {
                     Text(agent.description)
@@ -158,13 +224,38 @@ private struct AgentRow: View {
                         .foregroundStyle(Color.secondary.opacity(0.7))
                         .lineLimit(1)
                 }
+                if let knowledgePath = agent.knowledge_path, !knowledgePath.isEmpty {
+                    Text("Knowledge: \(knowledgePath)")
+                        .font(.caption2)
+                        .foregroundStyle(Color.secondary.opacity(0.65))
+                        .lineLimit(1)
+                }
+                if let allowed = agent.skills {
+                    Text(allowed.isEmpty ? "Allowed skills: none" : "Allowed skills: \(allowed.count)")
+                        .font(.caption2)
+                        .foregroundStyle(Color.secondary.opacity(0.65))
+                        .lineLimit(1)
+                } else {
+                    Text("Allowed skills: all")
+                        .font(.caption2)
+                        .foregroundStyle(Color.secondary.opacity(0.65))
+                        .lineLimit(1)
+                }
             }
 
             Spacer()
 
-            // Actions (shown on hover)
-            if isHovered {
-                HStack(spacing: 6) {
+            HStack(spacing: 6) {
+                if isEnabled {
+                    Button("Remove") { onToggleEnabled() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                } else {
+                    Button("Add") { onToggleEnabled() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                }
+                if isHovered {
                     Button("Edit") { onEdit() }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -172,7 +263,6 @@ private struct AgentRow: View {
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                 }
-                .transition(.opacity)
             }
         }
         .padding(.horizontal, 20)
@@ -198,6 +288,8 @@ struct AgentEditorSheet: View {
     @State private var model = ""
     @State private var thinking = ""
     @State private var systemPrompt = ""
+    @State private var selectedSkillIDs: Set<String> = []
+    @State private var didInitSkillSelection = false
     @State private var saving = false
     @State private var error: String?
 
@@ -206,6 +298,29 @@ struct AgentEditorSheet: View {
 
     private let thinkingOptions = ["", "off", "minimal", "low", "medium", "high", "xhigh"]
     private let emojiSuggestions = ["🤖", "🔍", "💼", "📊", "🧑‍💻", "📝", "🎯", "⚡", "🧠", "🔬", "📈", "🛡️", "🎨", "📚"]
+
+    private var agentAssignableSkills: [AstaSkillItem] {
+        let agentIDs = Set(appState.agentsList.map { $0.id.lowercased() })
+        let deduped = Dictionary(
+            uniqueKeysWithValues: appState.skillsList.map { ($0.id.lowercased(), $0) }
+        )
+        return deduped.values
+            .filter { item in
+                let sid = item.id.lowercased()
+                if sid.isEmpty { return false }
+                if agentIDs.contains(sid) { return false }
+                return true
+            }
+            .sorted { lhs, rhs in
+                let l = (lhs.name ?? lhs.id).lowercased()
+                let r = (rhs.name ?? rhs.id).lowercased()
+                return l < r
+            }
+    }
+
+    private var allAssignableSkillIDs: [String] {
+        agentAssignableSkills.map(\.id)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -329,6 +444,73 @@ struct AgentEditorSheet: View {
                         }
                     }
 
+                    // ── Allowed skills ─────────────────────────────────────
+                    sectionHeader("Allowed Skills")
+                    Text("Choose which skills this agent can use. If all are selected, no explicit filter is stored.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    HStack(spacing: 8) {
+                        Button("Select all") {
+                            selectedSkillIDs = Set(allAssignableSkillIDs)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+
+                        Button("Clear") {
+                            selectedSkillIDs.removeAll()
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+
+                        Spacer()
+                        Text("\(selectedSkillIDs.count) / \(allAssignableSkillIDs.count) selected")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if agentAssignableSkills.isEmpty {
+                        Text("No skills available yet.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                            ForEach(agentAssignableSkills, id: \.id) { skill in
+                                let isSelected = selectedSkillIDs.contains(skill.id)
+                                Button {
+                                    if isSelected {
+                                        selectedSkillIDs.remove(skill.id)
+                                    } else {
+                                        selectedSkillIDs.insert(skill.id)
+                                    }
+                                } label: {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                                            .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(skill.name ?? skill.id)
+                                                .font(.caption.weight(.medium))
+                                                .foregroundStyle(.primary)
+                                                .lineLimit(1)
+                                            Text(skill.id)
+                                                .font(.caption2)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                        }
+                                        Spacer(minLength: 0)
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 8)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.04))
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+
                     // How delegation works
                     GroupBox {
                         VStack(alignment: .leading, spacing: 6) {
@@ -369,6 +551,13 @@ struct AgentEditorSheet: View {
                 name = a.name; description = a.description; emoji = a.emoji
                 model = a.model; thinking = a.thinking; systemPrompt = a.system_prompt
             }
+            if appState.skillsList.isEmpty {
+                Task { await appState.loadSettings() }
+            }
+            initializeSkillSelectionIfNeeded()
+        }
+        .onChange(of: appState.skillsList.map(\.id).joined(separator: ",")) { _ in
+            initializeSkillSelectionIfNeeded()
         }
     }
 
@@ -388,18 +577,50 @@ struct AgentEditorSheet: View {
         Text(text).font(.caption).foregroundStyle(.secondary)
     }
 
+    private func initializeSkillSelectionIfNeeded() {
+        if didInitSkillSelection {
+            return
+        }
+        let all = Set(allAssignableSkillIDs)
+        if all.isEmpty {
+            return
+        }
+        if let existing, let allowed = existing.skills {
+            selectedSkillIDs = Set(allowed).intersection(all)
+        } else {
+            selectedSkillIDs = all
+        }
+        didInitSkillSelection = true
+    }
+
+    private func resolveAllowedSkillsForSave() -> [String]? {
+        let all = Set(allAssignableSkillIDs)
+        if all.isEmpty {
+            return nil
+        }
+        let selectedOrdered = allAssignableSkillIDs.filter { selectedSkillIDs.contains($0) }
+        if Set(selectedOrdered) == all {
+            // nil means "no explicit filter" (all skills allowed)
+            return nil
+        }
+        return selectedOrdered
+    }
+
     private func save() async {
         saving = true; error = nil
         let trimName = name.trimmingCharacters(in: .whitespaces)
+        let allowedSkills = resolveAllowedSkillsForSave()
         if let existing {
             await appState.updateAgent(
                 id: existing.id, name: trimName, description: description,
-                emoji: emoji, model: model, thinking: thinking, systemPrompt: systemPrompt
+                emoji: emoji, model: model, thinking: thinking, systemPrompt: systemPrompt,
+                allowedSkills: allowedSkills
             )
         } else {
             await appState.createAgent(
                 name: trimName, description: description, emoji: emoji,
-                model: model, thinking: thinking, systemPrompt: systemPrompt
+                model: model, thinking: thinking, systemPrompt: systemPrompt,
+                allowedSkills: allowedSkills
             )
         }
         if let err = appState.agentsError { self.error = err; saving = false; return }

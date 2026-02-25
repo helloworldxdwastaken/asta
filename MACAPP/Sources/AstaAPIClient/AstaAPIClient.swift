@@ -13,6 +13,23 @@ public struct AstaAPIClient: Sendable {
         self.session = session
     }
 
+    /// Encode an ID for use as a URL path segment.
+    /// Alphanumeric-only charset ensures `:` → `%3A`, avoiding the
+    /// appending(path:)+URLComponents double-encode bug.
+    private static func pathSeg(_ id: String) -> String {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        return id.addingPercentEncoding(withAllowedCharacters: allowed) ?? id
+    }
+
+    /// Build a URL from a pre-encoded path string without risking double-encoding.
+    private func urlWithPath(_ encodedPath: String, queryItems: [URLQueryItem] = []) -> URL {
+        var comps = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)!
+        comps.percentEncodedPath = "/\(encodedPath)"
+        if !queryItems.isEmpty { comps.queryItems = queryItems }
+        return comps.url!
+    }
+
     // MARK: - Health
 
     public func health() async throws -> AstaHealth {
@@ -135,10 +152,12 @@ public struct AstaAPIClient: Sendable {
                         case "assistant": normalizedType = "text"
                         case "reasoning": normalizedType = "thinking"
                         case "done":      normalizedType = "done"
-                        case "error":     normalizedType = "error"
-                        case "status":    normalizedType = "status"
-                        case "meta":      continue   // skip — no UI update needed
-                        default:          normalizedType = eventName
+                        case "error":      normalizedType = "error"
+                        case "status":     normalizedType = "status"
+                        case "tool_start": normalizedType = "tool_start"
+                        case "tool_end":   normalizedType = "tool_end"
+                        case "meta":       continue   // skip — no UI update needed
+                        default:           normalizedType = eventName
                         }
 
                         // For streaming text/thinking, use delta (incremental chars only).
@@ -160,7 +179,9 @@ public struct AstaAPIClient: Sendable {
                             text:            chunkText,
                             reply:           raw.reply,
                             conversation_id: raw.conversation_id,
-                            provider:        raw.provider
+                            provider:        raw.provider,
+                            toolName:        raw.name,
+                            toolLabel:       raw.label
                         )
                         continuation.yield(chunk)
                         if normalizedType == "done" || normalizedType == "error" { break }
@@ -189,11 +210,78 @@ public struct AstaAPIClient: Sendable {
     }
 
     public func deleteConversation(id: String, userID: String = "default") async throws {
+        let url = urlWithPath("api/chat/conversations/\(Self.pathSeg(id))",
+                              queryItems: [URLQueryItem(name: "user_id", value: userID)])
+        var req = URLRequest(url: url)
+        req.httpMethod = "DELETE"
+        _ = try await session.data(for: req)
+    }
+
+    public func truncateConversation(
+        conversationID: String,
+        keepCount: Int,
+        userID: String = "default"
+    ) async throws {
+        let url = urlWithPath(
+            "api/chat/conversations/\(Self.pathSeg(conversationID))/truncate",
+            queryItems: [URLQueryItem(name: "user_id", value: userID)]
+        )
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONEncoder().encode(["keep_count": max(0, keepCount)])
+        _ = try await session.data(for: req)
+    }
+
+    // MARK: - Folders
+
+    public func listFolders(userID: String = "default", channel: String = "web") async throws -> [AstaFolder] {
+        var components = URLComponents(url: baseURL.appending(path: "api/chat/folders"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "user_id", value: userID), URLQueryItem(name: "channel", value: channel)]
+        let (data, _) = try await session.data(from: components.url!)
+        let resp = try JSONDecoder().decode(AstaFoldersResponse.self, from: data)
+        return resp.folders
+    }
+
+    public func createFolder(name: String, color: String = "#6366F1", userID: String = "default", channel: String = "web") async throws -> AstaFolder {
+        var components = URLComponents(url: baseURL.appending(path: "api/chat/folders"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "user_id", value: userID), URLQueryItem(name: "channel", value: channel)]
+        var req = URLRequest(url: components.url!)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONEncoder().encode(["name": name, "color": color])
+        let (data, _) = try await session.data(for: req)
+        return try JSONDecoder().decode(AstaFolder.self, from: data)
+    }
+
+    public func renameFolder(id: String, name: String, userID: String = "default") async throws {
         let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
-        var components = URLComponents(url: baseURL.appending(path: "api/chat/conversations/\(encoded)"), resolvingAgainstBaseURL: false)!
+        var components = URLComponents(url: baseURL.appending(path: "api/chat/folders/\(encoded)"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "user_id", value: userID)]
+        var req = URLRequest(url: components.url!)
+        req.httpMethod = "PATCH"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONEncoder().encode(["name": name])
+        _ = try await session.data(for: req)
+    }
+
+    public func deleteFolder(id: String, userID: String = "default") async throws {
+        let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        var components = URLComponents(url: baseURL.appending(path: "api/chat/folders/\(encoded)"), resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "user_id", value: userID)]
         var req = URLRequest(url: components.url!)
         req.httpMethod = "DELETE"
+        _ = try await session.data(for: req)
+    }
+
+    public func setConversationFolder(conversationID: String, folderID: String?, userID: String = "default") async throws {
+        let url = urlWithPath("api/chat/conversations/\(Self.pathSeg(conversationID))/folder",
+                              queryItems: [URLQueryItem(name: "user_id", value: userID)])
+        var req = URLRequest(url: url)
+        req.httpMethod = "PUT"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: String?] = ["folder_id": folderID]
+        req.httpBody = try JSONEncoder().encode(body)
         _ = try await session.data(for: req)
     }
 
@@ -334,9 +422,17 @@ public struct AstaAPIClient: Sendable {
     }
 
     public func spotifyConnectURL(userId: String = "default") -> URL {
-        var components = URLComponents(url: baseURL.appending(path: "spotify/connect"), resolvingAgainstBaseURL: false)!
+        var components = URLComponents(url: baseURL.appending(path: "api/spotify/connect"), resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "user_id", value: userId)]
         return components.url!
+    }
+
+    public func spotifyDisconnect(userId: String = "default") async throws {
+        var components = URLComponents(url: baseURL.appending(path: "api/spotify/disconnect"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "user_id", value: userId)]
+        var request = URLRequest(url: components.url!)
+        request.httpMethod = "POST"
+        _ = try await session.data(for: request)
     }
 
     public func cronList() async throws -> AstaCronList {
@@ -438,6 +534,25 @@ public struct AstaAPIClient: Sendable {
         req.httpBody = try JSONEncoder().encode(["mood": mood])
         let (data, _) = try await session.data(for: req)
         return try JSONDecoder().decode(AstaMood.self, from: data)
+    }
+
+    // MARK: - Persona (SOUL.md + USER.md)
+
+    public func fetchPersona() async throws -> AstaPersona {
+        let url = baseURL.appending(path: "api/settings/persona")
+        let (data, _) = try await session.data(from: url)
+        return try JSONDecoder().decode(AstaPersona.self, from: data)
+    }
+
+    public func savePersona(soul: String? = nil, user: String? = nil) async throws {
+        let url = baseURL.appending(path: "api/settings/persona")
+        var req = URLRequest(url: url); req.httpMethod = "PUT"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: String] = [:]
+        if let soul { body["soul"] = soul }
+        if let user { body["user"] = user }
+        req.httpBody = try JSONEncoder().encode(body)
+        _ = try await session.data(for: req)
     }
 
     public func setProviderEnabled(provider: String, enabled: Bool) async throws {
@@ -570,17 +685,52 @@ public struct AstaAPIClient: Sendable {
 
     // MARK: - Agents
 
-    public func agentsList() async throws -> AstaAgentsResponse {
-        let url = baseURL.appending(path: "api/agents")
-        let (data, _) = try await session.data(from: url)
+    public func agentsList(
+        q: String? = nil,
+        activeOnly: Bool? = nil,
+        inactiveOnly: Bool? = nil
+    ) async throws -> AstaAgentsResponse {
+        var comps = URLComponents(url: baseURL.appending(path: "api/agents"), resolvingAgainstBaseURL: false)!
+        var items: [URLQueryItem] = []
+        if let q, !q.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            items.append(URLQueryItem(name: "q", value: q))
+        }
+        if let activeOnly {
+            items.append(URLQueryItem(name: "active_only", value: activeOnly ? "true" : "false"))
+        }
+        if let inactiveOnly {
+            items.append(URLQueryItem(name: "inactive_only", value: inactiveOnly ? "true" : "false"))
+        }
+        if !items.isEmpty {
+            comps.queryItems = items
+        }
+        let (data, _) = try await session.data(from: comps.url!)
         return try JSONDecoder().decode(AstaAgentsResponse.self, from: data)
     }
 
-    public func agentCreate(name: String, description: String, emoji: String, model: String, thinking: String, systemPrompt: String) async throws -> AstaAgentResponse {
+    public func agentCreate(
+        name: String,
+        description: String,
+        emoji: String,
+        model: String,
+        thinking: String,
+        systemPrompt: String,
+        skills: [String]? = nil
+    ) async throws -> AstaAgentResponse {
         let url = baseURL.appending(path: "api/agents")
         var req = URLRequest(url: url); req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONEncoder().encode(AstaAgentCreateIn(name: name, description: description, emoji: emoji, model: model, thinking: thinking, system_prompt: systemPrompt))
+        req.httpBody = try JSONEncoder().encode(
+            AstaAgentCreateIn(
+                name: name,
+                description: description,
+                emoji: emoji,
+                model: model,
+                thinking: thinking,
+                system_prompt: systemPrompt,
+                skills: skills
+            )
+        )
         let (data, response) = try await session.data(for: req)
         if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
             if let errObj = try? JSONDecoder().decode(AstaAPIError.self, from: data), let detail = errObj.detail ?? errObj.error { throw AstaClientError.backendError(detail) }
@@ -589,12 +739,31 @@ public struct AstaAPIClient: Sendable {
         return try JSONDecoder().decode(AstaAgentResponse.self, from: data)
     }
 
-    public func agentUpdate(id: String, name: String? = nil, description: String? = nil, emoji: String? = nil, model: String? = nil, thinking: String? = nil, systemPrompt: String? = nil) async throws -> AstaAgentResponse {
+    public func agentUpdate(
+        id: String,
+        name: String? = nil,
+        description: String? = nil,
+        emoji: String? = nil,
+        model: String? = nil,
+        thinking: String? = nil,
+        systemPrompt: String? = nil,
+        skills: [String]? = nil
+    ) async throws -> AstaAgentResponse {
         let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
         let url = baseURL.appending(path: "api/agents/\(encoded)")
         var req = URLRequest(url: url); req.httpMethod = "PATCH"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try JSONEncoder().encode(AstaAgentUpdateIn(name: name, description: description, emoji: emoji, model: model, thinking: thinking, system_prompt: systemPrompt))
+        req.httpBody = try JSONEncoder().encode(
+            AstaAgentUpdateIn(
+                name: name,
+                description: description,
+                emoji: emoji,
+                model: model,
+                thinking: thinking,
+                system_prompt: systemPrompt,
+                skills: skills
+            )
+        )
         let (data, _) = try await session.data(for: req)
         return try JSONDecoder().decode(AstaAgentResponse.self, from: data)
     }
@@ -604,6 +773,16 @@ public struct AstaAPIClient: Sendable {
         let url = baseURL.appending(path: "api/agents/\(encoded)")
         var req = URLRequest(url: url); req.httpMethod = "DELETE"
         _ = try await session.data(for: req)
+    }
+
+    public func agentSetEnabled(id: String, enabled: Bool) async throws -> AstaAgentResponse {
+        let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let url = baseURL.appending(path: "api/agents/\(encoded)/enabled")
+        var req = URLRequest(url: url); req.httpMethod = "PUT"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONEncoder().encode(AstaAgentEnabledIn(enabled: enabled))
+        let (data, _) = try await session.data(for: req)
+        return try JSONDecoder().decode(AstaAgentResponse.self, from: data)
     }
 
     public func usageStats(days: Int = 30) async throws -> AstaUsageStatsResponse {
@@ -666,12 +845,16 @@ private struct SSERawPayload: Decodable {
     let provider: String?
     /// Error message on the "error" event.
     let error: String?
+    /// Tool name for tool_start / tool_end events.
+    let name: String?
+    /// Human-readable tool label for tool_start / tool_end events.
+    let label: String?
 }
 
 // MARK: - Public DTOs
 
 public struct AstaStreamChunk: Sendable {
-    /// Normalised type: "text", "thinking", "status", "done", "error"
+    /// Normalised type: "text", "thinking", "tool_start", "tool_end", "done", "error"
     public let type: String
     /// For "text"/"thinking": the incremental delta to append.
     /// For "done": nil (use reply instead).
@@ -681,6 +864,10 @@ public struct AstaStreamChunk: Sendable {
     public let reply: String?
     public let conversation_id: String?
     public let provider: String?
+    /// Tool name (for tool_start / tool_end).
+    public let toolName: String?
+    /// Human-readable tool label (for tool_start / tool_end).
+    public let toolLabel: String?
 }
 
 public struct AstaHealth: Codable, Sendable {
@@ -766,6 +953,11 @@ public struct AstaMood: Codable, Sendable {
     public let mood: String?
 }
 
+public struct AstaPersona: Codable, Sendable {
+    public let soul: String
+    public let user: String
+}
+
 public struct AstaProvidersResponse: Codable, Sendable {
     public let providers: [String]?
 }
@@ -823,6 +1015,7 @@ public struct AstaKeysIn: Codable, Sendable {
     public var openai_api_key: String?
     public var gemini_api_key: String?
     public var google_ai_key: String?
+    public var huggingface_api_key: String?
     public var groq_api_key: String?
     public var telegram_bot_token: String?
     public var giphy_api_key: String?
@@ -1059,6 +1252,9 @@ public struct AstaAgent: Codable, Sendable, Identifiable {
     public let model: String
     public let thinking: String
     public let system_prompt: String
+    public let skills: [String]?
+    public let enabled: Bool?
+    public let knowledge_path: String?
 }
 
 public struct AstaAgentsResponse: Codable, Sendable {
@@ -1079,11 +1275,49 @@ public struct AstaConversationsResponse: Codable, Sendable {
     public let conversations: [AstaConversationItem]
 }
 
+public struct AstaFoldersResponse: Codable, Sendable {
+    public let folders: [AstaFolder]
+}
+
+public struct AstaFolder: Codable, Sendable, Identifiable {
+    public let id: String
+    public let name: String
+    public let color: String
+    public let sort_order: Int
+    public let created_at: String
+}
+
 public struct AstaConversationItem: Codable, Sendable, Identifiable {
     public let id: String
     public let title: String
     public let created_at: String
     public let last_active: String
+    public let message_count: Int
+    public let approx_tokens: Int
+    public let folder_id: String?
+
+    public init(id: String, title: String, created_at: String, last_active: String,
+                message_count: Int = 0, approx_tokens: Int = 0, folder_id: String? = nil) {
+        self.id = id
+        self.title = title
+        self.created_at = created_at
+        self.last_active = last_active
+        self.message_count = message_count
+        self.approx_tokens = approx_tokens
+        self.folder_id = folder_id
+    }
+
+    // Custom decode: message_count / approx_tokens / folder_id may be absent on older backends
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id            = try c.decode(String.self, forKey: .id)
+        title         = try c.decode(String.self, forKey: .title)
+        created_at    = try c.decode(String.self, forKey: .created_at)
+        last_active   = try c.decode(String.self, forKey: .last_active)
+        message_count = try c.decodeIfPresent(Int.self, forKey: .message_count) ?? 0
+        approx_tokens = try c.decodeIfPresent(Int.self, forKey: .approx_tokens) ?? 0
+        folder_id     = try c.decodeIfPresent(String.self, forKey: .folder_id)
+    }
 }
 
 public struct AstaUsageRow: Codable, Sendable, Identifiable {
@@ -1131,8 +1365,13 @@ private struct AstaCronUpdateIn: Encodable, Sendable {
 private struct AstaAgentCreateIn: Encodable, Sendable {
     let name: String; let description: String; let emoji: String
     let model: String; let thinking: String; let system_prompt: String
+    let skills: [String]?
 }
 private struct AstaAgentUpdateIn: Encodable, Sendable {
     let name: String?; let description: String?; let emoji: String?
     let model: String?; let thinking: String?; let system_prompt: String?
+    let skills: [String]?
+}
+private struct AstaAgentEnabledIn: Encodable, Sendable {
+    let enabled: Bool
 }

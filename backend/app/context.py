@@ -93,7 +93,12 @@ async def build_context(
     parts.append("")
 
     # 3b. OpenClaw-style available skills (workspace skills only): model selects one and reads SKILL.md via read tool.
-    skills_prompt = await _get_available_skills_prompt(db, user_id, skills_in_use)
+    skills_prompt = await _get_available_skills_prompt(
+        db,
+        user_id,
+        skills_in_use,
+        agent_skill_filter=_resolve_selected_agent_skill_filter(extra),
+    )
     if skills_prompt:
         parts.append(skills_prompt)
 
@@ -148,13 +153,46 @@ def _get_system_header(mood: str | None) -> list[str]:
     ]
 
 
-async def _get_available_skills_prompt(db: "Db", user_id: str, skills_in_use: set[str] | None) -> str:
+def _resolve_selected_agent_skill_filter(extra: dict) -> list[str] | None:
+    """Read selected agent skills from extra context.
+
+    Returns:
+    - None: no agent-level filter configured (all enabled skills allowed)
+    - []: explicit deny-all skills for this selected agent
+    - [ids...]: allowlist for this selected agent
+    """
+    selected = extra.get("selected_agent") if isinstance(extra, dict) else None
+    if not isinstance(selected, dict):
+        return None
+    raw = selected.get("skills")
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        return None
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        sid = str(item).strip().lower()
+        if not sid or sid in seen:
+            continue
+        seen.add(sid)
+        normalized.append(sid)
+    return normalized
+
+
+async def _get_available_skills_prompt(
+    db: "Db",
+    user_id: str,
+    skills_in_use: set[str] | None,
+    agent_skill_filter: list[str] | None = None,
+) -> str:
     """OpenClaw-style list of workspace skills with name/description/location."""
     from app.skills.registry import get_all_skills
     from app.skills.markdown_skill import MarkdownSkill
 
     skill_lines: list[str] = []
     markdown_skill_names: set[str] = set()
+    allowed = set(agent_skill_filter) if agent_skill_filter is not None else None
     for skill in get_all_skills():
         try:
             enabled = await db.get_skill_enabled(user_id, skill.name)
@@ -163,6 +201,8 @@ async def _get_available_skills_prompt(db: "Db", user_id: str, skills_in_use: se
         if not enabled and not getattr(skill, "is_always_enabled", False):
             continue
         if not isinstance(skill, MarkdownSkill):
+            continue
+        if allowed is not None and skill.name not in allowed:
             continue
         r = skill._resolved
         markdown_skill_names.add(skill.name)

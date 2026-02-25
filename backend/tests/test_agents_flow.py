@@ -28,7 +28,14 @@ class _DummyDB:
         self.toggles[skill_id] = bool(enabled)
 
 
-def _write_agent_skill(workspace_root: Path, *, slug: str, name: str, description: str = "") -> None:
+def _write_agent_skill(
+    workspace_root: Path,
+    *,
+    slug: str,
+    name: str,
+    description: str = "",
+    skills_line: str | None = None,
+) -> None:
     skill_dir = workspace_root / "skills" / slug
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(
@@ -38,6 +45,7 @@ def _write_agent_skill(workspace_root: Path, *, slug: str, name: str, descriptio
                 f"name: {name}",
                 f"description: {description}",
                 "emoji: 🤖",
+                *( [skills_line] if skills_line else [] ),
                 "is_agent: true",
                 "---",
                 "",
@@ -124,3 +132,39 @@ async def test_resolve_agent_mention_respects_enabled_state(monkeypatch, tmp_pat
     assert selected is not None
     assert selected["id"] == "copywriter"
     assert cleaned == "Draft a landing page headline"
+
+
+@pytest.mark.asyncio
+async def test_agent_skills_roundtrip_create_update(monkeypatch, tmp_path: Path):
+    db = _DummyDB()
+    monkeypatch.setattr(agents_router, "get_db", lambda: db)
+    monkeypatch.setattr(
+        agents_router,
+        "get_settings",
+        lambda: SimpleNamespace(workspace_path=tmp_path),
+    )
+    monkeypatch.setattr(agent_knowledge, "get_workspace_dir", lambda: tmp_path)
+
+    created = await agents_router.create_agent(
+        agents_router.AgentCreate(
+            name="Skill Scoped",
+            description="Agent with explicit skills",
+            emoji="🤖",
+            model="",
+            thinking="",
+            skills=["time", "weather", "time"],
+            system_prompt="You are scoped.",
+        )
+    )
+    agent = created["agent"]
+    assert agent["id"] == "skill-scoped"
+    assert agent["skills"] == ["time", "weather"]
+
+    fetched = await agents_router.get_agent("skill-scoped")
+    assert fetched["agent"]["skills"] == ["time", "weather"]
+
+    updated = await agents_router.update_agent(
+        "skill-scoped",
+        agents_router.AgentUpdate(skills=[]),
+    )
+    assert updated["agent"]["skills"] == []

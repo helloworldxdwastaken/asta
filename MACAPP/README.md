@@ -7,6 +7,7 @@ Desktop Mac app for Asta — same idea as [OpenClaw’s desktop Mac app](https:/
 - **Previous “mini dashboard”:** Replaced with native menu so item actions run after the menu closes (Open Chat, **Chat overlay (⌥ Space)**, Open API docs, **Asta Panel**), About, Quit.
 - **Asta Panel:** Opens a **native Swift settings window** for app/backend configuration (General, Persona, Models, API Keys, Skills, Knowledge, Channels, Schedule, Google, Connection, Permissions, About). The **Settings** scene (Cmd+,) is a quick General tab; full control is in Asta Panel.
 - **Agents hub:** In chat sidebar, directly under **New chat**, tap **Agents** to open the agent overlay (search, add/remove, create, edit, delete). Agent creation is no longer inside Settings tabs.
+- **Chat message actions:** User and assistant bubbles include inline **Copy**. User bubbles also include **Edit**, which rewinds chat history from that turn and reruns in the same conversation.
 - **Chat overlay:** Press **Option+Space** (or use “Chat overlay (⌥ Space)” from the tray) to open a dark-themed floating chat (Ask anything, toolbar: + / globe / screen / Thinking / mic / send), tall enough for two messages. Option+Space works when the app is active; for from-anywhere, grant **Accessibility** permission.
 
 ## Reference

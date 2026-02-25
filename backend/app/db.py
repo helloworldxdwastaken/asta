@@ -318,8 +318,33 @@ class Db:
             );
             CREATE INDEX IF NOT EXISTS idx_usage_provider_created ON usage_stats(provider, created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_usage_user_created ON usage_stats(user_id, created_at DESC);
+            CREATE TABLE IF NOT EXISTS conversation_folders (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                channel TEXT NOT NULL DEFAULT 'web',
+                name TEXT NOT NULL,
+                color TEXT NOT NULL DEFAULT '#6366F1',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_folders_user_channel ON conversation_folders(user_id, channel);
         """)
         await self._conn.commit()
+        # Migrations — add folder_id and title to conversations
+        cursor_conv = await self._conn.execute("PRAGMA table_info(conversations)")
+        conv_cols = [row["name"] for row in await cursor_conv.fetchall()]
+        if "folder_id" not in conv_cols:
+            try:
+                await self._conn.execute("ALTER TABLE conversations ADD COLUMN folder_id TEXT")
+                await self._conn.commit()
+            except Exception as e:
+                self.logger.exception("Failed to add folder_id column to conversations: %s", e)
+        if "title" not in conv_cols:
+            try:
+                await self._conn.execute("ALTER TABLE conversations ADD COLUMN title TEXT")
+                await self._conn.commit()
+            except Exception as e:
+                self.logger.exception("Failed to add title column to conversations: %s", e)
         # Migrations
         cursor = await self._conn.execute("PRAGMA table_info(cron_jobs)")
         cron_cols = [row["name"] for row in await cursor.fetchall()]
@@ -443,7 +468,7 @@ class Db:
         return cid
 
     async def list_conversations(self, user_id: str, channel: str = "web", limit: int = 50) -> list[dict[str, Any]]:
-        """List conversations ordered by most recent activity, with title from first user message."""
+        """List conversations ordered by most recent activity. Uses AI-generated title when available, falls back to first user message."""
         if not self._conn:
             await self.connect()
         cursor = await self._conn.execute(
@@ -451,8 +476,12 @@ class Db:
             SELECT
                 c.id,
                 c.created_at,
-                (SELECT content FROM messages WHERE conversation_id = c.id AND role = 'user' ORDER BY id ASC LIMIT 1) AS title,
-                (SELECT created_at FROM messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) AS last_active
+                c.folder_id,
+                c.title AS ai_title,
+                (SELECT content FROM messages WHERE conversation_id = c.id AND role = 'user' ORDER BY id ASC LIMIT 1) AS first_msg,
+                (SELECT created_at FROM messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1) AS last_active,
+                (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id) AS message_count,
+                (SELECT COALESCE(SUM(LENGTH(content)), 0) FROM messages WHERE conversation_id = c.id) / 4 AS approx_tokens
             FROM conversations c
             WHERE c.user_id = ? AND c.channel = ?
               AND EXISTS (SELECT 1 FROM messages WHERE conversation_id = c.id)
@@ -467,7 +496,7 @@ class Db:
         rows = await cursor.fetchall()
         result = []
         for r in rows:
-            title = r["title"] or "New conversation"
+            title = r["ai_title"] or r["first_msg"] or "New conversation"
             if len(title) > 80:
                 title = title[:80] + "…"
             result.append({
@@ -475,8 +504,91 @@ class Db:
                 "title": title,
                 "created_at": r["created_at"],
                 "last_active": r["last_active"] or r["created_at"],
+                "message_count": r["message_count"] or 0,
+                "approx_tokens": r["approx_tokens"] or 0,
+                "folder_id": r["folder_id"],
             })
         return result
+
+    async def set_conversation_title(self, conversation_id: str, title: str) -> None:
+        """Store an AI-generated title for a conversation."""
+        if not self._conn:
+            await self.connect()
+        await self._conn.execute(
+            "UPDATE conversations SET title = ? WHERE id = ?",
+            (title, conversation_id),
+        )
+        await self._conn.commit()
+
+    async def get_conversation_title(self, conversation_id: str) -> str | None:
+        """Return the stored AI title, or None if not yet generated."""
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute(
+            "SELECT title FROM conversations WHERE id = ?",
+            (conversation_id,),
+        )
+        row = await cursor.fetchone()
+        return row["title"] if row else None
+
+    # ── Conversation folders ───────────────────────────────────────────────
+
+    async def list_folders(self, user_id: str, channel: str = "web") -> list[dict[str, Any]]:
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute(
+            "SELECT id, name, color, sort_order, created_at FROM conversation_folders "
+            "WHERE user_id = ? AND channel = ? ORDER BY sort_order ASC, created_at ASC",
+            (user_id, channel),
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def create_folder(self, user_id: str, channel: str, folder_id: str, name: str, color: str) -> dict[str, Any]:
+        if not self._conn:
+            await self.connect()
+        await self._conn.execute(
+            "INSERT INTO conversation_folders (id, user_id, channel, name, color, sort_order, created_at) "
+            "VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order)+1, 0) FROM conversation_folders WHERE user_id=? AND channel=?), datetime('now'))",
+            (folder_id, user_id, channel, name, color, user_id, channel),
+        )
+        await self._conn.commit()
+        return {"id": folder_id, "name": name, "color": color}
+
+    async def update_folder(self, folder_id: str, user_id: str, name: str | None = None, color: str | None = None) -> None:
+        if not self._conn:
+            await self.connect()
+        if name is not None:
+            await self._conn.execute(
+                "UPDATE conversation_folders SET name=? WHERE id=? AND user_id=?", (name, folder_id, user_id)
+            )
+        if color is not None:
+            await self._conn.execute(
+                "UPDATE conversation_folders SET color=? WHERE id=? AND user_id=?", (color, folder_id, user_id)
+            )
+        await self._conn.commit()
+
+    async def delete_folder(self, folder_id: str, user_id: str) -> None:
+        """Delete folder and unassign all conversations from it."""
+        if not self._conn:
+            await self.connect()
+        await self._conn.execute(
+            "UPDATE conversations SET folder_id=NULL WHERE folder_id=? AND user_id=?", (folder_id, user_id)
+        )
+        await self._conn.execute(
+            "DELETE FROM conversation_folders WHERE id=? AND user_id=?", (folder_id, user_id)
+        )
+        await self._conn.commit()
+
+    async def set_conversation_folder(self, conversation_id: str, user_id: str, folder_id: str | None) -> None:
+        if not self._conn:
+            await self.connect()
+        await self._conn.execute(
+            "UPDATE conversations SET folder_id=? WHERE id=? AND user_id=?",
+            (folder_id, conversation_id, user_id),
+        )
+        await self._conn.commit()
+
+    # ── Messages ──────────────────────────────────────────────────────────
 
     async def add_message(self, conversation_id: str, role: str, content: str, provider_used: str | None = None) -> None:
         if not self._conn:
@@ -497,6 +609,34 @@ class Db:
         rows = await cursor.fetchall()
         out = [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
         return out
+
+    async def truncate_conversation_messages(self, conversation_id: str, keep_count: int) -> int:
+        """Delete messages after the first ``keep_count`` rows (oldest-first)."""
+        if not self._conn:
+            await self.connect()
+        keep = max(0, int(keep_count or 0))
+        if keep == 0:
+            cursor = await self._conn.execute(
+                "DELETE FROM messages WHERE conversation_id = ?",
+                (conversation_id,),
+            )
+            await self._conn.commit()
+            return int(cursor.rowcount or 0)
+
+        cutoff = await self._conn.execute(
+            "SELECT id FROM messages WHERE conversation_id = ? ORDER BY id ASC LIMIT 1 OFFSET ?",
+            (conversation_id, keep),
+        )
+        row = await cutoff.fetchone()
+        if not row:
+            return 0
+        cutoff_id = int(row["id"])
+        cursor = await self._conn.execute(
+            "DELETE FROM messages WHERE conversation_id = ? AND id >= ?",
+            (conversation_id, cutoff_id),
+        )
+        await self._conn.commit()
+        return int(cursor.rowcount or 0)
 
     async def delete_conversation(self, conversation_id: str) -> None:
         if not self._conn:

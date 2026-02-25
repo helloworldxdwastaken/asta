@@ -85,6 +85,7 @@ If the panel shows "API off", start the backend first or use **Settings -> Run t
 - **Dashboard**: system overview — Brain (AI providers), Body (CPU/RAM/disk + model), Eyes (vision), Channels, Notes, Schedule (reminders + cron), Capabilities (skills count).
 - **Responsive dashboard layout**: medium/smaller screens now use adaptive card/vitals breakpoints for readable panel cards and metrics.
 - **Chat**: provider routing + automatic skill execution.
+- **Chat UX (macOS app)**: inline copy actions for user/assistant messages and editable past user turns that rewind conversation history from the edit point before re-running.
 - **Reasoning controls**: per-user **Thinking level** (`off/minimal/low/medium/high/xhigh`) and **Reasoning visibility** (`off/on/stream`) in Settings and Telegram commands. Now supports **OpenRouter Kimi/Trinity** (via `reasoning_effort` + auto-injected `<think>` tags) and Ollama. Stream mode now uses a dedicated message event state machine for chunk-time reasoning/assistant updates (with post-generation fallback when providers do not stream).
 - **Strict final mode**: optional `final_mode=strict` in Settings to show only text inside `<final>...</final>` blocks (OpenClaw-style enforcement).
 - **Web live streaming**: Chat UI uses `POST /api/chat/stream` (SSE) for real-time `assistant` and `reasoning` updates powered by OpenClaw-style stream lifecycle events (`message_start/text_delta/text_end/message_end`).
@@ -136,6 +137,7 @@ The native macOS app lives in `MACAPP/`. It's a menu-bar app built with SwiftUI.
 - Sidebar with persistent conversation history (click to reload any past chat)
 - Agent picker in chat (selection stays on the same chat until changed)
 - Agents hub in sidebar (below **New chat**) to search/add/remove/create agents
+- Message actions in chat: copy under both sides, plus edit/re-run for past user turns
 - Settings panel: API keys, providers, Tailscale remote access, Google Workspace
 - Remote access via Tailscale: "Enable HTTPS Tunnel" sets up `tailscale serve` for a proper `https://machine.ts.net` link to share with other devices
 

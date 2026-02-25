@@ -25,6 +25,9 @@ struct ChatView: View {
     @State private var previousConversationID: String? = nil
     @State private var historyLoading = false
     @State private var historyError: String? = nil
+    @State private var editingMessageID: String? = nil
+    @State private var copiedMessageID: String? = nil
+    @State private var copyResetTask: Task<Void, Never>? = nil
 
     @AppStorage("AstaMacApp.webEnabled") private var webEnabled = false
 
@@ -104,7 +107,7 @@ struct ChatView: View {
             isLoading = false
             historyError = nil
             withAnimation(.easeOut(duration: 0.18)) {
-                messages = []; attachments = []; inputText = ""
+                messages = []; attachments = []; inputText = ""; editingMessageID = nil; copiedMessageID = nil
             }
             restoreAgentSelection(for: id)
             previousConversationID = id
@@ -386,6 +389,24 @@ struct ChatView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .contextMenu { copyButton(msg.content) }
             }
+            HStack(spacing: 8) {
+                Spacer(minLength: 80)
+                messageActionButton(
+                    icon: copiedMessageID == msg.id ? "checkmark" : "doc.on.doc",
+                    label: copiedMessageID == msg.id ? "Copied" : "Copy",
+                    active: copiedMessageID == msg.id
+                ) {
+                    copyMessageContent(msg.content, messageID: msg.id)
+                }
+                messageActionButton(
+                    icon: "square.and.pencil",
+                    label: editingMessageID == msg.id ? "Editing" : "Edit",
+                    active: editingMessageID == msg.id
+                ) {
+                    beginEditingMessage(msg)
+                }
+                .disabled(isLoading)
+            }
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 6)
@@ -425,6 +446,19 @@ struct ChatView: View {
 
                 // Tool pills + provider
                 messageMeta(msg)
+
+                if !msg.content.isEmpty {
+                    HStack(spacing: 8) {
+                        messageActionButton(
+                            icon: copiedMessageID == msg.id ? "checkmark" : "doc.on.doc",
+                            label: copiedMessageID == msg.id ? "Copied" : "Copy",
+                            active: copiedMessageID == msg.id
+                        ) {
+                            copyMessageContent(msg.content, messageID: msg.id)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }
             }
 
             Spacer(minLength: 40)
@@ -584,6 +618,52 @@ struct ChatView: View {
             )
     }
 
+    private func copyMessageContent(_ text: String, messageID: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        copiedMessageID = messageID
+        copyResetTask?.cancel()
+        copyResetTask = Task {
+            try? await Task.sleep(nanoseconds: 1_400_000_000)
+            await MainActor.run {
+                if copiedMessageID == messageID {
+                    copiedMessageID = nil
+                }
+            }
+        }
+    }
+
+    private func beginEditingMessage(_ msg: ChatMessage) {
+        guard msg.role == "user" else { return }
+        editingMessageID = msg.id
+        inputText = msg.content
+        attachments = []
+        historyError = nil
+        requestFocus = true
+    }
+
+    private func messageActionButton(
+        icon: String,
+        label: String,
+        active: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 10, weight: .semibold))
+                Text(label)
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .foregroundStyle(active ? Color.accentColor : textTertiary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(active ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.04))
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
     private func copyButton(_ text: String) -> some View {
         Button("Copy") {
             NSPasteboard.general.clearContents()
@@ -596,6 +676,27 @@ struct ChatView: View {
     private var inputArea: some View {
         VStack(spacing: 0) {
             Divider().opacity(0.5)
+
+            if let activeEditID = editingMessageID, let idx = messages.firstIndex(where: { $0.id == activeEditID }) {
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.uturn.backward.circle")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.orange)
+                    Text("Editing message #\(idx + 1) — sending will restart this chat from that point.")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(textSecondary)
+                    Spacer()
+                    Button("Cancel") {
+                        editingMessageID = nil
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(textSecondary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Color.orange.opacity(0.08))
+            }
 
             // Attachment strip
             if !attachments.isEmpty {
@@ -868,8 +969,73 @@ struct ChatView: View {
     // MARK: - Send (streaming)
 
     private func send() {
-        let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty || !attachments.isEmpty else { return }
+        guard !isLoading else { return }
+        let draftInputText = inputText
+        let draftAttachments = attachments
+        let draftConversationID = conversationID
+        let draftAgent = selectedAgent
+        let text = draftInputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty || !draftAttachments.isEmpty else { return }
+
+        if let editMessageID = editingMessageID {
+            guard let keepCount = messages.firstIndex(where: { $0.id == editMessageID }) else {
+                historyError = "Edit target is no longer available. Please select the message again."
+                editingMessageID = nil
+                return
+            }
+            guard let cid = draftConversationID, !cid.isEmpty else {
+                historyError = "This conversation is still new. Wait for the first reply, then edit."
+                return
+            }
+            isLoading = true
+            Task {
+                do {
+                    try await appState.client.truncateConversation(
+                        conversationID: cid,
+                        keepCount: keepCount
+                    )
+                    await MainActor.run {
+                        withAnimation(.easeOut(duration: 0.18)) {
+                            messages = Array(messages.prefix(keepCount))
+                        }
+                        editingMessageID = nil
+                        historyError = nil
+                        sendPrepared(
+                            rawInputText: draftInputText,
+                            draftAttachments: draftAttachments,
+                            draftConversationID: cid,
+                            draftAgent: draftAgent
+                        )
+                    }
+                } catch {
+                    await MainActor.run {
+                        isLoading = false
+                        historyError = "Couldn't rewind chat history. Please try again."
+                    }
+                }
+            }
+            return
+        }
+
+        sendPrepared(
+            rawInputText: draftInputText,
+            draftAttachments: draftAttachments,
+            draftConversationID: draftConversationID,
+            draftAgent: draftAgent
+        )
+    }
+
+    private func sendPrepared(
+        rawInputText: String,
+        draftAttachments: [ChatAttachment],
+        draftConversationID: String?,
+        draftAgent: AstaAgent?
+    ) {
+        let text = rawInputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty || !draftAttachments.isEmpty else {
+            isLoading = false
+            return
+        }
 
         // Build the final message text
         var sendText = text
@@ -877,13 +1043,13 @@ struct ChatView: View {
             sendText = "/learn " + text
             appState.learningModeEnabled = false
         }
-        if let agent = selectedAgent, !sendText.isEmpty {
+        if let agent = draftAgent, !sendText.isEmpty {
             sendText = "@\(agent.name): \(sendText)"
         }
 
         // Extract text content from non-image attachments and prepend
         var documentContext = ""
-        for att in attachments {
+        for att in draftAttachments {
             if let content = att.textContent {
                 let truncated = String(content.prefix(20_000))
                 documentContext += "<document name=\"\(att.name)\">\n\(truncated)\n</document>\n\n"
@@ -895,14 +1061,14 @@ struct ChatView: View {
         }
 
         // Find image attachment (first one only — backend supports single image)
-        let imageAtt = attachments.first(where: { $0.isImage })
+        let imageAtt = draftAttachments.first(where: { $0.isImage })
 
         // Clear input
-        let displayText = text.isEmpty ? (attachments.isEmpty ? "" : "[\(attachments.map(\.name).joined(separator: ", "))]") : text
-        let msgAttachments = attachments.isEmpty ? nil : attachments
+        let displayText = text.isEmpty ? (draftAttachments.isEmpty ? "" : "[\(draftAttachments.map(\.name).joined(separator: ", "))]") : text
+        let msgAttachments = draftAttachments.isEmpty ? nil : draftAttachments
         inputText = ""
         attachments = []
-        let currentConvID = conversationID
+        let currentConvID = draftConversationID
         let provider = appState.selectedProvider.isEmpty ? "default" : appState.selectedProvider
         let mood = appState.selectedMood == "normal" ? nil : appState.selectedMood
 

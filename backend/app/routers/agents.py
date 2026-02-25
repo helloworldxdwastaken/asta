@@ -1,6 +1,7 @@
 """Agents API — create, list, update, delete named agents backed by workspace/skills/<name>/SKILL.md."""
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -52,6 +53,42 @@ def _read_agent(slug: str) -> dict | None:
         r = re.search(rf"(?im)^\s*{re.escape(key)}\s*:\s*(.+?)\s*$", fm)
         return r.group(1).strip().strip("\"'") if r else ""
 
+    def _fm_list(key: str) -> list[str] | None:
+        r = re.search(rf"(?im)^\s*{re.escape(key)}\s*:\s*(.+?)\s*$", fm)
+        if not r:
+            return None
+        raw = r.group(1).strip()
+        if not raw:
+            return []
+        values: list[str] = []
+        # Prefer JSON list syntax: skills: ["time","weather"]
+        try:
+            decoded = json.loads(raw)
+            if isinstance(decoded, list):
+                values = [str(v).strip().lower() for v in decoded if str(v).strip()]
+            elif isinstance(decoded, str):
+                values = [decoded.strip().lower()] if decoded.strip() else []
+        except Exception:
+            # Fallback: comma-separated or bracketed CSV-like value.
+            cleaned = raw
+            if cleaned.startswith("[") and cleaned.endswith("]"):
+                cleaned = cleaned[1:-1]
+            values = [
+                part.strip().strip("\"'").lower()
+                for part in cleaned.split(",")
+                if part.strip().strip("\"'")
+            ]
+        # Keep stable order, dedup, and normalize ids.
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in values:
+            sid = re.sub(r"[^a-z0-9_-]", "", item)
+            if not sid or sid in seen:
+                continue
+            seen.add(sid)
+            normalized.append(sid)
+        return normalized
+
     return {
         "id": slug,
         "name": _fm("name") or slug,
@@ -59,6 +96,7 @@ def _read_agent(slug: str) -> dict | None:
         "emoji": _fm("emoji") or "🤖",
         "model": _fm("model"),
         "thinking": _fm("thinking"),
+        "skills": _fm_list("skills"),
         "system_prompt": body.strip(),
     }
 
@@ -88,7 +126,30 @@ async def resolve_agent_mention_in_text(text: str, user_id: str = "default") -> 
     return None, raw
 
 
-def _write_agent(slug: str, name: str, description: str, emoji: str, model: str, thinking: str, system_prompt: str) -> None:
+def _normalize_skill_ids(skills: list[str] | None) -> list[str] | None:
+    if skills is None:
+        return None
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in skills:
+        sid = re.sub(r"[^a-z0-9_-]", "", str(raw).strip().lower())
+        if not sid or sid in seen:
+            continue
+        seen.add(sid)
+        out.append(sid)
+    return out
+
+
+def _write_agent(
+    slug: str,
+    name: str,
+    description: str,
+    emoji: str,
+    model: str,
+    thinking: str,
+    system_prompt: str,
+    skills: list[str] | None = None,
+) -> None:
     base = _agents_dir()
     if not base:
         raise HTTPException(status_code=500, detail="Workspace path not configured")
@@ -107,6 +168,9 @@ def _write_agent(slug: str, name: str, description: str, emoji: str, model: str,
         fm_lines.append(f"model: {model}")
     if thinking:
         fm_lines.append(f"thinking: {thinking}")
+    normalized_skills = _normalize_skill_ids(skills)
+    if normalized_skills is not None:
+        fm_lines.append(f"skills: {json.dumps(normalized_skills, ensure_ascii=True)}")
     fm_lines.append(AGENT_FLAG)
     fm_lines.append("---")
     fm_lines.append("")
@@ -152,6 +216,7 @@ class AgentCreate(BaseModel):
     emoji: str = "🤖"
     model: str = ""
     thinking: str = ""
+    skills: list[str] | None = None
     system_prompt: str = ""
 
 
@@ -161,6 +226,7 @@ class AgentUpdate(BaseModel):
     emoji: str | None = None
     model: str | None = None
     thinking: str | None = None
+    skills: list[str] | None = None
     system_prompt: str | None = None
 
 
@@ -215,6 +281,7 @@ async def create_agent(body: AgentCreate):
         emoji=body.emoji.strip() or "🤖",
         model=body.model.strip(),
         thinking=body.thinking.strip(),
+        skills=_normalize_skill_ids(body.skills),
         system_prompt=body.system_prompt.strip(),
     )
     ensure_agent_knowledge_layout(slug)
@@ -252,9 +319,10 @@ async def update_agent(agent_id: str, body: AgentUpdate):
     emoji = (body.emoji.strip() if body.emoji is not None else existing["emoji"]) or "🤖"
     model = (body.model.strip() if body.model is not None else existing["model"])
     thinking = (body.thinking.strip() if body.thinking is not None else existing["thinking"])
+    skills = (_normalize_skill_ids(body.skills) if body.skills is not None else existing.get("skills"))
     system_prompt = (body.system_prompt.strip() if body.system_prompt is not None else existing["system_prompt"])
 
-    _write_agent(agent_id, name, description, emoji, model, thinking, system_prompt)
+    _write_agent(agent_id, name, description, emoji, model, thinking, system_prompt, skills=skills)
     updated = _read_agent(agent_id)
     if not updated:
         raise HTTPException(status_code=500, detail=f"Agent '{agent_id}' could not be reloaded")
