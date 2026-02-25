@@ -3084,6 +3084,55 @@ async def _handle_workspace_notes_list_fallback(
     return "\n".join(lines), trace
 
 
+def _append_selected_agent_context(context: str, extra: dict) -> str:
+    selected = extra.get("selected_agent") if isinstance(extra, dict) else None
+    if not isinstance(selected, dict):
+        return context
+
+    aid = str(selected.get("id") or "").strip()
+    name = str(selected.get("name") or "").strip() or aid or "agent"
+    desc = str(selected.get("description") or "").strip()
+    agent_prompt = str(selected.get("system_prompt") or "").strip()
+
+    sections: list[str] = []
+    sections.append("[SELECTED AGENT]")
+    sections.append(f"You are currently routed to agent '{name}' (id: {aid or 'unknown'}).")
+    if desc:
+        sections.append(f"Agent description: {desc}")
+    sections.append(
+        "Follow this agent's intent and style for this turn, while still obeying higher-priority safety/policy instructions."
+    )
+    if agent_prompt:
+        sections.append("")
+        sections.append("[AGENT PROMPT]")
+        sections.append(agent_prompt)
+
+    snippets = extra.get("agent_knowledge_snippets") if isinstance(extra, dict) else None
+    if isinstance(snippets, list) and snippets:
+        sections.append("")
+        sections.append("[AGENT KNOWLEDGE SNIPPETS]")
+        sections.append(
+            "These were retrieved from the agent's local knowledge folder. Prefer them when relevant."
+        )
+        for idx, item in enumerate(snippets[:6], start=1):
+            if not isinstance(item, dict):
+                continue
+            source = str(item.get("source") or "unknown")
+            line_start = int(item.get("line_start") or 0)
+            line_end = int(item.get("line_end") or 0)
+            excerpt = str(item.get("snippet") or "").strip()
+            if not excerpt:
+                continue
+            sections.append(f"{idx}. Source: {source}:{line_start}-{line_end}")
+            sections.append(excerpt)
+            sections.append("")
+
+    payload = "\n".join(sections).strip()
+    if not payload:
+        return context
+    return context + "\n\n" + payload
+
+
 async def handle_message(
     user_id: str,
     channel: str,
@@ -3129,6 +3178,50 @@ async def handle_message(
     user_content = f" [Image: {image_mime or 'image/jpeg'}] {text}" if image_bytes else text
     await db.add_message(cid, "user", user_content)
     extra = extra_context or {}
+    try:
+        # Named-agent routing syntax from UI: "@Agent Name: message".
+        from app.routers.agents import resolve_agent_mention_in_text
+        from app.agent_knowledge import (
+            ensure_agent_knowledge_layout,
+            retrieve_agent_knowledge_snippets,
+        )
+
+        selected_agent, cleaned_text = await resolve_agent_mention_in_text(text, user_id=user_id)
+        if selected_agent:
+            text = (cleaned_text or "").strip() or text
+            aid = str(selected_agent.get("id") or "").strip()
+            selected_payload = {
+                "id": aid,
+                "name": str(selected_agent.get("name") or "").strip(),
+                "description": str(selected_agent.get("description") or "").strip(),
+                "system_prompt": str(selected_agent.get("system_prompt") or "").strip(),
+            }
+            knowledge_path = ensure_agent_knowledge_layout(aid)
+            if knowledge_path:
+                selected_payload["knowledge_path"] = str(knowledge_path)
+            extra["selected_agent"] = selected_payload
+
+            # Agent-scoped model/thinking defaults (unless subagent overrides are explicit).
+            agent_model = str(selected_agent.get("model") or "").strip()
+            if agent_model and not extra.get("subagent_model_override"):
+                extra["agent_model_override"] = agent_model
+            agent_thinking = str(selected_agent.get("thinking") or "").strip().lower()
+            if agent_thinking and not extra.get("subagent_thinking_override"):
+                extra["agent_thinking_override"] = agent_thinking
+
+            snippets = retrieve_agent_knowledge_snippets(agent_id=aid, query=text)
+            if snippets:
+                extra["agent_knowledge_snippets"] = snippets
+                logger.info(
+                    "Agent knowledge: selected=%s snippets=%d query=%r",
+                    aid,
+                    len(snippets),
+                    text[:120],
+                )
+            logger.info("Agent routing: selected=%s name=%s", aid, selected_payload.get("name") or aid)
+    except Exception as e:
+        logger.warning("Agent routing/knowledge failed: %s", e)
+
     stream_event_callback = extra.get("_stream_event_callback")
     if not callable(stream_event_callback):
         stream_event_callback = None
@@ -3138,7 +3231,11 @@ async def handle_message(
         mood = await db.get_user_mood(user_id)
     extra["mood"] = mood
     thinking_level = await db.get_user_thinking_level(user_id)
-    thinking_override = (extra.get("subagent_thinking_override") or "").strip().lower()
+    thinking_override = (
+        extra.get("subagent_thinking_override")
+        or extra.get("agent_thinking_override")
+        or ""
+    ).strip().lower()
     if thinking_override in _THINK_LEVELS:
         thinking_level = thinking_override
     extra["thinking_level"] = thinking_level
@@ -3168,7 +3265,11 @@ async def handle_message(
     # - supports mixed text (e.g. "please /think high run this")
     # - /think (query current level)
     # - /reasoning (query current mode)
-    model_override = (extra.get("subagent_model_override") or "").strip()
+    model_override = (
+        extra.get("subagent_model_override")
+        or extra.get("agent_model_override")
+        or ""
+    ).strip()
     directive_model = model_override or await db.get_user_provider_model(user_id, provider_name)
     think_options = _format_thinking_options(provider_name, directive_model)
 
@@ -3428,6 +3529,7 @@ async def handle_message(
     # 4. Build Context (Prompt Engineering)
     # Built-in skills are intent-routed; workspace skills are selected by the model via <available_skills> + read tool.
     context = await build_context(db, user_id, cid, extra=extra, skills_in_use=skills_to_use)
+    context = _append_selected_agent_context(context, extra)
     
     # Silly GIF skill: Proactive instruction (not intent-based)
     if "silly_gif" in enabled:
@@ -3565,7 +3667,11 @@ async def handle_message(
             await db.add_message(cid, "assistant", msg, "script")
             return msg
     user_model = await db.get_user_provider_model(user_id, provider.name)
-    model_override = (extra.get("subagent_model_override") or "").strip()
+    model_override = (
+        extra.get("subagent_model_override")
+        or extra.get("agent_model_override")
+        or ""
+    ).strip()
     if model_override:
         user_model = model_override
     if thinking_level == "xhigh" and not _supports_xhigh_thinking(provider.name, user_model):
@@ -3779,7 +3885,7 @@ async def handle_message(
         logger.info("Provider %s returned tool_calls=%s (count=%s)", provider_used.name, has_tc, len(response.tool_calls or []))
 
     # Tool-call loop: if model requested exec (or other tools), run and re-call same provider until done
-    MAX_TOOL_ROUNDS = 20
+    MAX_TOOL_ROUNDS = 30
     current_messages = list(messages)
     
     # Initialize tool loop detector for this conversation
@@ -4991,7 +5097,7 @@ async def handle_message(
             _out["provider"] = effective_reply_provider
         return ""
 
-    # Always persist assistant reply (including errors) so web UI matches what user saw on Telegram
+    # Always persist assistant reply (including errors) so history matches what users saw in-chat.
     await db.add_message(cid, "assistant", reply, provider.name if not reply.strip().startswith("Error:") and not reply.strip().startswith("No AI provider") else None)
 
     # Auto-title: fire background task on first exchange only (no title stored yet)

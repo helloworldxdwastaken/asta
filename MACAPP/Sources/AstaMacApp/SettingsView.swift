@@ -11,10 +11,10 @@ struct SettingsView: View {
 
     enum Tab: String, CaseIterable, Identifiable {
         case general   = "General"
+        case persona   = "Persona"
         case models    = "Models"
         case keys      = "API Keys"
         case spotify   = "Spotify"
-        case agents    = "Agents"
         case skills    = "Skills"
         case knowledge = "Knowledge"
         case channels  = "Channels"
@@ -27,10 +27,10 @@ struct SettingsView: View {
         var icon: String {
             switch self {
             case .general:      return "gearshape"
+            case .persona:      return "person.crop.circle"
             case .models:       return "cpu"
             case .keys:         return "key"
             case .spotify:      return "music.note"
-            case .agents:       return "person.2"
             case .skills:       return "puzzlepiece.extension"
             case .knowledge:    return "brain.head.profile"
             case .channels:     return "link"
@@ -39,6 +39,15 @@ struct SettingsView: View {
             case .tailscale:    return "antenna.radiowaves.left.and.right"
             case .permissions:  return "hand.raised"
             case .about:        return "info.circle"
+            }
+        }
+        /// Provider ID to render a branded logo instead of an SF Symbol. nil = use icon.
+        var brandProvider: String? {
+            switch self {
+            case .spotify:   return "spotify"
+            case .google:    return "google"
+            case .channels:  return "telegram"
+            default:         return nil
             }
         }
     }
@@ -75,10 +84,17 @@ struct SettingsView: View {
                                 withAnimation(.easeOut(duration: 0.12)) { tab = t }
                             } label: {
                                 HStack(spacing: 8) {
-                                    Image(systemName: t.icon)
-                                        .font(.system(size: 12, weight: .medium))
-                                        .frame(width: 16, alignment: .center)
-                                        .foregroundStyle(tab == t ? Color.accentColor : Color(nsColor: .secondaryLabelColor))
+                                    if let bp = t.brandProvider {
+                                        ProviderLogo(provider: bp, size: 18)
+                                            .frame(width: 18, height: 18)
+                                            .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                                            .opacity(tab == t ? 1.0 : 0.65)
+                                    } else {
+                                        Image(systemName: t.icon)
+                                            .font(.system(size: 12, weight: .medium))
+                                            .frame(width: 16, alignment: .center)
+                                            .foregroundStyle(tab == t ? Color.accentColor : Color(nsColor: .secondaryLabelColor))
+                                    }
                                     Text(t.rawValue)
                                         .font(.system(size: 13))
                                         .foregroundStyle(tab == t ? Color.accentColor : Color(nsColor: .labelColor))
@@ -124,10 +140,10 @@ struct SettingsView: View {
                     Group {
                         switch tab {
                         case .general:      GeneralSettingsTab(appState: appState)
+                        case .persona:      PersonaSettingsTab(appState: appState)
                         case .models:       ModelsSettingsTab(appState: appState)
                         case .keys:         KeysSettingsTab(appState: appState)
                         case .spotify:      SpotifySettingsTab(appState: appState)
-                        case .agents:       AgentsSettingsTab(appState: appState)
                         case .skills:       SkillsSettingsTab(appState: appState)
                         case .knowledge:    KnowledgeSettingsTab(appState: appState)
                         case .channels:     ChannelsSettingsTab(appState: appState)
@@ -166,7 +182,15 @@ struct GeneralSettingsTab: View {
                     get: { appState.selectedProvider },
                     set: { new in Task { await appState.setDefaultAI(new) } }
                 )) {
-                    ForEach(providerNames(), id: \.self) { Text(astaProviderDisplayName($0)).tag($0) }
+                    ForEach(providerNames(), id: \.self) { p in
+                        Label {
+                            Text(astaProviderDisplayName(p))
+                        } icon: {
+                            ProviderLogo(provider: p, size: 16)
+                                .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
+                        }
+                        .tag(p)
+                    }
                 }
                 Text("Which AI answers in Chat and Telegram.").font(.caption).foregroundStyle(.secondary)
             } header: { Text("AI Provider") }
@@ -177,14 +201,18 @@ struct GeneralSettingsTab: View {
                         get: { item.enabled ?? true },
                         set: { new in Task { await appState.setProviderEnabled(item.provider, enabled: new) } }
                     )) {
-                        HStack {
-                            Text(astaProviderDisplayName(item.label ?? item.provider))
-                            if item.auto_disabled == true {
-                                Text("(auto-disabled — no key set)")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            if item.connected != true {
-                                Text("· not connected").font(.caption).foregroundStyle(.orange)
+                        HStack(spacing: 10) {
+                            ProviderLogo(provider: item.provider, size: 26)
+                                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(astaProviderDisplayName(item.label ?? item.provider))
+                                    .font(.system(size: 13))
+                                if item.auto_disabled == true {
+                                    Text("auto-disabled — no key set")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                } else if item.connected != true {
+                                    Text("not connected").font(.caption).foregroundStyle(.orange)
+                                }
                             }
                         }
                     }
@@ -224,6 +252,138 @@ struct GeneralSettingsTab: View {
     }
     private func providerNames() -> [String] { appState.providers.isEmpty ? ["claude","ollama","openrouter","openai","google","groq"] : appState.providers }
     private func providerFlowItems() -> [AstaProviderFlowItem] { appState.providerFlow?.providers ?? [] }
+}
+
+// MARK: - Persona
+
+struct PersonaSettingsTab: View {
+    @ObservedObject var appState: AppState
+
+    @State private var soulText: String = ""
+    @State private var userText: String = ""
+    @State private var isLoading = true
+    @State private var isSaving = false
+    @State private var saveStatus: String? = nil
+    @State private var selectedSection: PersonaSection = .soul
+
+    enum PersonaSection: String, CaseIterable, Identifiable {
+        case soul = "Soul"
+        case user = "About Me"
+        var id: String { rawValue }
+        var icon: String {
+            switch self {
+            case .soul: return "sparkles"
+            case .user: return "person.fill"
+            }
+        }
+        var subtitle: String {
+            switch self {
+            case .soul: return "Asta's personality, tone and behaviour"
+            case .user: return "Your name, location and preferences"
+            }
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if isLoading {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                // Section picker
+                HStack(spacing: 8) {
+                    ForEach(PersonaSection.allCases) { section in
+                        Button {
+                            withAnimation(.easeOut(duration: 0.12)) { selectedSection = section }
+                        } label: {
+                            Label(section.rawValue, systemImage: section.icon)
+                                .font(.system(size: 13, weight: selectedSection == section ? .semibold : .regular))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(selectedSection == section ? Color.accentColor.opacity(0.15) : Color.clear)
+                                .foregroundStyle(selectedSection == section ? Color.accentColor : Color(nsColor: .secondaryLabelColor))
+                                .cornerRadius(7)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Spacer()
+                    if let status = saveStatus {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundStyle(status.contains("✓") ? Color.green : Color(nsColor: .secondaryLabelColor))
+                            .transition(.opacity)
+                    }
+                    Button {
+                        Task { await save() }
+                    } label: {
+                        if isSaving {
+                            ProgressView().scaleEffect(0.7)
+                        } else {
+                            Text("Save")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isSaving)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+
+                Divider()
+
+                // Editor area
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(selectedSection.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                        .padding(.horizontal, 16)
+                        .padding(.top, 10)
+
+                    TextEditor(text: selectedSection == .soul ? $soulText : $userText)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(8)
+                        .background(Color(nsColor: .textBackgroundColor))
+                        .cornerRadius(8)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color(nsColor: .separatorColor), lineWidth: 0.5)
+                        )
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 16)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .task { await load() }
+    }
+
+    private func load() async {
+        isLoading = true
+        do {
+            let persona = try await appState.client.fetchPersona()
+            soulText = persona.soul
+            userText = persona.user
+        } catch {
+            soulText = "# Error loading SOUL.md\n\(error.localizedDescription)"
+        }
+        isLoading = false
+    }
+
+    private func save() async {
+        isSaving = true
+        saveStatus = nil
+        do {
+            try await appState.client.savePersona(
+                soul: selectedSection == .soul ? soulText : nil,
+                user: selectedSection == .user ? userText : nil
+            )
+            saveStatus = "✓ Saved"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { saveStatus = nil }
+        } catch {
+            saveStatus = "Error: \(error.localizedDescription)"
+        }
+        isSaving = false
+    }
 }
 
 // MARK: - Models
@@ -337,6 +497,7 @@ struct KeysSettingsTab: View {
         ProviderKey(name: "OpenRouter",  provider: "openrouter", key: "openrouter_api_key", url: "https://openrouter.ai/keys",                   hint: "Starts with sk-or-…  (free tier available)"),
         ProviderKey(name: "OpenAI",   provider: "openai",     key: "openai_api_key",     url: "https://platform.openai.com/api-keys",          hint: "Starts with sk-…"),
         ProviderKey(name: "Google Gemini", provider: "google",   key: "gemini_api_key",     url: "https://aistudio.google.com/apikey",            hint: "Get free key from Google AI Studio (not Google Cloud)"),
+        ProviderKey(name: "Hugging Face", provider: "huggingface", key: "huggingface_api_key", url: "https://huggingface.co/settings/tokens", hint: "Used for FLUX.1-dev image fallback"),
         ProviderKey(name: "Groq",     provider: "groq",       key: "groq_api_key",       url: "https://console.groq.com/keys",                 hint: "Free tier — very fast inference"),
         ProviderKey(name: "Telegram Bot", provider: "telegram", key: "telegram_bot_token", url: "https://t.me/BotFather",                        hint: "Create via @BotFather on Telegram → /newbot"),
         ProviderKey(name: "Notion",   provider: "notion",   key: "notion_api_key", url: "https://www.notion.so/my-integrations",  hint: "Internal integration token"),
@@ -367,6 +528,8 @@ struct KeysSettingsTab: View {
         Section {
             // Status row
             HStack {
+                ProviderLogo(provider: p.provider, size: 32)
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(p.name).font(.system(size: 13, weight: .semibold))
                     Text(p.hint).font(.caption).foregroundStyle(.secondary)
@@ -438,6 +601,7 @@ struct KeysSettingsTab: View {
         case "openrouter_api_key": k.openrouter_api_key = value
         case "openai_api_key":     k.openai_api_key     = value
         case "gemini_api_key":     k.gemini_api_key     = value
+        case "huggingface_api_key": k.huggingface_api_key = value
         case "groq_api_key":       k.groq_api_key       = value
         case "telegram_bot_token": k.telegram_bot_token = value
         case "notion_api_key":     k.notion_api_key = value
@@ -574,6 +738,18 @@ struct SpotifySettingsTab: View {
                         Task { await appState.loadSpotifyStatus() }
                     }.buttonStyle(.bordered).controlSize(.small)
                 } header: { Text("Devices") }
+
+                Section {
+                    Button(role: .destructive) {
+                        Task {
+                            await appState.disconnectSpotify()
+                        }
+                    } label: {
+                        Label("Disconnect Spotify", systemImage: "minus.circle")
+                    }
+                    Text("Removes stored tokens. You can reconnect anytime.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } header: { Text("Manage") }
             }
         }
         .formStyle(.grouped)
@@ -803,7 +979,8 @@ struct ChannelsSettingsTab: View {
         Form {
             // ── Telegram ──────────────────────────────────────────────────
             Section {
-                HStack {
+                HStack(spacing: 10) {
+                    ProviderLogo(provider: "telegram", size: 32)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Telegram Bot")
                             .font(.system(size: 13, weight: .semibold))
@@ -841,7 +1018,8 @@ struct ChannelsSettingsTab: View {
 
             // ── Voice calls (Pingram / NotificationAPI) ───────────────────
             Section {
-                HStack {
+                HStack(spacing: 10) {
+                    ProviderLogo(provider: "pingram", size: 32)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Voice Calls (Pingram)")
                             .font(.system(size: 13, weight: .semibold))
@@ -1329,11 +1507,10 @@ struct AboutSettingsTab: View {
     var body: some View {
         VStack(spacing: 20) {
             Spacer(minLength: 20)
-            ZStack {
-                Circle().fill(LinearGradient(colors: [Color(red:0.28,green:0.52,blue:0.96), Color(red:0.18,green:0.38,blue:0.86)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                    .frame(width: 72, height: 72)
-                Text("A").font(.system(size: 28, weight: .bold)).foregroundStyle(.white)
-            }
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 80, height: 80)
             VStack(spacing: 6) {
                 Text("Asta").font(.title.weight(.bold))
                 Text("Version \(version)").font(.subheadline).foregroundStyle(.secondary)

@@ -2,6 +2,25 @@
 
 All notable changes to Asta are documented here.
 
+## [1.3.43] - 2026-02-25
+
+### Added
+
+- **Agents hub in chat sidebar (macOS app)** — Added an `Agents` entry directly below `New chat`. It opens an overlay where you can search agents, add/remove (enable/disable), and create/edit/delete agents.
+- **Agent flow tests** — Added targeted backend tests for agent listing/filtering, enable/disable toggles, and mention routing behavior (`backend/tests/test_agents_flow.py`).
+
+### Changed
+
+- **Agent management UX** — Moved agent creation/management out of Settings tabs into the dedicated `Agents` overlay.
+- **Chat agent hint copy** — Updated empty picker hint text from “Settings → Agents” to “Open Agents from the sidebar”.
+- **Release docs** — Updated root/macOS README sections to reflect the new Agents location and DMG output path.
+
+### Fixed
+
+- **Disabled-agent routing guard** — `@Agent:` mention routing now respects agent enabled state. If an agent is removed/disabled, direct mentions no longer route to it.
+
+---
+
 ## [1.3.21] - 2026-02-23
 
 ### Fixed
@@ -84,7 +103,7 @@ All notable changes to Asta are documented here.
   - `POST /api/agents` — create a new agent (writes `workspace/skills/<slug>/SKILL.md`).
   - `PATCH /api/agents/{slug}` — update agent name, description, or instructions.
   - `DELETE /api/agents/{slug}` — remove an agent skill directory.
-  - Agent picker in macOS app and web UI reads from this endpoint.
+  - Agent picker in macOS app reads from this endpoint.
 - **Adaptive paging (OpenClaw-style)** — Tool output is now capped to 20% of the active model's context window (`adaptive_paging.py`). Minimum 50 KB, hard ceiling 512 KB. Per-model context sizes table covers Groq, Ollama, Claude, OpenAI, OpenRouter, and Gemini models. Prevents context overflow on small-context models (llama-3.1-8b, phi3:mini, etc.).
 - **Context compaction** — `compaction.py` integrates with adaptive paging: long conversation histories are summarised and trimmed to fit within context limits before each AI call, preserving the most recent turns and injecting a compaction notice.
 - **Research skill** — `ResearchSkill` (`backend/app/skills/research_skill.py`) handles research/market analysis requests. Saves reports to `workspace/research/<topic>_report.md` via the `write_file` tool.
@@ -599,7 +618,7 @@ All notable changes to Asta are documented here.
 - **Settings** — Provider cards with logos, "Get your API key" links, editable model field, Save per card. Telegram moved to Channels; API keys section is AI providers + optional extras (e.g. Giphy).
 - **Dashboard** — Brain shows only connected AI providers. Clearer section icons and empty states.
 - **Chat** — Web vs Telegram tabs, message history from DB, modern layout (bubbles, typing indicator). Channel badge and Ctrl+Enter to send.
-- **Telegram sync** — User message is persisted early so the web UI shows it even when the handler or provider fails. All assistant replies (including errors) are saved so the Telegram preview matches what the user saw. On handler exception, user + error are persisted so the web UI stays in sync.
+- **Telegram sync** — User message is persisted early so chat history shows it even when the handler or provider fails. All assistant replies (including errors) are saved so the Telegram preview matches what the user saw. On handler exception, user + error are persisted so history stays in sync.
 - **File creation** — Handler parses `[ASTA_WRITE_FILE: path]...[/ASTA_WRITE_FILE]` and creates files under allowed paths / workspace. Files skill instructions tell the model to use this for "save to file", "create a shopping list", etc.
 - **Cron API** — `GET /api/cron`, `POST /api/cron`, `DELETE /api/cron/{id}` for listing, adding, and removing cron jobs.
 - **Docs** — `docs/WORKSPACE.md` for workspace, USER.md, and skills. `.env.example` documents `ASTA_EXEC_ALLOWED_BINS` and `ASTA_WORKSPACE_DIR`.

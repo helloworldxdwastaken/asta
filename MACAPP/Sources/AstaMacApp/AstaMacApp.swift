@@ -102,6 +102,9 @@ final class AppState: ObservableObject {
     // Learning Mode - when enabled, the next message will be saved to memory
     @Published var learningModeEnabled = false
 
+    // Incremented after a new conversation's first exchange, so sidebar can reload the AI title
+    @Published var sidebarRefreshTrigger = 0
+
     var connected: Bool { health?.status == "ok" }
 
     // MARK: - Tailscale / tunnel
@@ -141,6 +144,7 @@ final class AppState: ObservableObject {
             if let m = reasoning?.reasoning_mode, !m.isEmpty { selectedReasoning = m }
             if let mood = try? await mo, let v = mood.mood, !v.isEmpty { selectedMood = v }
         } catch { self.error = error.localizedDescription }
+        await loadAgents()
     }
 
     func loadSettings() async {
@@ -242,6 +246,13 @@ final class AppState: ObservableObject {
         let url = client.spotifyConnectURL()
         NSWorkspace.shared.open(url)
     }
+    func disconnectSpotify() async {
+        do {
+            try await client.spotifyDisconnect()
+            spotifyConnected = false
+            spotifyDevices = []
+        } catch { self.error = error.localizedDescription }
+    }
     func cronAdd(name: String, cronExpr: String, message: String, tz: String?, channel: String, channelTarget: String, payloadKind: String, tlgCall: Bool) async {
         do { _ = try await client.cronAdd(name: name, cronExpr: cronExpr, message: message, tz: tz, channel: channel, channelTarget: channelTarget, payloadKind: payloadKind, tlgCall: tlgCall); cronJobs = (try await client.cronList()).cron_jobs ?? [] }
         catch { self.error = error.localizedDescription }
@@ -319,6 +330,16 @@ final class AppState: ObservableObject {
     func deleteAgent(id: String) async {
         do { try await client.agentDelete(id: id); agentsList.removeAll { $0.id == id } }
         catch { agentsError = error.localizedDescription }
+    }
+    func setAgentEnabled(id: String, enabled: Bool) async {
+        do {
+            let r = try await client.agentSetEnabled(id: id, enabled: enabled)
+            if let idx = agentsList.firstIndex(where: { $0.id == id }) {
+                agentsList[idx] = r.agent
+            } else {
+                agentsList.append(r.agent)
+            }
+        } catch { agentsError = error.localizedDescription }
     }
 }
 

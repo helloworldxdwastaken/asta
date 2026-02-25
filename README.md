@@ -134,14 +134,15 @@ The native macOS app lives in `MACAPP/`. It's a menu-bar app built with SwiftUI.
 
 **Features:**
 - Sidebar with persistent conversation history (click to reload any past chat)
-- Agent picker (select custom agents defined in Settings → Agents)
+- Agent picker in chat (selection stays on the same chat until changed)
+- Agents hub in sidebar (below **New chat**) to search/add/remove/create agents
 - Settings panel: API keys, providers, Tailscale remote access, Google Workspace
 - Remote access via Tailscale: "Enable HTTPS Tunnel" sets up `tailscale serve` for a proper `https://machine.ts.net` link to share with other devices
 
 **Build:**
 ```bash
 cd MACAPP
-bash build-release.sh   # outputs Asta-VERSION.dmg to Desktop
+bash build-release.sh   # outputs Asta-VERSION.dmg under MACAPP/build/
 ```
 
 ## Project Structure

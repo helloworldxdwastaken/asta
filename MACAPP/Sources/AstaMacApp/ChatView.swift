@@ -18,7 +18,13 @@ struct ChatView: View {
     @State private var streamRevision = 0
     @State private var requestFocus   = false
     @State private var currentStreamTask: Task<Void, Never>?
-    @State private var selectedAgent: AstaAgent?
+    @State private var pollTask: Task<Void, Never>?
+    @State private var selectedAgentID: String? = nil
+    @State private var selectedAgentByConversation: [String: String] = [:]
+    @State private var pendingAgentForNewConversation: String? = nil
+    @State private var previousConversationID: String? = nil
+    @State private var historyLoading = false
+    @State private var historyError: String? = nil
 
     @AppStorage("AstaMacApp.webEnabled") private var webEnabled = false
 
@@ -31,6 +37,36 @@ struct ChatView: View {
 
     private let thinkingOptions = ["off","minimal","low","medium","high","xhigh"]
     private let moodOptions     = ["normal","friendly","serious"]
+    private var selectedAgent: AstaAgent? {
+        guard let selectedAgentID else { return nil }
+        return appState.agentsList.first(where: { $0.id == selectedAgentID && ($0.enabled ?? true) })
+    }
+
+    private func setSelectedAgent(_ agentID: String?) {
+        selectedAgentID = agentID
+        if let cid = conversationID, !cid.isEmpty {
+            if let agentID {
+                selectedAgentByConversation[cid] = agentID
+            } else {
+                selectedAgentByConversation.removeValue(forKey: cid)
+            }
+        } else {
+            pendingAgentForNewConversation = agentID
+        }
+    }
+
+    private func restoreAgentSelection(for conversationIDValue: String?) {
+        if let cid = conversationIDValue, !cid.isEmpty {
+            let restored = selectedAgentByConversation[cid] ?? pendingAgentForNewConversation
+            selectedAgentID = restored
+            if let restored {
+                selectedAgentByConversation[cid] = restored
+            }
+            pendingAgentForNewConversation = nil
+            return
+        }
+        selectedAgentID = pendingAgentForNewConversation
+    }
 
     // MARK: - Body
 
@@ -46,16 +82,35 @@ struct ChatView: View {
         .onDrop(of: [.fileURL, .image], isTargeted: $isDraggingOver, perform: handleDrop)
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { requestFocus = true }
+            previousConversationID = conversationID
+            restoreAgentSelection(for: conversationID)
             Task { await appState.loadAgents() }
         }
         .onChange(of: conversationID) { id in
-            if id == nil {
-                withAnimation(.easeOut(duration: 0.18)) {
-                    messages = []; attachments = []; inputText = ""
+            if let prev = previousConversationID, !prev.isEmpty {
+                if let selectedAgentID {
+                    selectedAgentByConversation[prev] = selectedAgentID
+                } else {
+                    selectedAgentByConversation.removeValue(forKey: prev)
                 }
-            } else if messages.isEmpty && !isLoading {
-                // User selected an old conversation — load its history
-                Task { await loadHistory(conversationID: id!) }
+            } else {
+                pendingAgentForNewConversation = selectedAgentID
+            }
+
+            // Cancel any in-flight stream and poll immediately (OpenClaw pattern)
+            currentStreamTask?.cancel()
+            currentStreamTask = nil
+            stopPolling()
+            isLoading = false
+            historyError = nil
+            withAnimation(.easeOut(duration: 0.18)) {
+                messages = []; attachments = []; inputText = ""
+            }
+            restoreAgentSelection(for: id)
+            previousConversationID = id
+            if let id = id, !id.isEmpty {
+                Task { await loadHistory(conversationID: id) }
+                startPolling(conversationID: id)
             }
         }
     }
@@ -111,7 +166,7 @@ struct ChatView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 7))
             }
             .menuStyle(.borderlessButton)
-            .help("Thinking: \(appState.selectedThinking) · Mood: \(appState.selectedMood)")
+            .help("Thinking & Mood — thinking: \(appState.selectedThinking), mood: \(appState.selectedMood)\n\nThinking: how much the model reasons before replying (off = fastest, xhigh = deepest).\nMood: normal, friendly, or serious.")
 
             // Show/hide thinking toggle
             if appState.selectedThinking != "off" && !appState.selectedThinking.isEmpty {
@@ -126,7 +181,7 @@ struct ChatView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 7))
                 }
                 .buttonStyle(.plain)
-                .help(showThinking ? "Hide thinking blocks" : "Show thinking blocks in responses")
+                .help(showThinking ? "Hide reasoning — collapse the model's thought process in responses" : "Show reasoning — expand the model's thought process inside each response")
             }
 
             // Learning mode toggle
@@ -182,7 +237,29 @@ struct ChatView: View {
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: true) {
-                if messages.isEmpty {
+                if historyLoading {
+                    VStack(spacing: 10) {
+                        ProgressView()
+                        Text("Loading chat…")
+                            .font(.system(size: 12))
+                            .foregroundStyle(textSecondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.top, 60)
+                } else if let err = historyError {
+                    VStack(spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 22))
+                            .foregroundStyle(.orange)
+                        Text(err)
+                            .font(.system(size: 12))
+                            .foregroundStyle(textSecondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 60)
+                    .padding(.horizontal, 24)
+                } else if messages.isEmpty {
                     emptyState
                 } else {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -242,9 +319,38 @@ struct ChatView: View {
     private func messageRow(_ msg: ChatMessage) -> some View {
         if msg.role == "user" {
             userRow(msg)
+        } else if msg.content.hasPrefix("[Previously discussed]") {
+            summaryDivider(msg)
         } else {
             assistantRow(msg)
         }
+    }
+
+    // MARK: Compaction summary divider
+
+    private func summaryDivider(_ msg: ChatMessage) -> some View {
+        let text = String(msg.content.dropFirst("[Previously discussed]".count)).trimmingCharacters(in: .whitespaces)
+        return VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                Rectangle().fill(Color.secondary.opacity(0.25)).frame(height: 1)
+                Text("Context summarised")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Color.secondary)
+                    .fixedSize()
+                Rectangle().fill(Color.secondary.opacity(0.25)).frame(height: 1)
+            }
+            if !text.isEmpty {
+                Text(text)
+                    .font(.caption)
+                    .foregroundStyle(Color.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 40)
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 20)
+        .help("The conversation was getting long — older messages were summarised to save context space. The full content is still available in the database.")
+        .id(msg.id)
     }
 
     // MARK: User message
@@ -353,6 +459,9 @@ struct ChatView: View {
                 .padding(.horizontal, 10).padding(.vertical, 7)
             }
             .buttonStyle(.plain)
+            .help(expanded
+                  ? "Model's internal reasoning — click to collapse"
+                  : "The model reasoned before replying — click to expand")
 
             // Content — shown when expanded
             if expanded && !text.isEmpty {
@@ -371,13 +480,21 @@ struct ChatView: View {
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.purple.opacity(0.12), lineWidth: 0.5))
     }
 
-    // MARK: Answer content — proper markdown rendering
+    // MARK: Answer content — markdown + inline images/GIFs
 
     private func answerContent(_ msg: ChatMessage) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            MarkdownView(content: msg.content, textColor: textPrimary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contextMenu { copyButton(msg.content) }
+        VStack(alignment: .leading, spacing: 8) {
+            let segments = MessageSegment.parse(msg.content)
+            ForEach(Array(segments.enumerated()), id: \.offset) { _, seg in
+                switch seg {
+                case .text(let t):
+                    MarkdownView(content: t, textColor: textPrimary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contextMenu { copyButton(msg.content) }
+                case .image(let url, _):
+                    RemoteImageView(url: url)
+                }
+            }
         }
         // Streaming indicator — subtle left border
         .padding(.leading, msg.phase == .responding ? 6 : 0)
@@ -396,11 +513,13 @@ struct ChatView: View {
 
     @ViewBuilder
     private func messageMeta(_ msg: ChatMessage) -> some View {
-        if let tools = msg.toolsUsed, !tools.isEmpty {
-            let filtered = Self.filterToolText(tools)
-            if !filtered.isEmpty {
-                toolPills(filtered)
-            }
+        // Active tools: animated pills while a tool is executing
+        if !msg.activeTools.isEmpty {
+            activeToolPills(msg.activeTools)
+        }
+        // Completed tools: static pills after execution (infrastructure-tracked, no LLM text parsing)
+        if !msg.completedTools.isEmpty {
+            toolPills(msg.completedTools)
         }
         if let provider = msg.provider, !provider.isEmpty, msg.phase == .done {
             Text(astaProviderDisplayName(provider))
@@ -411,23 +530,17 @@ struct ChatView: View {
         }
     }
 
-    /// Filter out noise from tool text like "none (AI-only reply...)"
-    private static func filterToolText(_ raw: String) -> String {
-        let cleaned = raw
-            .replacingOccurrences(of: "Tools used:", with: "", options: .caseInsensitive)
-            .trimmingCharacters(in: .whitespaces)
-        // Skip "none" or meta-descriptions
-        if cleaned.lowercased().hasPrefix("none") { return "" }
-        return cleaned
+    private func activeToolPills(_ tools: [String]) -> some View {
+        FlowLayout(spacing: 4) {
+            ForEach(tools, id: \.self) { tool in
+                ActiveToolPill(label: tool, icon: toolIcon(for: tool))
+            }
+        }
     }
 
-    private func toolPills(_ raw: String) -> some View {
-        let parts = raw
-            .components(separatedBy: CharacterSet(charactersIn: ",·•"))
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty && !$0.lowercased().hasPrefix("none") }
-        return FlowLayout(spacing: 4) {
-            ForEach(parts, id: \.self) { part in
+    private func toolPills(_ tools: [String]) -> some View {
+        FlowLayout(spacing: 4) {
+            ForEach(tools, id: \.self) { part in
                 HStack(spacing: 3) {
                     Image(systemName: toolIcon(for: part)).font(.system(size: 8))
                     Text(part).font(.system(size: 10))
@@ -449,6 +562,7 @@ struct ChatView: View {
         if n.contains("code")   || n.contains("exec")   { return "terminal" }
         if n.contains("reminder") || n.contains("cal")  { return "bell" }
         if n.contains("spotify") || n.contains("music") { return "music.note" }
+        if n.contains("image_gen") || n.contains("image gen") { return "photo.badge.plus" }
         return "wrench.and.screwdriver"
     }
 
@@ -540,26 +654,26 @@ struct ChatView: View {
                             Text("No agents yet")
                                 .font(.caption)
                             Divider()
-                            Text("Create agents in Settings → Agents")
+                            Text("Open Agents from the sidebar")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         } else {
                             Button {
-                                selectedAgent = nil
+                                setSelectedAgent(nil)
                             } label: {
                                 HStack {
                                     Text("Asta (default)")
-                                    if selectedAgent == nil { Image(systemName: "checkmark") }
+                                    if selectedAgentID == nil { Image(systemName: "checkmark") }
                                 }
                             }
                             Divider()
-                            ForEach(appState.agentsList) { agent in
+                            ForEach(appState.agentsList.filter { $0.enabled ?? true }) { agent in
                                 Button {
-                                    selectedAgent = agent
+                                    setSelectedAgent(agent.id)
                                 } label: {
                                     HStack {
                                         Text("\(agent.emoji.isEmpty ? "🤖" : agent.emoji) \(agent.name)")
-                                        if selectedAgent?.id == agent.id { Image(systemName: "checkmark") }
+                                        if selectedAgentID == agent.id { Image(systemName: "checkmark") }
                                     }
                                 }
                             }
@@ -581,7 +695,7 @@ struct ChatView: View {
                     }
                     .menuStyle(.borderlessButton)
                     .fixedSize()
-                    .help(selectedAgent != nil ? "Routing to \(selectedAgent!.name) — tap to change" : "Direct message to a specific agent")
+                    .help(selectedAgent != nil ? "Routing to \(selectedAgent?.name ?? "agent") — tap to change" : "Direct message to a specific agent")
 
                     Spacer()
 
@@ -615,9 +729,9 @@ struct ChatView: View {
                         .help("Send message (Enter)")
                     }
                 }
-                .padding(.horizontal, 8).padding(.bottom, 8).padding(.top, 2)
+                .padding(.horizontal, 8).padding(.bottom, 5).padding(.top, 2)
             }
-            .padding(.horizontal, 12).padding(.top, 8)
+            .padding(.horizontal, 12).padding(.top, 6)
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(Color(nsColor: .textBackgroundColor))
@@ -626,7 +740,7 @@ struct ChatView: View {
                             .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
                     )
             )
-            .padding(.horizontal, 16).padding(.vertical, 12)
+            .padding(.horizontal, 16).padding(.vertical, 8)
         }
         .background(bg)
     }
@@ -689,20 +803,22 @@ struct ChatView: View {
 
     private func loadHistory(conversationID: String) async {
         guard !conversationID.isEmpty else { return }
+        historyLoading = true
+        historyError = nil
         do {
             let result = try await appState.client.chatMessages(conversationID: conversationID, limit: 100)
             let loaded = result.messages.compactMap { m -> ChatMessage? in
                 guard let role = m.role, let content = m.content, !content.isEmpty else { return nil }
                 return ChatMessage(role: role, content: content)
             }
-            await MainActor.run {
-                withAnimation(.easeOut(duration: 0.18)) {
-                    messages = loaded
-                }
+            withAnimation(.easeOut(duration: 0.18)) {
+                messages = loaded
             }
+            startPolling(conversationID: conversationID)
         } catch {
-            // Silently fail — user can still chat
+            historyError = "Couldn't load chat history. Check your connection."
         }
+        historyLoading = false
     }
 
     // MARK: - Stop streaming
@@ -716,6 +832,37 @@ struct ChatView: View {
             if messages[i].content.isEmpty { messages[i].content = "(stopped)" }
         }
         isLoading = false
+    }
+
+    // MARK: - Background poll for subagent announces
+
+    /// Polls the current conversation every 8 seconds for new messages while idle.
+    /// This picks up subagent completion announces without requiring a persistent connection.
+    private func startPolling(conversationID: String) {
+        pollTask?.cancel()
+        pollTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                guard !Task.isCancelled, !isLoading else { continue }
+                guard let result = try? await appState.client.chatMessages(
+                    conversationID: conversationID, limit: 100
+                ) else { continue }
+                let loaded = result.messages.compactMap { m -> ChatMessage? in
+                    guard let role = m.role, let content = m.content, !content.isEmpty else { return nil }
+                    return ChatMessage(role: role, content: content)
+                }
+                await MainActor.run {
+                    if loaded.count > messages.count {
+                        withAnimation(.easeOut(duration: 0.2)) { messages = loaded }
+                    }
+                }
+            }
+        }
+    }
+
+    private func stopPolling() {
+        pollTask?.cancel()
+        pollTask = nil
     }
 
     // MARK: - Send (streaming)
@@ -732,7 +879,6 @@ struct ChatView: View {
         }
         if let agent = selectedAgent, !sendText.isEmpty {
             sendText = "@\(agent.name): \(sendText)"
-            selectedAgent = nil
         }
 
         // Extract text content from non-image attachments and prepend
@@ -797,29 +943,39 @@ struct ChatView: View {
                             streamRevision += 1
                         case "status":
                             break
+                        case "tool_start":
+                            let toolLabel = chunk.toolLabel ?? chunk.toolName ?? "tool"
+                            if !messages[idx].activeTools.contains(toolLabel) {
+                                messages[idx].activeTools.append(toolLabel)
+                            }
+                            streamRevision += 1
+                        case "tool_end":
+                            let toolLabel = chunk.toolLabel ?? chunk.toolName ?? "tool"
+                            messages[idx].activeTools.removeAll { $0 == toolLabel }
+                            if !messages[idx].completedTools.contains(toolLabel) {
+                                messages[idx].completedTools.append(toolLabel)
+                            }
+                            streamRevision += 1
                         case "done":
-                            // Always clean "Tools used:" lines from streamed content (may appear multiple times)
-                            let allToolsRe = try? NSRegularExpression(pattern: #"\n*Tools used:[^\n]*\n?"#)
-                            let current = messages[idx].content
-                            let cleaned2 = allToolsRe?.stringByReplacingMatches(
-                                in: current,
-                                range: NSRange(current.startIndex..., in: current),
-                                withTemplate: ""
-                            ) ?? current
-                            messages[idx].content = cleaned2.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if let r = chunk.reply, !r.isEmpty {
-                                let (cleaned, tools) = Self.stripToolsUsed(from: r)
-                                // Use the done reply as fallback if streaming didn't populate content
-                                if messages[idx].content.isEmpty {
-                                    messages[idx].content = cleaned
-                                }
-                                if let t = tools, messages[idx].toolsUsed == nil { messages[idx].toolsUsed = t }
+                            // Clear any remaining active tools (safety net)
+                            messages[idx].activeTools = []
+                            // Use streamed reply as fallback if token stream didn't populate content
+                            if messages[idx].content.isEmpty, let r = chunk.reply, !r.isEmpty {
+                                messages[idx].content = r.trimmingCharacters(in: .whitespacesAndNewlines)
                             }
                             messages[idx].isStreaming = false
                             messages[idx].phase = .done
                             messages[idx].provider = chunk.provider
+                            let wasNewConversation = conversationID == nil
                             if let cid = chunk.conversation_id { conversationID = cid }
                             isLoading = false; streamRevision += 1
+                            // For brand-new conversations, schedule a delayed sidebar refresh so the
+                            // AI-generated title (produced async in backend) appears shortly after.
+                            if wasNewConversation {
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+                                    appState.sidebarRefreshTrigger += 1
+                                }
+                            }
                         case "error":
                             messages[idx].content = chunk.text ?? "Server error"
                             messages[idx].isStreaming = false
@@ -1182,5 +1338,119 @@ struct MarkdownView: View {
 extension NSFont {
     func with(traits: NSFontTraitMask) -> NSFont {
         NSFontManager.shared.convert(self, toHaveTrait: traits)
+    }
+}
+
+// MARK: - Message segment parser (splits text and inline images)
+
+enum MessageSegment {
+    case text(String)
+    case image(url: URL, alt: String)
+
+    /// Split content on `![alt](url)` patterns. Returns a single `.text` segment when
+    /// there are no image matches (fast path for the vast majority of messages).
+    /// Handles both remote URLs (https://) and inline base64 data URLs (data:image/...).
+    static func parse(_ content: String) -> [MessageSegment] {
+        guard content.contains("![") else { return [.text(content)] }
+        // Match both https:// remote URLs and data: base64 inline images
+        guard let regex = try? NSRegularExpression(
+            pattern: #"!\[([^\]]*)\]\(((?:https?://|data:image/)[^\)]+)\)"#
+        ) else {
+            return [.text(content)]
+        }
+        let ns = content as NSString
+        let matches = regex.matches(in: content, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return [.text(content)] }
+
+        var segments: [MessageSegment] = []
+        var cursor = 0
+        for match in matches {
+            let matchRange = match.range
+            if matchRange.location > cursor {
+                let pre = ns.substring(with: NSRange(location: cursor, length: matchRange.location - cursor))
+                if !pre.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    segments.append(.text(pre))
+                }
+            }
+            let alt = match.range(at: 1).location != NSNotFound ? ns.substring(with: match.range(at: 1)) : ""
+            let urlStr = match.range(at: 2).location != NSNotFound ? ns.substring(with: match.range(at: 2)) : ""
+            if let url = URL(string: urlStr) {
+                segments.append(.image(url: url, alt: alt))
+            }
+            cursor = matchRange.location + matchRange.length
+        }
+        if cursor < ns.length {
+            let tail = ns.substring(from: cursor)
+            if !tail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                segments.append(.text(tail))
+            }
+        }
+        return segments
+    }
+}
+
+// MARK: - Remote image view (supports animated GIFs via NSImageView.animates)
+
+struct RemoteImageView: View {
+    let url: URL
+    @State private var image: NSImage?
+    @State private var failed = false
+
+    var body: some View {
+        Group {
+            if let img = image {
+                AnimatedNSImageView(image: img)
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: 480, maxHeight: 360)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            } else if failed {
+                // Fallback: show the URL as a tappable link
+                Link(url.absoluteString, destination: url)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.accentColor)
+            } else {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.secondary.opacity(0.08))
+                    .frame(height: 80)
+                    .overlay(ProgressView().scaleEffect(0.65))
+            }
+        }
+        .task(id: url) {
+            image = nil; failed = false
+            // Handle inline base64 data URLs (e.g. from image_gen tool: data:image/png;base64,...)
+            if url.scheme == "data" {
+                let raw = url.absoluteString
+                if let commaIdx = raw.firstIndex(of: ",") {
+                    let b64 = String(raw[raw.index(after: commaIdx)...])
+                    if let data = Data(base64Encoded: b64, options: .ignoreUnknownCharacters),
+                       let img = NSImage(data: data) {
+                        image = img
+                        return
+                    }
+                }
+                failed = true
+            } else if let (data, _) = try? await URLSession.shared.data(from: url),
+                      let img = NSImage(data: data) {
+                image = img
+            } else {
+                failed = true
+            }
+        }
+    }
+}
+
+/// NSViewRepresentable that wraps NSImageView with `animates = true` for GIF playback.
+private struct AnimatedNSImageView: NSViewRepresentable {
+    let image: NSImage
+
+    func makeNSView(context: Context) -> NSImageView {
+        let iv = NSImageView()
+        iv.animates = true
+        iv.imageScaling = .scaleProportionallyDown
+        return iv
+    }
+
+    func updateNSView(_ iv: NSImageView, context: Context) {
+        iv.image = image
     }
 }

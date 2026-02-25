@@ -3,10 +3,11 @@
 Desktop Mac app for Asta — same idea as [OpenClaw’s desktop Mac app](https://github.com/openclaw/openclaw/tree/main/apps/macos): a native menubar/standalone app that talks to the backend.
 
 **Current scope:**
-- **Tray → native menu:** Tap the menu bar icon to open a **dropdown menu** (OpenClaw-style: `.menuBarExtraStyle(.menu)` so Asta Panel, About, and Chat overlay open reliably). Menu shows status, RAM, then Asta Panel, Asta WebUI, Chat overlay, API docs, About, Quit.
-- **Previous “mini dashboard”:** Replaced with native menu so item actions run after the menu closes (**Asta WebUI**, Open Chat, **Chat overlay (⌥ Space)**, Open API docs, **Asta Panel**), About, Quit.
-- **Asta WebUI:** Opens the web UI in your browser. **Asta Panel:** Opens a **native Swift settings window** (tabs: General, Vision, Models, API Keys, Skills, Integrations, Cron, Notifications) — no web wrapper; all settings use Asta’s API. The **Settings** scene (Cmd+,) is a quick General tab; full control is in Asta Panel.
-- **Chat overlay:** Press **Option+Space** (or use “Chat overlay (⌥ Space)” from the tray) to open a dark-themed floating chat (Ask anything, toolbar: + / globe / screen / Thinking / mic / send), tall enough for two messages. Option+Space works when the app is active; for from-anywhere, grant **Accessibility** permission. Settings, Cron, and Reminders in Asta Panel use the same API as the web UI.
+- **Tray → native menu:** Tap the menu bar icon to open a **dropdown menu** (OpenClaw-style: `.menuBarExtraStyle(.menu)` so Asta Panel, About, and Chat overlay open reliably). Menu shows status, RAM, then Asta Panel, Chat overlay, API docs, About, Quit.
+- **Previous “mini dashboard”:** Replaced with native menu so item actions run after the menu closes (Open Chat, **Chat overlay (⌥ Space)**, Open API docs, **Asta Panel**), About, Quit.
+- **Asta Panel:** Opens a **native Swift settings window** for app/backend configuration (General, Persona, Models, API Keys, Skills, Knowledge, Channels, Schedule, Google, Connection, Permissions, About). The **Settings** scene (Cmd+,) is a quick General tab; full control is in Asta Panel.
+- **Agents hub:** In chat sidebar, directly under **New chat**, tap **Agents** to open the agent overlay (search, add/remove, create, edit, delete). Agent creation is no longer inside Settings tabs.
+- **Chat overlay:** Press **Option+Space** (or use “Chat overlay (⌥ Space)” from the tray) to open a dark-themed floating chat (Ask anything, toolbar: + / globe / screen / Thinking / mic / send), tall enough for two messages. Option+Space works when the app is active; for from-anywhere, grant **Accessibility** permission.
 
 ## Reference
 
@@ -26,7 +27,7 @@ The **first time** you open the app (click the menu bar icon), a **Setup** windo
 
 1. **Check backend** — The app checks if the Asta backend is running at `http://localhost:8010`.
 2. **If connected** — You see “Backend connected” and can tap **Continue** to close setup.
-3. **If not connected** — You see steps to start the backend (Terminal → `./asta.sh start` or `uvicorn app.main:app --port 8010`). Use **Retry** after starting the backend, **Open Web UI** to open the frontend in the browser, or **Skip for now** to use the app without the backend (menu and panels will work; chat and API features need the backend).
+3. **If not connected** — You see steps to start the backend (Terminal → `./asta.sh start` or `uvicorn app.main:app --port 8010`). Use **Retry** after starting the backend, or **Skip for now** to use the app without the backend (menu and panels will work; chat and API features need the backend).
 
 Setup is shown only once; the choice is stored and the window does not open again unless you reset it (delete the app’s UserDefaults or reinstall).
 
@@ -40,7 +41,7 @@ swift build
 swift run AstaMacApp
 ```
 
-Or run the binary: `MACAPP/.build/debug/AstaMacApp`. The app appears in the **menu bar** (brain icon). Click it to open the menu. Use **Asta Panel** for native settings (General, Vision, Models, Keys, Skills, Integrations, Cron, Notifications); **Asta WebUI** opens the web UI in the browser. Press **Option+Space** (or the tray button) for the chat overlay; for Option+Space from any app, grant Accessibility permission.
+Or run the binary: `MACAPP/.build/debug/AstaMacApp`. The app appears in the **menu bar** (brain icon). Click it to open the menu. Use **Asta Panel** for native settings and use the chat sidebar **Agents** button for agent marketplace/creation. Press **Option+Space** (or the tray button) for the chat overlay; for Option+Space from any app, grant Accessibility permission.
 
 ## Build .app and DMG (installer)
 

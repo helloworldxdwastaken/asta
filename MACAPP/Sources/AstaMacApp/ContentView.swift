@@ -6,6 +6,7 @@ import AppKit
 struct ContentView: View {
     @ObservedObject var appState: AppState
     @State private var showSettings = false
+    @State private var showAgents = false
     @State private var selectedConvID: String? = nil
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
@@ -25,6 +26,7 @@ struct ContentView: View {
                 appState:           appState,
                 selectedConvID:     $selectedConvID,
                 showSettings:       $showSettings,
+                showAgents:         $showAgents,
                 onSelectConversation: selectConversation
             )
             .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 290)
@@ -38,7 +40,10 @@ struct ContentView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView(appState: appState)
         }
+        .sheet(isPresented: $showAgents) {
+            AgentsSettingsTab(appState: appState)
+                .frame(width: 760, height: 560)
+        }
         .task { await appState.load() }
     }
 }
-
