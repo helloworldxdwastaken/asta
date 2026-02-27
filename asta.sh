@@ -735,13 +735,6 @@ run_doc() {
         issues=1
     fi
 
-    if command -v npm >/dev/null 2>&1; then
-        print_success "npm       ${GREEN}ok${NC}"
-    else
-        print_error "npm       ${RED}missing${NC}"
-        issues=1
-    fi
-
     if [ -f "$BACKEND_DIR/.venv/bin/activate" ]; then
         print_success "backend venv   ${GREEN}present${NC}"
     else

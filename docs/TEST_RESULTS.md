@@ -27,10 +27,10 @@ This file records the latest documented smoke-test run. Re-run before release:
 | GET /api/notifications | ✅ 200 | reminders list |
 | POST /api/rag/learn | ✅ 200 | Uses Ollama embeddings (`nomic-embed-text`). Requires Ollama to be running and reachable. |
 
-## Frontend
+## macOS app
 
-- `npm run build` (frontend): ✅ succeeds.
-- Manual: open http://localhost:5173 (after `./asta.sh start` or `npm run dev` in frontend) and check Dashboard, Chat, Files, Learning, Audio notes, Skills, Settings.
+- Build the macOS app from `MACAPP/` in Xcode and connect to `http://localhost:8010`.
+- Manual: check Dashboard, Chat, Files, Learning, Audio notes, Skills, Settings in the app.
 
 ## Environment-dependent behavior
 

@@ -2,6 +2,17 @@
 
 All notable changes to Asta are documented here.
 
+## [1.3.46] - 2026-02-27
+
+### Changed
+
+- **macOS app is now the primary UI** — Removed the React/Vite web panel (`frontend/`). The macOS SwiftUI app (`MACAPP/`) is the only supported UI. All docs and self-knowledge updated to reflect this.
+- **Docs cleaned up** — SPEC, INSTALL, ERRORS, TOOLS updated to remove all frontend/React/npm/5173 references and point to the macOS app instead.
+- **asta.sh doc** — Removed npm check from diagnostics (no longer relevant).
+- **TOOLS.md architecture note** — Added explicit architecture entry clarifying macOS app is the UI, backend is FastAPI.
+
+---
+
 ## [1.3.45] - 2026-02-25
 
 ### Added

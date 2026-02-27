@@ -10,7 +10,7 @@ Quick reference for errors you might see and how to fix them.
 |-------|-------|----------|
 | **Virtualenv missing** | No `.venv` in `backend/` | `cd backend && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt` |
 | **ModuleNotFoundError** / **No module named 'X'** | Dependency not installed | `cd backend && source .venv/bin/activate && pip install -r requirements.txt` |
-| **Port 8010 / 5173 already in use** | Another process holds the port | `./asta.sh restart` to free and restart. Or use another port and set `VITE_API_URL` / `ASTA_API_URL`. |
+| **Port 8010 already in use** | Another process holds the port | `./asta.sh restart` to free and restart. Or use another port and set `ASTA_API_URL`. |
 | **Directory not found: backend** | Wrong working directory | Run from the `asta/` repo root. |
 
 ---
@@ -20,7 +20,7 @@ Quick reference for errors you might see and how to fix them.
 | Error | Cause | Solution |
 |-------|-------|----------|
 | **API off** / **Cannot reach Asta API** | Backend not running | `./asta.sh start` or run uvicorn manually. |
-| **CORS error** | Frontend origin not allowed | Add your origin to `ASTA_CORS_ORIGINS` in `backend/.env` (comma-separated). |
+| **CORS error** | Request origin not allowed | Add your origin to `ASTA_CORS_ORIGINS` in `backend/.env` (comma-separated). |
 
 ---
 
@@ -122,8 +122,8 @@ Quick reference for errors you might see and how to fix them.
 |---------|-------|----------|
 | **Telegram handler error** | Bot token invalid or network issue | Check `TELEGRAM_BOT_TOKEN` in Settings or `backend/.env`. Get token from [@BotFather](https://t.me/BotFather). |
 | **Telegram shows raw `![...](...)` instead of image** | Running an older backend that only handled GIF links, not generic markdown images/data URLs. | Update backend to latest and restart (`./asta.sh restart`). Current builds send markdown image replies as native Telegram photos/animations. |
-| **Calling old WhatsApp endpoints returns 404** | WhatsApp bridge endpoints were removed from backend. | Use Telegram/web channels. If you still have old frontend code calling `/api/whatsapp/*`, update the client to current APIs. |
-| **Sent image in web chat but Asta cannot analyze it** | Web image upload path is not implemented yet. | Use Telegram photo input for vision turns. |
+| **Calling old WhatsApp endpoints returns 404** | WhatsApp bridge endpoints were removed from backend. | Use Telegram or the macOS app. |
+| **Sent image in macOS app chat but Asta cannot analyze it** | Web image upload path is not implemented yet. | Use Telegram photo input for vision turns. |
 
 ---
 
@@ -152,5 +152,4 @@ Quick reference for errors you might see and how to fix them.
 ## Logs & debugging
 
 - **Backend logs:** `backend/backend.log` or `backend.log` in repo root (depends on where asta.sh runs from).
-- **Frontend logs:** `frontend.log` or terminal where `npm run dev` runs.
 - **API docs:** http://localhost:8010/docs for live endpoints and testing.
