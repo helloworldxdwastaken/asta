@@ -35,6 +35,32 @@ from app.services.giphy_service import GiphyService
 from app.stream_state_machine import AssistantStreamStateMachine
 from app.thinking_capabilities import supports_xhigh_thinking
 
+# Extracted modules — pure utilities with no DB/async I/O
+from app.handler_thinking import (
+    _THINK_LEVELS, _REASONING_MODES, _FINAL_MODES, _STRICT_FINAL_UNSUPPORTED_PROVIDERS,
+    _THINK_DIRECTIVE_PATTERN, _REASONING_DIRECTIVE_PATTERN, _REASONING_QUICK_TAG_RE,
+    _REASONING_FINAL_TAG_RE, _REASONING_THINK_TAG_RE,
+    _strip_think_blocks, _longest_common_prefix_size, _largest_suffix_prefix_overlap,
+    _merge_stream_source_text, _compute_incremental_delta, _plan_stream_text_update,
+    _thinking_instruction, _normalize_thinking_level, _normalize_reasoning_mode,
+    _parse_inline_thinking_directive, _parse_inline_reasoning_directive,
+    _supports_xhigh_thinking, _format_thinking_options, _reasoning_instruction,
+    _final_tag_instruction, _parse_fenced_code_regions, _is_inside_code_region,
+    _parse_inline_code_regions, _build_code_regions, _strip_pattern_outside_code,
+    _apply_reasoning_trim, _extract_final_tag_content, _strip_reasoning_tags_from_text,
+    _extract_thinking_from_tagged_text, _extract_thinking_from_tagged_stream,
+    _format_reasoning_message, _extract_reasoning_blocks,
+)
+from app.tool_call_parser import (
+    _TOOL_TRACE_GROUP, _TOOL_TRACE_DEFAULT_ACTION, _MUTATING_TOOL_NAMES,
+    _MUTATING_ACTION_NAMES, _RECOVERABLE_TOOL_ERROR_KEYWORDS,
+    _build_tool_trace_label, _dedupe_keep_order, _render_tool_trace,
+    _extract_tool_error_message, _is_recoverable_tool_error, _is_likely_mutating_tool_call,
+    _build_tool_action_fingerprint, _tool_names_from_defs, _parse_inline_tool_args,
+    _extract_textual_tool_calls, _has_tool_call_markup, _strip_tool_call_markup,
+    _strip_bracket_tool_protocol,
+)
+
 logger = logging.getLogger(__name__)
 
 # Short acknowledgments: when user sends only this, we nudge the model to reply with one phrase
@@ -189,31 +215,6 @@ _AUTO_SUBAGENT_COMPLEXITY_VERBS = (
     "test",
     "fix",
 )
-_THINK_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh")
-_REASONING_MODES = ("off", "on", "stream")
-_FINAL_MODES = ("off", "strict")
-# OpenClaw-style: Ollama should not require strict <final> tags.
-_STRICT_FINAL_UNSUPPORTED_PROVIDERS = frozenset({"ollama"})
-_THINK_DIRECTIVE_PATTERN = re.compile(
-    r"(?:^|\s)/(?:thinking|think|t)(?=$|\s|:)",
-    re.IGNORECASE,
-)
-_REASONING_DIRECTIVE_PATTERN = re.compile(
-    r"(?:^|\s)/(?:reasoning|reason)(?=$|\s|:)",
-    re.IGNORECASE,
-)
-_REASONING_QUICK_TAG_RE = re.compile(
-    r"<\s*/?\s*(?:think(?:ing)?|thought|antthinking|final)\b",
-    re.IGNORECASE,
-)
-_REASONING_FINAL_TAG_RE = re.compile(
-    r"<\s*/?\s*final\b[^<>]*>",
-    re.IGNORECASE,
-)
-_REASONING_THINK_TAG_RE = re.compile(
-    r"<\s*(/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>",
-    re.IGNORECASE,
-)
 _STATUS_PREFIX = "[[ASTA_STATUS]]"
 _SENSITIVE_DB_KEY_NAMES = (
     "notion_api_key",
@@ -232,105 +233,6 @@ _REDACTED_SECRET = "[REDACTED_SECRET]"
 _REDACTED_NOTION_TOKEN = "[REDACTED_NOTION_TOKEN]"
 _NOTION_TOKEN_RE = re.compile(r"\bntn_[A-Za-z0-9_-]{8,}\b")
 _BEARER_HEADER_RE = re.compile(r"(?i)(authorization\s*:\s*bearer\s+)([^\s\"'`]+)")
-
-_TOOL_TRACE_GROUP = {
-    "exec": "Terminal",
-    "bash": "Terminal",
-    "process": "Process",
-    "list_directory": "Files",
-    "read_file": "Files",
-    "write_file": "Files",
-    "allow_path": "Files",
-    "delete_file": "Files",
-    "delete_matching_files": "Files",
-    "read": "Files",
-    "write": "Files",
-    "edit": "Files",
-    "apply_patch": "Files",
-    "web_search": "Web",
-    "web_fetch": "Web",
-    "memory_search": "Memory",
-    "memory_get": "Memory",
-    "message": "Message",
-    "reminders": "Reminders",
-    "cron": "Cron",
-    "agents_list": "Subagents",
-    "sessions_spawn": "Subagents",
-    "sessions_list": "Subagents",
-    "sessions_history": "Subagents",
-    "sessions_send": "Subagents",
-    "sessions_stop": "Subagents",
-}
-
-_TOOL_TRACE_DEFAULT_ACTION = {
-    "list_directory": "list",
-    "read_file": "read",
-    "write_file": "write",
-    "allow_path": "allow",
-    "delete_file": "delete",
-    "delete_matching_files": "delete-many",
-    "read": "read",
-    "write": "write",
-    "edit": "edit",
-    "apply_patch": "patch",
-    "web_search": "search",
-    "web_fetch": "fetch",
-    "memory_search": "search",
-    "memory_get": "get",
-    "agents_list": "agents",
-    "sessions_spawn": "spawn",
-    "sessions_list": "list",
-    "sessions_history": "history",
-    "sessions_send": "send",
-    "sessions_stop": "stop",
-}
-
-_MUTATING_TOOL_NAMES = frozenset(
-    {
-        "exec",
-        "bash",
-        "write_file",
-        "allow_path",
-        "delete_file",
-        "delete_matching_files",
-        "write",
-        "edit",
-        "apply_patch",
-        "sessions_spawn",
-        "sessions_send",
-        "sessions_stop",
-    }
-)
-_MUTATING_ACTION_NAMES = frozenset(
-    {
-        "add",
-        "create",
-        "set",
-        "update",
-        "edit",
-        "remove",
-        "delete",
-        "cancel",
-        "clear",
-        "send",
-        "spawn",
-        "stop",
-        "run",
-        "enable",
-        "disable",
-        "pause",
-        "resume",
-    }
-)
-_RECOVERABLE_TOOL_ERROR_KEYWORDS = (
-    "required",
-    "missing",
-    "invalid",
-    "must be",
-    "must have",
-    "needs",
-    "requires",
-)
 
 
 async def _emit_live_stream_event(
@@ -376,9 +278,91 @@ async def _emit_tool_event(
             logger.debug("Could not send tool status to telegram: %s", e)
 
 
-def _strip_think_blocks(text: str) -> str:
-    """Remove <think>...</think> reasoning blocks from text (case-insensitive, greedy)."""
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL).strip()
+def _make_status_message(text: str) -> str:
+    return f"{_STATUS_PREFIX}{(text or '').strip()}"
+
+
+async def _emit_stream_status(
+    *,
+    db,
+    conversation_id: str,
+    channel: str,
+    channel_target: str,
+    text: str,
+    stream_event_callback=None,
+    stream_event_type: str = "status",
+) -> None:
+    msg = (text or "").strip()
+    if not msg:
+        return
+    if callable(stream_event_callback):
+        await _emit_live_stream_event(
+            stream_event_callback,
+            {
+                "type": stream_event_type,
+                "text": msg,
+            },
+        )
+    ch = (channel or "").strip().lower()
+    if ch == "telegram" and channel_target:
+        try:
+            await send_notification(ch, channel_target, msg)
+        except Exception as e:
+            logger.debug("Could not send stream status to channel=%s: %s", ch, e)
+    # For live-stream web requests, status is delivered over SSE and should stay ephemeral.
+    if ch == "web" and not callable(stream_event_callback):
+        try:
+            await db.add_message(conversation_id, "assistant", _make_status_message(msg), "script")
+        except Exception as e:
+            logger.debug("Could not persist stream status to web conversation: %s", e)
+
+
+def _sanitize_silent_reply_markers(text: str) -> tuple[str, bool]:
+    """Strip NO_REPLY control marker and tell whether this should be a silent/no-output reply."""
+    raw = (text or "")
+    if not raw.strip():
+        return "", False
+
+    # Exact control token means "do not emit assistant text".
+    if re.fullmatch(r"(?is)\s*NO_REPLY\s*", raw):
+        return "", True
+
+    # Remove standalone NO_REPLY lines and trailing token leakage.
+    cleaned = re.sub(r"(?im)^\s*NO_REPLY\s*$", "", raw)
+    cleaned = re.sub(r"(?i)\s*NO_REPLY\s*$", "", cleaned)
+    cleaned = re.sub(r"(?i)^\s*NO_REPLY\s*", "", cleaned)
+    cleaned = cleaned.strip()
+
+    # If stripping markers left no user-facing text, keep it silent.
+    if not cleaned:
+        return "", True
+    return cleaned, False
+
+
+async def _emit_reasoning_stream_progressively(
+    *,
+    db,
+    conversation_id: str,
+    channel: str,
+    channel_target: str,
+    reasoning: str,
+) -> None:
+    lines = [line.strip() for line in (reasoning or "").splitlines() if line.strip()]
+    if not lines:
+        return
+    built: list[str] = []
+    for line in lines:
+        built.append(line)
+        formatted = _format_reasoning_message("\n".join(built))
+        if not formatted:
+            continue
+        await _emit_stream_status(
+            db=db,
+            conversation_id=conversation_id,
+            channel=channel,
+            channel_target=channel_target,
+            text=formatted,
+        )
 
 
 async def _generate_conversation_title(
@@ -432,94 +416,6 @@ async def _generate_conversation_title(
             logger.debug("Auto-titled conversation %s → %r", cid, title)
     except Exception as e:
         logger.debug("Could not auto-title conversation %s: %s", cid, e)
-
-
-def _longest_common_prefix_size(left: str, right: str) -> int:
-    max_len = min(len(left), len(right))
-    idx = 0
-    while idx < max_len and left[idx] == right[idx]:
-        idx += 1
-    return idx
-
-
-def _largest_suffix_prefix_overlap(left: str, right: str, *, max_scan: int = 2048) -> int:
-    """Return overlap size where suffix(left) == prefix(right)."""
-    if not left or not right:
-        return 0
-    cap = min(len(left), len(right), max_scan)
-    for size in range(cap, 0, -1):
-        if left.endswith(right[:size]):
-            return size
-    return 0
-
-
-def _merge_stream_source_text(current: str, incoming: str) -> str:
-    """Merge provider stream text while tolerating duplicated or full-content chunks.
-
-    Providers should send text deltas, but some fallbacks can emit snapshots. This keeps
-    the accumulated source text monotonic and avoids duplicate appends.
-    """
-    cur = current or ""
-    inc = incoming or ""
-    if not inc:
-        return cur
-    if not cur:
-        return inc
-
-    # Incoming is full snapshot that already includes current content.
-    if inc.startswith(cur):
-        return inc
-    # Incoming is duplicate/older subset.
-    if cur.startswith(inc) or inc in cur:
-        return cur
-
-    overlap = _largest_suffix_prefix_overlap(cur, inc)
-    if overlap > 0:
-        return cur + inc[overlap:]
-
-    # Snapshot style fallback that still contains current text somewhere.
-    if cur in inc and len(inc) >= len(cur):
-        return inc
-
-    return cur + inc
-
-
-def _compute_incremental_delta(previous: str, current: str) -> str:
-    prev = previous or ""
-    cur = current or ""
-    if not cur:
-        return ""
-    if cur.startswith(prev):
-        return cur[len(prev):]
-    common = _longest_common_prefix_size(prev, cur)
-    if common > 0:
-        return cur[common:]
-    return cur
-
-
-def _plan_stream_text_update(
-    *,
-    previous: str,
-    current: str,
-    allow_rewrite: bool = False,
-) -> tuple[bool, str, bool]:
-    """Plan a streaming text update.
-
-    Returns (should_emit, delta, rewrote_non_prefix).
-    """
-    prev = previous or ""
-    # Only strip leading whitespace — trailing newlines are part of content
-    cur = (current or "").lstrip()
-    if not cur or cur == prev:
-        return False, "", False
-    if prev and not cur.startswith(prev):
-        if not allow_rewrite:
-            return False, "", False
-        return True, cur, True
-    delta = _compute_incremental_delta(prev, cur)
-    if not delta and cur == prev:
-        return False, "", False
-    return True, delta or cur, False
 
 
 def _is_short_acknowledgment(text: str) -> bool:
@@ -733,499 +629,6 @@ async def _run_vision_preprocessor(
         model_used = str(chat_kwargs.get("model") or "").strip() or None
         return analysis[:5000], candidate, model_used
     return None
-
-
-def _thinking_instruction(level: str) -> str:
-    lv = (level or "off").strip().lower()
-    if lv == "off":
-        return ""
-    if lv == "minimal":
-        return (
-            "\n\n[THINKING]\n"
-            "Thinking level: minimal. Keep reasoning very brief, but still verify critical facts "
-            "and tool outputs before answering."
-        )
-    if lv == "low":
-        return (
-            "\n\n[THINKING]\n"
-            "Thinking level: low. Spend a bit more effort before answering. "
-            "Double-check tool outputs and avoid assumptions."
-        )
-    if lv == "medium":
-        return (
-            "\n\n[THINKING]\n"
-            "Thinking level: medium. Plan briefly before answering, validate tool output, "
-            "and prefer factual, verified replies over quick guesses."
-        )
-    if lv == "high":
-        return (
-            "\n\n[THINKING]\n"
-            "Thinking level: high. Do deeper internal planning and verification. "
-            "For external-state claims (files, reminders, notes, statuses), rely on real tool results only."
-        )
-    if lv == "xhigh":
-        return (
-            "\n\n[THINKING]\n"
-            "Thinking level: xhigh. Use maximum deliberate planning and strict verification. "
-            "For any external-state claim, require concrete tool evidence before asserting results."
-        )
-    return ""
-
-
-def _normalize_thinking_level(raw: str | None) -> str | None:
-    if raw is None:
-        return None
-    key = raw.strip().lower()
-    if not key:
-        return None
-    collapsed = re.sub(r"[\s_-]+", "", key)
-    if collapsed in ("xhigh", "extrahigh"):
-        return "xhigh"
-    if key in ("off",):
-        return "off"
-    if key in ("on", "enable", "enabled"):
-        return "low"
-    if key in ("min", "minimal"):
-        return "minimal"
-    if key in ("low", "thinkhard", "think-hard", "think_hard"):
-        return "low"
-    if key in ("mid", "med", "medium", "thinkharder", "think-harder", "harder"):
-        return "medium"
-    if key in ("high", "ultra", "ultrathink", "thinkhardest", "highest", "max"):
-        return "high"
-    if key in ("think",):
-        return "minimal"
-    return None
-
-
-def _normalize_reasoning_mode(raw: str | None) -> str | None:
-    if raw is None:
-        return None
-    key = raw.strip().lower()
-    if not key:
-        return None
-    if key in ("off", "false", "no", "0", "hide", "hidden", "disable", "disabled"):
-        return "off"
-    if key in ("on", "true", "yes", "1", "show", "visible", "enable", "enabled"):
-        return "on"
-    if key in ("stream", "streaming", "draft", "live"):
-        return "stream"
-    return None
-
-
-def _parse_inline_thinking_directive(text: str) -> tuple[bool, str | None, str | None, str]:
-    """Parse OpenClaw-style inline thinking directive in mixed text.
-
-    Returns (matched, normalized_level_or_none, raw_level_or_none, cleaned_text).
-    """
-    raw = (text or "")
-    m = _THINK_DIRECTIVE_PATTERN.search(raw)
-    if not m:
-        return False, None, None, raw
-    start, end = m.span()
-    i = end
-    length = len(raw)
-    while i < length and raw[i].isspace():
-        i += 1
-    if i < length and raw[i] == ":":
-        i += 1
-        while i < length and raw[i].isspace():
-            i += 1
-    arg_start = i
-    while i < length and (raw[i].isalpha() or raw[i] in "-_"):
-        i += 1
-    raw_level = (raw[arg_start:i] or "").strip().lower() or None
-    level = _normalize_thinking_level(raw_level)
-    cleaned = (raw[:start] + " " + raw[i:]).strip()
-    cleaned = re.sub(r"\s+", " ", cleaned)
-    return True, level, raw_level, cleaned
-
-
-def _parse_inline_reasoning_directive(text: str) -> tuple[bool, str | None, str | None, str]:
-    """Parse OpenClaw-style inline reasoning directive in mixed text.
-
-    Returns (matched, normalized_mode_or_none, raw_mode_or_none, cleaned_text).
-    """
-    raw = (text or "")
-    m = _REASONING_DIRECTIVE_PATTERN.search(raw)
-    if not m:
-        return False, None, None, raw
-    start, end = m.span()
-    i = end
-    length = len(raw)
-    while i < length and raw[i].isspace():
-        i += 1
-    if i < length and raw[i] == ":":
-        i += 1
-        while i < length and raw[i].isspace():
-            i += 1
-    arg_start = i
-    while i < length and (raw[i].isalpha() or raw[i] in "-_"):
-        i += 1
-    raw_mode = (raw[arg_start:i] or "").strip().lower() or None
-    mode = _normalize_reasoning_mode(raw_mode)
-    cleaned = (raw[:start] + " " + raw[i:]).strip()
-    cleaned = re.sub(r"\s+", " ", cleaned)
-    return True, mode, raw_mode, cleaned
-
-
-def _supports_xhigh_thinking(provider: str | None, model: str | None) -> bool:
-    return supports_xhigh_thinking(provider, model)
-
-
-def _format_thinking_options(provider: str | None, model: str | None) -> str:
-    options = ["off", "minimal", "low", "medium", "high"]
-    if _supports_xhigh_thinking(provider, model):
-        options.append("xhigh")
-    return ", ".join(options)
-
-
-async def _emit_reasoning_stream_progressively(
-    *,
-    db,
-    conversation_id: str,
-    channel: str,
-    channel_target: str,
-    reasoning: str,
-) -> None:
-    lines = [line.strip() for line in (reasoning or "").splitlines() if line.strip()]
-    if not lines:
-        return
-    built: list[str] = []
-    for line in lines:
-        built.append(line)
-        formatted = _format_reasoning_message("\n".join(built))
-        if not formatted:
-            continue
-        await _emit_stream_status(
-            db=db,
-            conversation_id=conversation_id,
-            channel=channel,
-            channel_target=channel_target,
-            text=formatted,
-        )
-
-
-def _reasoning_instruction(mode: str) -> str:
-    rm = (mode or "off").strip().lower()
-    if rm not in ("on", "stream"):
-        return ""
-    return (
-        "\n\n[REASONING]\n"
-        "Before your final answer, you MUST include exactly one brief rationale block inside "
-        "<think>...</think>. Do not skip it in this mode. "
-        "Keep it short (1-3 lines), factual, and directly tied to tool results when tools are used."
-    )
-
-
-def _final_tag_instruction(mode: str) -> str:
-    fm = (mode or "off").strip().lower()
-    if fm != "strict":
-        return ""
-    return (
-        "\n\n[FINAL]\n"
-        "You MUST wrap user-visible output in exactly one <final>...</final> block. "
-        "Text outside <final> may be hidden."
-    )
-
-
-def _parse_fenced_code_regions(text: str) -> list[tuple[int, int]]:
-    regions: list[tuple[int, int]] = []
-    open_region: tuple[int, str, int] | None = None
-    offset = 0
-    line_pattern = re.compile(r"^( {0,3})(`{3,}|~{3,})(.*)$")
-    length = len(text)
-
-    while offset <= length:
-        next_newline = text.find("\n", offset)
-        line_end = length if next_newline == -1 else next_newline
-        line = text[offset:line_end]
-        match = line_pattern.match(line)
-        if match:
-            marker = match.group(2)
-            marker_char = marker[0]
-            marker_len = len(marker)
-            if open_region is None:
-                open_region = (offset, marker_char, marker_len)
-            elif open_region[1] == marker_char and marker_len >= open_region[2]:
-                regions.append((open_region[0], line_end))
-                open_region = None
-        if next_newline == -1:
-            break
-        offset = next_newline + 1
-
-    if open_region is not None:
-        regions.append((open_region[0], length))
-
-    regions.sort(key=lambda region: region[0])
-    return regions
-
-
-def _is_inside_code_region(index: int, regions: list[tuple[int, int]]) -> bool:
-    return any(start <= index < end for start, end in regions)
-
-
-def _parse_inline_code_regions(text: str, fenced_regions: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    regions: list[tuple[int, int]] = []
-    open_ticks = 0
-    open_start = -1
-    i = 0
-    fenced_index = 0
-    length = len(text)
-
-    while i < length:
-        while fenced_index < len(fenced_regions) and i >= fenced_regions[fenced_index][1]:
-            fenced_index += 1
-        if fenced_index < len(fenced_regions):
-            fenced_start, fenced_end = fenced_regions[fenced_index]
-            if fenced_start <= i < fenced_end:
-                i = fenced_end
-                continue
-        if text[i] != "`":
-            i += 1
-            continue
-
-        run_start = i
-        run_length = 0
-        while i < length and text[i] == "`":
-            run_length += 1
-            i += 1
-
-        if open_ticks == 0:
-            open_ticks = run_length
-            open_start = run_start
-        elif run_length == open_ticks:
-            regions.append((open_start, i))
-            open_ticks = 0
-            open_start = -1
-
-    if open_ticks > 0 and open_start >= 0:
-        regions.append((open_start, length))
-
-    regions.sort(key=lambda region: region[0])
-    return regions
-
-
-def _build_code_regions(text: str) -> list[tuple[int, int]]:
-    fenced = _parse_fenced_code_regions(text)
-    inline = _parse_inline_code_regions(text, fenced)
-    regions = fenced + inline
-    regions.sort(key=lambda region: region[0])
-    return regions
-
-
-def _strip_pattern_outside_code(
-    text: str,
-    pattern: re.Pattern[str],
-    code_regions: list[tuple[int, int]],
-) -> str:
-    if not text:
-        return text
-    output: list[str] = []
-    last_index = 0
-    for match in pattern.finditer(text):
-        index = match.start()
-        if _is_inside_code_region(index, code_regions):
-            continue
-        output.append(text[last_index:index])
-        last_index = match.end()
-    output.append(text[last_index:])
-    return "".join(output)
-
-
-def _apply_reasoning_trim(value: str, mode: str = "both") -> str:
-    trim_mode = (mode or "both").strip().lower()
-    if trim_mode == "none":
-        return value
-    if trim_mode == "start":
-        return value.lstrip()
-    return value.strip()
-
-
-def _extract_final_tag_content(text: str) -> tuple[str, bool]:
-    """Return content inside <final> blocks (code-safe), plus whether a real final tag was seen."""
-    raw = (text or "")
-    if not raw:
-        return "", False
-    code_regions = _build_code_regions(raw)
-    in_final = False
-    saw_final = False
-    last_index = 0
-    out_parts: list[str] = []
-
-    for match in _REASONING_FINAL_TAG_RE.finditer(raw):
-        index = match.start()
-        if _is_inside_code_region(index, code_regions):
-            continue
-        tag_text = match.group(0) or ""
-        is_close = bool(re.match(r"<\s*/", tag_text))
-        if not in_final and not is_close:
-            in_final = True
-            saw_final = True
-            last_index = match.end()
-            continue
-        if in_final and is_close:
-            out_parts.append(raw[last_index:index])
-            in_final = False
-            last_index = match.end()
-
-    if in_final:
-        out_parts.append(raw[last_index:])
-
-    return "".join(out_parts), saw_final
-
-
-def _strip_reasoning_tags_from_text(
-    text: str,
-    *,
-    mode: str = "strict",  # strict | preserve
-    trim: str = "both",    # none | start | both
-    strict_final: bool = False,
-) -> str:
-    """OpenClaw-style thinking/final tag stripping with code-span safety."""
-    raw = (text or "")
-    if not raw:
-        return raw
-    if not _REASONING_QUICK_TAG_RE.search(raw):
-        if strict_final:
-            return ""
-        return _apply_reasoning_trim(raw, trim)
-
-    cleaned = raw
-    code_regions = _build_code_regions(cleaned)
-
-    result_parts: list[str] = []
-    in_thinking = False
-    last_index = 0
-
-    for match in _REASONING_THINK_TAG_RE.finditer(cleaned):
-        index = match.start()
-        if _is_inside_code_region(index, code_regions):
-            continue
-        is_close = bool(match.group(1))
-
-        if not in_thinking:
-            result_parts.append(cleaned[last_index:index])
-            if not is_close:
-                in_thinking = True
-        elif is_close:
-            in_thinking = False
-
-        last_index = match.end()
-
-    mode_norm = (mode or "strict").strip().lower()
-    if (not in_thinking) or mode_norm == "preserve":
-        result_parts.append(cleaned[last_index:])
-
-    without_thinking = "".join(result_parts)
-
-    if strict_final:
-        final_only, saw_final = _extract_final_tag_content(without_thinking)
-        if not saw_final:
-            return ""
-        final_code_regions = _build_code_regions(final_only)
-        final_only = _strip_pattern_outside_code(final_only, _REASONING_FINAL_TAG_RE, final_code_regions)
-        return _apply_reasoning_trim(final_only, trim)
-
-    pre_code_regions = _build_code_regions(without_thinking)
-    without_final_tags = _strip_pattern_outside_code(
-        without_thinking,
-        _REASONING_FINAL_TAG_RE,
-        pre_code_regions,
-    )
-    return _apply_reasoning_trim(without_final_tags, trim)
-
-
-def _extract_thinking_from_tagged_text(text: str) -> str:
-    """Extract text inside closed <think>/<thinking>/<thought>/<antthinking> blocks."""
-    raw = (text or "")
-    if not raw:
-        return ""
-    if not _REASONING_QUICK_TAG_RE.search(raw):
-        return ""
-
-    code_regions = _build_code_regions(raw)
-    reasoning_parts: list[str] = []
-    in_thinking = False
-    reasoning_start = 0
-
-    for match in _REASONING_THINK_TAG_RE.finditer(raw):
-        index = match.start()
-        if _is_inside_code_region(index, code_regions):
-            continue
-        is_close = bool(match.group(1))
-
-        if not in_thinking and not is_close:
-            in_thinking = True
-            reasoning_start = match.end()
-            continue
-
-        if in_thinking and is_close:
-            chunk = raw[reasoning_start:index].strip()
-            if chunk:
-                reasoning_parts.append(chunk)
-            in_thinking = False
-
-    return "\n\n".join(reasoning_parts).strip()
-
-
-def _extract_thinking_from_tagged_stream(text: str) -> str:
-    """Streaming-friendly extraction: closed blocks first, otherwise last open block tail."""
-    raw = (text or "")
-    if not raw:
-        return ""
-    if not _REASONING_QUICK_TAG_RE.search(raw):
-        return ""
-
-    closed = _extract_thinking_from_tagged_text(raw)
-    if closed:
-        return closed
-
-    code_regions = _build_code_regions(raw)
-    last_open_start: int | None = None
-    last_open_end: int | None = None
-    last_close_start: int | None = None
-
-    for match in _REASONING_THINK_TAG_RE.finditer(raw):
-        index = match.start()
-        if _is_inside_code_region(index, code_regions):
-            continue
-        is_close = bool(match.group(1))
-        if is_close:
-            last_close_start = index
-        else:
-            last_open_start = index
-            last_open_end = match.end()
-
-    if last_open_start is None or last_open_end is None:
-        return ""
-    if last_close_start is not None and last_close_start > last_open_start:
-        return closed
-
-    return raw[last_open_end:].strip()
-
-
-def _format_reasoning_message(text: str) -> str:
-    trimmed = (text or "").strip()
-    if not trimmed:
-        return ""
-    return f"Reasoning:\n{trimmed}"
-
-
-def _extract_reasoning_blocks(text: str, *, strict_final: bool = False) -> tuple[str, str]:
-    raw = (text or "")
-    if not raw:
-        return "", ""
-    final_text = _strip_reasoning_tags_from_text(
-        raw,
-        mode="strict",
-        trim="both",
-        strict_final=strict_final,
-    )
-    reasoning_text = _extract_thinking_from_tagged_text(raw)
-    if not reasoning_text:
-        reasoning_text = _extract_thinking_from_tagged_stream(raw)
-    return final_text, reasoning_text
 
 
 def _looks_like_reminder_set_request(text: str) -> bool:
@@ -1631,405 +1034,6 @@ def _extract_target_id(text: str) -> int | None:
     if len(nums) == 1 and len(t.split()) <= 4:
         return int(nums[0])
     return None
-
-
-def _build_tool_trace_label(tool_name: str, action: str | None = None) -> str:
-    group = _TOOL_TRACE_GROUP.get(tool_name, tool_name)
-    act = (action or _TOOL_TRACE_DEFAULT_ACTION.get(tool_name) or "").strip().lower()
-    if "/" in act:
-        act = act.split("/", 1)[0].strip()
-    if act:
-        return f"{group} ({act})"
-    return group
-
-
-def _dedupe_keep_order(items: list[str]) -> list[str]:
-    out: list[str] = []
-    seen: set[str] = set()
-    for item in items:
-        k = item.strip()
-        if not k or k in seen:
-            continue
-        seen.add(k)
-        out.append(k)
-    return out
-
-
-def _render_tool_trace(labels: list[str]) -> str:
-    uniq = _dedupe_keep_order(labels)
-    if not uniq:
-        return "Tools used: none (AI-only reply; skill routing may still run in background)"
-    return "Tools used: " + ", ".join(uniq)
-
-
-def _extract_tool_error_message(tool_output: str) -> str:
-    text = (tool_output or "").strip()
-    if not text:
-        return ""
-    lower = text.lower()
-    if lower.startswith("error:"):
-        return text.split(":", 1)[1].strip() or text
-    if lower.startswith("approval-needed:"):
-        return text
-    if lower.startswith("failed:") or lower.startswith("failed "):
-        return text
-
-    parsed: Any
-    try:
-        parsed = json.loads(text)
-    except Exception:
-        return ""
-    if not isinstance(parsed, dict):
-        return ""
-
-    if parsed.get("ok") is False or parsed.get("success") is False:
-        for key in ("error", "message", "reason", "detail"):
-            value = parsed.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        return "Tool reported failure."
-
-    status = parsed.get("status")
-    if isinstance(status, str) and status.strip().lower() in {"failed", "error"}:
-        for key in ("error", "message", "reason", "detail"):
-            value = parsed.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-        return f"Tool reported status={status.strip()}."
-
-    return ""
-
-
-def _is_recoverable_tool_error(error_text: str) -> bool:
-    low = (error_text or "").strip().lower()
-    if not low:
-        return False
-    return any(keyword in low for keyword in _RECOVERABLE_TOOL_ERROR_KEYWORDS)
-
-
-def _is_likely_mutating_tool_call(tool_name: str, args: dict[str, Any] | None = None) -> bool:
-    name = (tool_name or "").strip().lower()
-    if name in _MUTATING_TOOL_NAMES:
-        return True
-    action = (args or {}).get("action")
-    action_norm = action.strip().lower() if isinstance(action, str) else ""
-    if name in {"reminders", "cron", "message"}:
-        return action_norm in _MUTATING_ACTION_NAMES
-    if name == "spotify":
-        # Read-only: search, now_playing, list_playlists, list_devices
-        # Mutating: play, control, volume, create_playlist, add_to_playlist
-        return action_norm not in {"search", "now_playing", "list_playlists", "list_devices"}
-    return False
-
-
-def _build_tool_action_fingerprint(tool_name: str, args: dict[str, Any] | None = None) -> str:
-    name = (tool_name or "").strip().lower()
-    payload: dict[str, Any] = {}
-    data = args if isinstance(args, dict) else {}
-    for key in (
-        "action",
-        "path",
-        "file_path",
-        "directory",
-        "glob_pattern",
-        "command",
-        "id",
-        "job_id",
-        "reminder_id",
-        "session_id",
-        "name",
-        "channel",
-        "channel_id",
-        "thread_id",
-    ):
-        value = data.get(key)
-        if isinstance(value, (str, int, float, bool)):
-            if isinstance(value, str) and not value.strip():
-                continue
-            payload[key] = value
-    if not payload:
-        return name
-    try:
-        encoded = json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
-    except Exception:
-        encoded = str(payload)
-    return f"{name}:{encoded}"
-
-
-def _make_status_message(text: str) -> str:
-    return f"{_STATUS_PREFIX}{(text or '').strip()}"
-
-
-async def _emit_stream_status(
-    *,
-    db,
-    conversation_id: str,
-    channel: str,
-    channel_target: str,
-    text: str,
-    stream_event_callback=None,
-    stream_event_type: str = "status",
-) -> None:
-    msg = (text or "").strip()
-    if not msg:
-        return
-    if callable(stream_event_callback):
-        await _emit_live_stream_event(
-            stream_event_callback,
-            {
-                "type": stream_event_type,
-                "text": msg,
-            },
-        )
-    ch = (channel or "").strip().lower()
-    if ch == "telegram" and channel_target:
-        try:
-            await send_notification(ch, channel_target, msg)
-        except Exception as e:
-            logger.debug("Could not send stream status to channel=%s: %s", ch, e)
-    # For live-stream web requests, status is delivered over SSE and should stay ephemeral.
-    if ch == "web" and not callable(stream_event_callback):
-        try:
-            await db.add_message(conversation_id, "assistant", _make_status_message(msg), "script")
-        except Exception as e:
-            logger.debug("Could not persist stream status to web conversation: %s", e)
-
-
-def _sanitize_silent_reply_markers(text: str) -> tuple[str, bool]:
-    """Strip NO_REPLY control marker and tell whether this should be a silent/no-output reply."""
-    raw = (text or "")
-    if not raw.strip():
-        return "", False
-
-    # Exact control token means "do not emit assistant text".
-    if re.fullmatch(r"(?is)\s*NO_REPLY\s*", raw):
-        return "", True
-
-    # Remove standalone NO_REPLY lines and trailing token leakage.
-    cleaned = re.sub(r"(?im)^\s*NO_REPLY\s*$", "", raw)
-    cleaned = re.sub(r"(?i)\s*NO_REPLY\s*$", "", cleaned)
-    cleaned = re.sub(r"(?i)^\s*NO_REPLY\s*", "", cleaned)
-    cleaned = cleaned.strip()
-
-    # If stripping markers left no user-facing text, keep it silent.
-    if not cleaned:
-        return "", True
-    return cleaned, False
-
-
-def _tool_names_from_defs(tools: list[dict] | None) -> set[str]:
-    names: set[str] = set()
-    for t in (tools or []):
-        if not isinstance(t, dict):
-            continue
-        fn = t.get("function")
-        if not isinstance(fn, dict):
-            continue
-        name = str(fn.get("name") or "").strip()
-        if name:
-            names.add(name)
-    return names
-
-
-def _parse_inline_tool_args(raw: str) -> dict[str, str]:
-    args: dict[str, str] = {}
-    for m in re.finditer(
-        r"""([A-Za-z_][\w\-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^,\]]+))""",
-        raw or "",
-    ):
-        key = (m.group(1) or "").strip()
-        if not key:
-            continue
-        value = (m.group(2) or m.group(3) or m.group(4) or "").strip()
-        args[key] = html.unescape(value)
-    return args
-
-
-def _extract_textual_tool_calls(
-    text: str,
-    allowed_names: set[str],
-) -> tuple[list[dict] | None, str]:
-    raw = text or ""
-    if not raw.strip():
-        return None, raw
-
-    # Existing fallback protocol used in provider prompts.
-    m = re.search(r"\[ASTA_TOOL_CALL\]\s*(\{.*?\})\s*\[/ASTA_TOOL_CALL\]", raw, re.DOTALL)
-    if m:
-        payload_raw = m.group(1).strip()
-        try:
-            payload = json.loads(payload_raw)
-        except Exception:
-            payload = None
-        if isinstance(payload, dict):
-            name = str(payload.get("name") or "").strip()
-            if name and (not allowed_names or name in allowed_names):
-                args = payload.get("arguments")
-                if not isinstance(args, dict):
-                    args = {}
-                tool_calls = [
-                    {
-                        "id": "text_tool_call_1",
-                        "type": "function",
-                        "function": {
-                            "name": name,
-                            "arguments": json.dumps(args, ensure_ascii=False),
-                        },
-                    }
-                ]
-                cleaned = (raw[: m.start()] + raw[m.end() :]).strip()
-                return tool_calls, cleaned
-
-    # Qwen/Trinity-style: <tool_call>{"name": "...", "arguments": {...}}</tool_call>
-    tc_match = re.search(r"(?is)<tool_call>\s*(\{.*?\})\s*</tool_call>", raw)
-    if tc_match:
-        try:
-            payload = json.loads(tc_match.group(1).strip())
-        except Exception:
-            payload = None
-        if isinstance(payload, dict):
-            name = str(payload.get("name") or "").strip()
-            if name and (not allowed_names or name in allowed_names):
-                args = payload.get("arguments")
-                if not isinstance(args, dict):
-                    args = {}
-                tool_calls = [
-                    {
-                        "id": "text_tool_call_qwen",
-                        "type": "function",
-                        "function": {
-                            "name": name,
-                            "arguments": json.dumps(args, ensure_ascii=False),
-                        },
-                    }
-                ]
-                cleaned = (raw[: tc_match.start()] + raw[tc_match.end() :]).strip()
-                return tool_calls, cleaned
-
-    # OpenClaw/Claude-style text tool calls:
-    # <function_calls><invoke name="read"><parameter name="path">...</parameter></invoke></function_calls>
-    block_match = re.search(r"(?is)<function_calls>\s*(.*?)\s*</function_calls>", raw)
-    if block_match:
-        body = block_match.group(1) or ""
-        invocations = re.finditer(
-            r'(?is)<invoke\s+name\s*=\s*"([^"]+)"\s*>(.*?)</invoke>',
-            body,
-        )
-        tool_calls: list[dict] = []
-        for idx, inv in enumerate(invocations, start=1):
-            name = (inv.group(1) or "").strip()
-            if not name:
-                continue
-            if allowed_names and name not in allowed_names:
-                continue
-            params_body = inv.group(2) or ""
-            args: dict[str, str] = {}
-            for p in re.finditer(
-                r'(?is)<parameter\s+name\s*=\s*"([^"]+)"\s*>(.*?)</parameter>',
-                params_body,
-            ):
-                p_name = (p.group(1) or "").strip()
-                if not p_name:
-                    continue
-                p_value = html.unescape((p.group(2) or "").strip())
-                args[p_name] = p_value
-            tool_calls.append(
-                {
-                    "id": f"text_tool_call_{idx}",
-                    "type": "function",
-                    "function": {
-                        "name": name,
-                        "arguments": json.dumps(args, ensure_ascii=False),
-                    },
-                }
-            )
-        if tool_calls:
-            cleaned = re.sub(r"(?is)<function_calls>\s*.*?\s*</function_calls>", "", raw).strip()
-            return tool_calls, cleaned
-
-    # Bracket protocol fallback:
-    # [allow_path: path="~/Desktop"]
-    # [list_directory: path="~/Desktop"]
-    bracket_matches = list(
-        re.finditer(r"(?is)\[\s*([a-zA-Z_][\w\-]*)\s*:\s*([^\]]*?)\]", raw)
-    )
-    if bracket_matches:
-        tool_calls: list[dict] = []
-        remove_spans: list[tuple[int, int]] = []
-        for idx, m in enumerate(bracket_matches, start=1):
-            name = (m.group(1) or "").strip()
-            if not name:
-                continue
-            # Keep bracket cron payloads in text for dedicated cron protocol handling later.
-            if name.lower() == "cron":
-                continue
-            if allowed_names and name not in allowed_names:
-                continue
-            body = (m.group(2) or "").strip()
-            args = _parse_inline_tool_args(body) if body else {}
-            # Treat this as protocol only when it looks like tool arguments.
-            if body and ("=" in body) and not args:
-                continue
-            tool_calls.append(
-                {
-                    "id": f"text_tool_call_bracket_{idx}",
-                    "type": "function",
-                    "function": {
-                        "name": name,
-                        "arguments": json.dumps(args, ensure_ascii=False),
-                    },
-                }
-            )
-            remove_spans.append((m.start(), m.end()))
-        if tool_calls:
-            chunks: list[str] = []
-            cursor = 0
-            for start, end in remove_spans:
-                chunks.append(raw[cursor:start])
-                cursor = end
-            chunks.append(raw[cursor:])
-            cleaned = "".join(chunks).strip()
-            return tool_calls, cleaned
-    return None, raw
-
-
-def _has_tool_call_markup(text: str) -> bool:
-    raw = text or ""
-    if not raw:
-        return False
-    if re.search(r"\[ASTA_TOOL_CALL\].*?\[/ASTA_TOOL_CALL\]", raw, re.DOTALL):
-        return True
-    if re.search(r"(?is)<function_calls>\s*.*?\s*</function_calls>", raw):
-        return True
-    # Qwen/Trinity-style tool call XML
-    if re.search(r"(?is)<tool_call>\s*\{.*?\}\s*</tool_call>", raw):
-        return True
-    return False
-
-
-def _strip_tool_call_markup(text: str) -> str:
-    raw = text or ""
-    if not raw:
-        return ""
-    cleaned = re.sub(r"\[ASTA_TOOL_CALL\]\s*\{.*?\}\s*\[/ASTA_TOOL_CALL\]", "", raw, flags=re.DOTALL)
-    cleaned = re.sub(r"(?is)<function_calls>\s*.*?\s*</function_calls>", "", cleaned)
-    # Qwen/Trinity-style tool call XML (emitted as text alongside structured tool_calls)
-    cleaned = re.sub(r"(?is)<tool_call>\s*\{.*?\}\s*</tool_call>", "", cleaned)
-    return cleaned.strip()
-
-
-def _strip_bracket_tool_protocol(text: str) -> str:
-    raw = text or ""
-    if not raw:
-        return ""
-    # Keep [cron: ...] payloads for dedicated cron protocol parsing later in the pipeline.
-    tool_names = [n for n in sorted(_TOOL_TRACE_GROUP.keys(), key=len, reverse=True) if n != "cron"]
-    if not tool_names:
-        return raw.strip()
-    names_pat = "|".join(re.escape(n) for n in tool_names)
-    pat = rf"(?is)\[\s*(?:{names_pat})\s*:\s*[^\]]*=\s*[^\]]*\]"
-    cleaned = re.sub(pat, "", raw)
-    return cleaned.strip()
 
 
 def _looks_like_command_request(text: str) -> bool:
