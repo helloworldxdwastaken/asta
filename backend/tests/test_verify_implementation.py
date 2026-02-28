@@ -32,7 +32,10 @@ class TestThinkingImplementation(unittest.TestCase):
             provider = OllamaProvider()
             
             # Mock network calls to avoid actual requests
-            with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            with patch.dict(os.environ, {"DEBUG": "false"}, clear=False), patch(
+                "app.providers.ollama.get_ollama_base_url",
+                return_value="http://localhost:11434",
+            ), patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
                 mock_post.return_value.status_code = 200
                 mock_post.return_value.json.return_value = {"message": {"content": "ok"}}
                 
@@ -58,7 +61,10 @@ class TestThinkingImplementation(unittest.TestCase):
         async def run_test():
             provider = OllamaProvider()
             
-            with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+            with patch.dict(os.environ, {"DEBUG": "false"}, clear=False), patch(
+                "app.providers.ollama.get_ollama_base_url",
+                return_value="http://localhost:11434",
+            ), patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
                 mock_post.return_value.status_code = 200
                 mock_post.return_value.json.return_value = {"message": {"content": "ok"}}
                 

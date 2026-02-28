@@ -150,6 +150,9 @@ async def test_agent_skills_roundtrip_create_update(monkeypatch, tmp_path: Path)
             name="Skill Scoped",
             description="Agent with explicit skills",
             emoji="🤖",
+            icon="chart.bar.fill",
+            avatar="https://example.com/skill-scoped.png",
+            category="Data",
             model="",
             thinking="",
             skills=["time", "weather", "time"],
@@ -159,12 +162,26 @@ async def test_agent_skills_roundtrip_create_update(monkeypatch, tmp_path: Path)
     agent = created["agent"]
     assert agent["id"] == "skill-scoped"
     assert agent["skills"] == ["time", "weather"]
+    assert agent["icon"] == "chart.bar.fill"
+    assert agent["avatar"] == "https://example.com/skill-scoped.png"
+    assert agent["category"] == "Data"
 
     fetched = await agents_router.get_agent("skill-scoped")
     assert fetched["agent"]["skills"] == ["time", "weather"]
+    assert fetched["agent"]["icon"] == "chart.bar.fill"
+    assert fetched["agent"]["avatar"] == "https://example.com/skill-scoped.png"
+    assert fetched["agent"]["category"] == "Data"
 
     updated = await agents_router.update_agent(
         "skill-scoped",
-        agents_router.AgentUpdate(skills=[]),
+        agents_router.AgentUpdate(
+            skills=[],
+            icon="brain.head.profile",
+            avatar="https://example.com/updated.png",
+            category="Research",
+        ),
     )
     assert updated["agent"]["skills"] == []
+    assert updated["agent"]["icon"] == "brain.head.profile"
+    assert updated["agent"]["avatar"] == "https://example.com/updated.png"
+    assert updated["agent"]["category"] == "Research"

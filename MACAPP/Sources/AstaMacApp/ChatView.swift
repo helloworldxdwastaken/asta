@@ -71,6 +71,60 @@ struct ChatView: View {
         selectedAgentID = pendingAgentForNewConversation
     }
 
+    @ViewBuilder
+    private func agentGlyph(_ agent: AstaAgent, size: CGFloat = 11) -> some View {
+        let avatarSize = max(size + 7, 16)
+        if let image = localAgentAvatarImage(agent) {
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFill()
+                .frame(width: avatarSize, height: avatarSize)
+                .clipShape(Circle())
+        } else if let remoteURL = remoteAgentAvatarURL(agent) {
+            AsyncImage(url: remoteURL) { phase in
+                switch phase {
+                case .success(let image):
+                    image
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: avatarSize, height: avatarSize)
+                        .clipShape(Circle())
+                default:
+                    Image(systemName: agentIconName(agent))
+                        .font(.system(size: size, weight: .medium))
+                }
+            }
+        } else {
+            Image(systemName: agentIconName(agent))
+                .font(.system(size: size, weight: .medium))
+        }
+    }
+
+    private func agentIconName(_ agent: AstaAgent) -> String {
+        let trimmed = (agent.icon ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "person.crop.circle.fill" : trimmed
+    }
+
+    private func normalizedAgentAvatarURL(_ agent: AstaAgent) -> URL? {
+        let raw = (agent.avatar ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return nil }
+        if raw.hasPrefix("http://") || raw.hasPrefix("https://") || raw.hasPrefix("file://") {
+            return URL(string: raw)
+        }
+        let expanded = (raw as NSString).expandingTildeInPath
+        return URL(fileURLWithPath: expanded)
+    }
+
+    private func localAgentAvatarImage(_ agent: AstaAgent) -> NSImage? {
+        guard let url = normalizedAgentAvatarURL(agent), url.isFileURL else { return nil }
+        return NSImage(contentsOf: url)
+    }
+
+    private func remoteAgentAvatarURL(_ agent: AstaAgent) -> URL? {
+        guard let url = normalizedAgentAvatarURL(agent), !url.isFileURL else { return nil }
+        return url
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -379,11 +433,9 @@ struct ChatView: View {
             // Message bubble
             HStack {
                 Spacer(minLength: 80)
-                Text(msg.content)
-                    .textSelection(.enabled)
+                MarkdownView(content: msg.content, textColor: .white)
                     .font(.system(size: 14))
                     .foregroundStyle(.white)
-                    .lineSpacing(2)
                     .padding(.horizontal, 14).padding(.vertical, 10)
                     .background(Color.accentColor)
                     .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -773,7 +825,8 @@ struct ChatView: View {
                                     setSelectedAgent(agent.id)
                                 } label: {
                                     HStack {
-                                        Text("\(agent.emoji.isEmpty ? "🤖" : agent.emoji) \(agent.name)")
+                                        agentGlyph(agent, size: 11)
+                                        Text(agent.name)
                                         if selectedAgentID == agent.id { Image(systemName: "checkmark") }
                                     }
                                 }
@@ -784,7 +837,8 @@ struct ChatView: View {
                             Image(systemName: "person.2")
                                 .font(.system(size: 11, weight: .medium))
                             if let agent = selectedAgent {
-                                Text(agent.emoji.isEmpty ? agent.name : "\(agent.emoji) \(agent.name)")
+                                agentGlyph(agent, size: 10)
+                                Text(agent.name)
                                     .font(.system(size: 10, weight: .medium))
                                     .lineLimit(1)
                             }
@@ -1401,6 +1455,7 @@ struct MarkdownView: View {
             result.append(NSAttributedString(string: codeBlockContent, attributes: codeAttrs))
         }
 
+        Self.applyLinkStyling(to: result, baseTextColor: textColor)
         return result
     }
 
@@ -1496,6 +1551,56 @@ struct MarkdownView: View {
         }
 
         return result
+    }
+
+    private static func applyLinkStyling(to text: NSMutableAttributedString, baseTextColor: NSColor) {
+        guard text.length > 0 else { return }
+        let linkColor = preferredLinkColor(baseTextColor: baseTextColor)
+
+        // Convert markdown links [label](https://url) into clickable attributed links.
+        if let markdownLink = try? NSRegularExpression(pattern: #"\[([^\]\n]+)\]\((https?://[^\s\)]+)\)"#) {
+            let source = text.string as NSString
+            let matches = markdownLink.matches(
+                in: text.string,
+                range: NSRange(location: 0, length: source.length)
+            )
+            for match in matches.reversed() {
+                guard match.numberOfRanges >= 3 else { continue }
+                let labelRange = match.range(at: 1)
+                let urlRange = match.range(at: 2)
+                guard labelRange.location != NSNotFound, urlRange.location != NSNotFound else { continue }
+                let label = source.substring(with: labelRange)
+                let urlRaw = source.substring(with: urlRange)
+                guard let url = URL(string: urlRaw) else { continue }
+
+                let attrIndex = max(0, min(match.range.location, max(0, text.length - 1)))
+                var attrs = text.attributes(at: attrIndex, effectiveRange: nil)
+                attrs[.link] = url
+                attrs[.underlineStyle] = NSUnderlineStyle.single.rawValue
+                attrs[.foregroundColor] = linkColor
+                text.replaceCharacters(in: match.range, with: NSAttributedString(string: label, attributes: attrs))
+            }
+        }
+
+        // Detect bare URLs (https://...) and mark them clickable.
+        let fullRange = NSRange(location: 0, length: text.length)
+        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+            let matches = detector.matches(in: text.string, options: [], range: fullRange)
+            for match in matches {
+                guard let url = match.url else { continue }
+                text.addAttribute(.link, value: url, range: match.range)
+                text.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: match.range)
+                text.addAttribute(.foregroundColor, value: linkColor, range: match.range)
+            }
+        }
+    }
+
+    private static func preferredLinkColor(baseTextColor: NSColor) -> NSColor {
+        guard let rgb = baseTextColor.usingColorSpace(.deviceRGB) else {
+            return .linkColor
+        }
+        let brightness = (0.299 * rgb.redComponent) + (0.587 * rgb.greenComponent) + (0.114 * rgb.blueComponent)
+        return brightness > 0.85 ? .white : .linkColor
     }
 }
 

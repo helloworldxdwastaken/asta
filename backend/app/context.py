@@ -191,6 +191,7 @@ async def _get_available_skills_prompt(
     from app.skills.markdown_skill import MarkdownSkill
 
     skill_lines: list[str] = []
+    skill_count = 0
     markdown_skill_names: set[str] = set()
     allowed = set(agent_skill_filter) if agent_skill_filter is not None else None
     for skill in get_all_skills():
@@ -206,6 +207,7 @@ async def _get_available_skills_prompt(
             continue
         r = skill._resolved
         markdown_skill_names.add(skill.name)
+        skill_count += 1
         skill_lines.append("  <skill>")
         skill_lines.append(f"    <name>{skill.name}</name>")
         skill_lines.append(f"    <description>{r.description}</description>")
@@ -222,13 +224,21 @@ async def _get_available_skills_prompt(
         "- If none clearly apply: do not read any SKILL.md.",
         "Constraints: never read more than one skill up front; only read after selecting.",
         "When a selected skill references relative paths, resolve them from the skill directory (parent of SKILL.md).",
-        "Notes policy: prefer `notes` (workspace markdown files) for generic note-taking/reading.",
-        "Only select `apple-notes` when the user explicitly asks for Apple Notes / Notes.app / iCloud Notes / `memo`.",
+        "Notes policy: prefer `apple-notes` for notes, memos, and shopping/grocery lists.",
+        "Use `notes` (workspace markdown files) only when the user explicitly asks for workspace/local markdown files.",
         "",
         "<available_skills>",
     ]
+    if allowed is not None:
+        lines.insert(2, "Agent constraint: only skills listed in <available_skills> are allowed for this turn.")
+        if skill_count == 1:
+            lines.insert(3, "Agent constraint: exactly one skill is allowed, so read it before replying.")
     if not ({"notes", "apple-notes"} <= markdown_skill_names):
-        lines = [l for l in lines if not l.startswith("Notes policy:") and not l.startswith("Only select `apple-notes`")]
+        lines = [
+            l
+            for l in lines
+            if not l.startswith("Notes policy:") and not l.startswith("Use `notes`")
+        ]
     lines.extend(skill_lines)
     lines.append("</available_skills>")
     lines.append("")

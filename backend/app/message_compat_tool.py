@@ -426,7 +426,7 @@ async def run_message_compat(
         )
 
     to = (params.get("to") or current_target or "").strip()
-    if effective_channel in ("telegram", "whatsapp") and not to:
+    if effective_channel == "telegram" and not to:
         return json.dumps(
             {"ok": False, "error": f"target is required for {effective_channel} sends"},
             indent=0,
@@ -450,7 +450,7 @@ async def run_message_compat(
         payload["target"] = to
         return json.dumps(payload, indent=0)
 
-    # WhatsApp bridge + web fallback currently support only simple send.
+    # Web fallback supports only simple send.
     if action_key != "send":
         return json.dumps(
             {

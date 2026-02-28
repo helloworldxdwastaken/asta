@@ -84,12 +84,12 @@ def get_cron_tool_openai_def() -> list[dict]:
                         },
                         "channel": {
                             "type": "string",
-                            "enum": ["web", "telegram", "whatsapp"],
+                            "enum": ["web", "telegram"],
                             "description": "Notification channel (default web).",
                         },
                         "channel_target": {
                             "type": "string",
-                            "description": "Target ID for channel (chat_id for telegram, phone for whatsapp). Optional if only 1 allowed user.",
+                            "description": "Target ID for channel (chat_id for telegram). Optional if only 1 allowed user.",
                         },
                         "tlg_call": {
                             "type": "boolean",

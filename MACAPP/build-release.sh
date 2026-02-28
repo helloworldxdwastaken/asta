@@ -90,6 +90,14 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" << PLIST
 </plist>
 PLIST
 
+# ── 3b. Provider icons ───────────────────────────────────────────────────
+PROVIDERS_SRC="${SCRIPT_DIR}/Assets/provders"
+if [ -d "$PROVIDERS_SRC" ]; then
+  mkdir -p "${APP_BUNDLE}/Contents/Resources/providers"
+  cp "$PROVIDERS_SRC"/*.svg "$PROVIDERS_SRC"/*.png "${APP_BUNDLE}/Contents/Resources/providers/" 2>/dev/null || true
+  echo "  Provider icons copied to Resources/providers/"
+fi
+
 # ── 4. App icon ──────────────────────────────────────────────────────────
 # Use pre-built .icns if available, otherwise generate from AppIcon.png
 ICNS_FILE="${BUILD_DIR}/AppIcon.icns"
@@ -149,9 +157,9 @@ if command -v create-dmg &>/dev/null; then
   create-dmg \
     --volname "Install ${APP_DISPLAY}" \
     --window-pos 200 120 \
-    --window-size 540 380 \
-    --icon-size 80 \
-    --app-drop-link 400 220 \
+    --window-size 1200 760 \
+    --icon-size 240 \
+    --app-drop-link 860 380 \
     --no-internet-enable \
     "$DMG_PATH" \
     "$APP_BUNDLE" 2>&1 | grep -v "^$" || true
@@ -167,11 +175,7 @@ rm -rf "$DMG_STAGING"
 rm -f "$DMG_LATEST"
 ln -sf "$DMG_NAME" "$DMG_LATEST"
 
-# Also copy to Desktop for convenience
-cp "$DMG_PATH" ~/Desktop/"${DMG_NAME}"
-
 echo "  $(du -h "$DMG_PATH" | cut -f1)  ${DMG_PATH}"
-echo "  Copied to ~/Desktop/${DMG_NAME}"
 
 # ── Done ─────────────────────────────────────────────────────────────────
 echo ""

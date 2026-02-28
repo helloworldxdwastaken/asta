@@ -9,13 +9,13 @@ from app.routers.settings import VisionSettingsIn, get_vision_settings, set_visi
 async def test_get_vision_settings_reads_current_config(monkeypatch):
     class _S:
         asta_vision_preprocess = False
-        asta_vision_provider_order = "claude,openrouter,openai"
+        asta_vision_provider_order = "openrouter,ollama"
         asta_vision_openrouter_model = "openrouter/demo-vision"
 
     monkeypatch.setattr(settings_router, "get_settings", lambda: _S())
     out = await get_vision_settings()
     assert out["preprocess"] is False
-    assert out["provider_order"] == "claude,openrouter,openai"
+    assert out["provider_order"] == "openrouter,ollama"
     assert out["openrouter_model"] == "openrouter/demo-vision"
 
 
@@ -30,15 +30,15 @@ async def test_set_vision_settings_persists_env(monkeypatch):
     out = await set_vision_settings(
         VisionSettingsIn(
             preprocess=False,
-            provider_order="claude,openrouter,openai",
+            provider_order="openrouter,ollama",
             openrouter_model="openrouter/demo-vision",
         )
     )
     assert out["preprocess"] is False
-    assert out["provider_order"] == "claude,openrouter,openai"
+    assert out["provider_order"] == "openrouter,ollama"
     assert out["openrouter_model"] == "openrouter/demo-vision"
     assert captured["ASTA_VISION_PREPROCESS"] == "false"
-    assert captured["ASTA_VISION_PROVIDER_ORDER"] == "claude,openrouter,openai"
+    assert captured["ASTA_VISION_PROVIDER_ORDER"] == "openrouter,ollama"
     assert captured["ASTA_VISION_OPENROUTER_MODEL"] == "openrouter/demo-vision"
 
 
@@ -48,7 +48,7 @@ async def test_set_vision_settings_rejects_invalid_provider_name():
         await set_vision_settings(
             VisionSettingsIn(
                 preprocess=True,
-                provider_order="claude,not-a-provider,openai",
+                provider_order="openrouter,not-a-provider",
                 openrouter_model="model",
             )
         )
@@ -70,7 +70,7 @@ async def test_set_vision_settings_uses_defaults_for_blank_fields(monkeypatch):
             openrouter_model="",
         )
     )
-    assert out["provider_order"] == "openrouter,claude,openai"
+    assert out["provider_order"] == "openrouter,ollama"
     assert out["openrouter_model"] == "nvidia/nemotron-nano-12b-v2-vl:free"
-    assert captured["ASTA_VISION_PROVIDER_ORDER"] == "openrouter,claude,openai"
+    assert captured["ASTA_VISION_PROVIDER_ORDER"] == "openrouter,ollama"
     assert captured["ASTA_VISION_OPENROUTER_MODEL"] == "nvidia/nemotron-nano-12b-v2-vl:free"

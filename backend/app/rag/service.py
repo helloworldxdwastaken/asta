@@ -20,6 +20,11 @@ FTS_DB_PATH = os.environ.get("ASTA_FTS_PATH", str(Path(__file__).resolve().paren
 EMBED_DIM = 768  # nomic-embed-text
 
 
+def _build_chunk_ids(topic: str, text: str, doc_id: str | None, chunk_count: int) -> list[str]:
+    base = (doc_id or "").strip() or f"{topic}_{hashlib.sha1(text.encode('utf-8')).hexdigest()[:12]}"
+    return [f"{base}_{i}" for i in range(max(0, int(chunk_count)))]
+
+
 def _embed_ollama(text: str, base_url: str) -> list[float]:
     """Ollama embed endpoint. Returns 768-dim list or []."""
     try:
@@ -117,7 +122,7 @@ class RAGService:
         chunks = [text[i : i + 500] for i in range(0, len(text), 500)] if len(text) > 500 else [text]
         if not chunks:
             return
-        ids = [f"{doc_id or topic}_{i}" for i in range(len(chunks))]
+        ids = _build_chunk_ids(topic, text, doc_id, len(chunks))
         embeddings: list[list[float]] = []
         for c in chunks:
             emb = await _get_embedding_any(c)
@@ -126,7 +131,8 @@ class RAGService:
             else:
                 embeddings.append([0.0] * EMBED_DIM)
         if embeddings:
-            self._coll.add(
+            # Upsert prevents duplicate-id failures when users relearn or append to an existing topic.
+            self._coll.upsert(
                 ids=ids,
                 embeddings=embeddings,
                 documents=chunks,

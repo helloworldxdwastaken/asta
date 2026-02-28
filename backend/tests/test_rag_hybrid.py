@@ -42,6 +42,15 @@ class TestHybridMerge:
         merged = RAGService._merge_hybrid([], keyword)
         assert merged == ["world"]
 
+    def test_build_chunk_ids_change_with_text_when_doc_id_missing(self):
+        from app.rag.service import _build_chunk_ids
+
+        ids_a = _build_chunk_ids("python", "first body", None, 2)
+        ids_b = _build_chunk_ids("python", "second body", None, 2)
+        assert ids_a != ids_b
+        assert ids_a[0].endswith("_0")
+        assert ids_a[1].endswith("_1")
+
 
 class TestFTS5Table:
     """Test FTS5 keyword search using a temporary SQLite DB."""

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 from pathlib import Path
@@ -21,6 +22,96 @@ MAX_TIMEOUT_SECONDS = 120
 # OpenClaw-style: cap combined stdout+stderr size we retain; tail truncation for model payload
 OUTPUT_CAP_CHARS = 200_000
 OUTPUT_EVENT_TAIL_CHARS = 20_000
+
+DB_API_KEY_ENV_MAP: dict[str, str] = {
+    "notion_api_key": "NOTION_API_KEY",
+    "giphy_api_key": "GIPHY_API_KEY",
+}
+ALWAYS_SENSITIVE_ENV_VARS = frozenset({
+    "NOTION_API_KEY",
+    "GIPHY_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GROQ_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_AI_KEY",
+    "HUGGINGFACE_API_KEY",
+    "SPOTIFY_CLIENT_SECRET",
+    "TELEGRAM_BOT_TOKEN",
+})
+_REDACTED_SECRET = "[REDACTED_SECRET]"
+_REDACTED_NOTION_TOKEN = "[REDACTED_NOTION_TOKEN]"
+_NOTION_TOKEN_RE = re.compile(r"\bntn_[A-Za-z0-9_-]{8,}\b")
+_BEARER_HEADER_RE = re.compile(r"(?i)(authorization\s*:\s*bearer\s+)([^\s\"'`]+)")
+
+
+def _build_sensitive_env_set(injected_env_vars: set[str] | None = None) -> set[str]:
+    out = {v.strip().upper() for v in ALWAYS_SENSITIVE_ENV_VARS if isinstance(v, str) and v.strip()}
+    if injected_env_vars:
+        for key in injected_env_vars:
+            if isinstance(key, str) and key.strip():
+                out.add(key.strip().upper())
+    return out
+
+
+def _maybe_block_secret_dump_command(cmd: str, sensitive_env_vars: set[str]) -> str | None:
+    raw = (cmd or "").strip()
+    if not raw or not sensitive_env_vars:
+        return None
+    env_names = sorted({v.strip().upper() for v in sensitive_env_vars if isinstance(v, str) and v.strip()})
+    if not env_names:
+        return None
+    names_pat = "|".join(re.escape(name) for name in env_names)
+    var_ref_pat = rf"(?:\$(?:\{{)?(?:{names_pat})(?:\}})?|\b(?:{names_pat})\b)"
+
+    if re.search(r"(?im)^\s*(?:printenv|env|set)\s*$", raw):
+        return "Command blocked: dumping environment variables is not allowed."
+    if re.search(rf"(?is)\b(?:echo|printf)\b[^\n]*{var_ref_pat}", raw):
+        return "Command blocked: exposing API keys or tokens is not allowed."
+    if re.search(rf"(?is)\bprintenv\b[^\n]*\b(?:{names_pat})\b", raw):
+        return "Command blocked: exposing API keys or tokens is not allowed."
+    if re.search(rf"(?is)\b(?:env|set)\b[^\n|]*\|\s*(?:grep|rg)\b[^\n]*(?:{names_pat})", raw):
+        return "Command blocked: exposing API keys or tokens is not allowed."
+    if re.search(
+        rf"(?is)\b(?:python|python3|node)\b[^\n]*(?:getenv|os\.environ|process\.env)[^\n]*(?:{names_pat})[^\n]*(?:print|console\.log)",
+        raw,
+    ):
+        return "Command blocked: exposing API keys or tokens is not allowed."
+    return None
+
+
+def _dedupe_secret_values(values: list[str] | None) -> list[str]:
+    if not values:
+        return []
+    uniq = {
+        v.strip()
+        for v in values
+        if isinstance(v, str) and v.strip() and len(v.strip()) >= 6
+    }
+    return sorted(uniq, key=len, reverse=True)
+
+
+def redact_sensitive_exec_text(text: str, secret_values: list[str] | None = None) -> tuple[str, bool]:
+    out = text or ""
+    if not out:
+        return "", False
+
+    changed = False
+    for secret in _dedupe_secret_values(secret_values):
+        if secret in out:
+            out = out.replace(secret, _REDACTED_SECRET)
+            changed = True
+
+    out, notion_hits = _NOTION_TOKEN_RE.subn(_REDACTED_NOTION_TOKEN, out)
+    if notion_hits:
+        changed = True
+
+    out, bearer_hits = _BEARER_HEADER_RE.subn(r"\1[REDACTED_SECRET]", out)
+    if bearer_hits:
+        changed = True
+
+    return out, changed
 
 
 def truncate_output_tail(raw: str, max_chars: int = OUTPUT_EVENT_TAIL_CHARS) -> str:
@@ -310,21 +401,25 @@ async def run_allowlisted_command(
 
     # Inject keys from DB into environment (e.g. NOTION_API_KEY for curl)
     env = os.environ.copy()
+    injected_secret_values: list[str] = []
     try:
         from app.db import get_db
         db = get_db()
         await db.connect()
         # Fetch relevant integration keys
-        keys_to_inject = {
-            "notion_api_key": "NOTION_API_KEY",
-            "giphy_api_key": "GIPHY_API_KEY",
-        }
-        for db_key, env_var in keys_to_inject.items():
+        for db_key, env_var in DB_API_KEY_ENV_MAP.items():
             val = await db.get_stored_api_key(db_key)
             if val:
                 env[env_var] = val
+                injected_secret_values.append(val)
     except Exception as e:
         logger.warning("Failed to inject DB keys into exec environment: %s", e)
+
+    sensitive_env_vars = _build_sensitive_env_set(set(DB_API_KEY_ENV_MAP.values()))
+    block_reason = _maybe_block_secret_dump_command(cmd, sensitive_env_vars)
+    if block_reason:
+        logger.warning("Exec blocked for potential secret exposure: %s", cmd[:200])
+        return "", block_reason, False
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -339,6 +434,14 @@ async def run_allowlisted_command(
         )
         stdout = (stdout_bytes or b"").decode("utf-8", errors="replace").strip()
         stderr = (stderr_bytes or b"").decode("utf-8", errors="replace").strip()
+        stdout, stdout_redacted = redact_sensitive_exec_text(stdout, injected_secret_values)
+        stderr, stderr_redacted = redact_sensitive_exec_text(stderr, injected_secret_values)
+        if stdout_redacted or stderr_redacted:
+            logger.warning(
+                "Redacted secret material from exec output (stdout=%s stderr=%s)",
+                stdout_redacted,
+                stderr_redacted,
+            )
         success = proc.returncode == 0
         # OpenClaw-style: cap combined output at OUTPUT_CAP_CHARS (keep tail), return single blob when truncated
         combined = stdout + ("\n" + stderr if stderr else "")

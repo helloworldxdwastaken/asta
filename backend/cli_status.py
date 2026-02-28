@@ -60,25 +60,7 @@ def main():
     channels = status.get("channels", {}) if isinstance(status, dict) else {}
 
     t = f"{GREEN}active{RESET}" if integrations.get("telegram") else f"{GRAY}off{RESET}"
-
-    wa = channels.get("whatsapp", {}) if isinstance(channels, dict) else {}
-    if isinstance(wa, dict) and wa:
-        if not wa.get("configured"):
-            w = f"{GRAY}not configured{RESET}"
-        elif wa.get("connected"):
-            w = f"{GREEN}connected{RESET}"
-        elif not wa.get("reachable"):
-            w = f"{YELLOW}bridge offline{RESET}"
-        elif wa.get("has_qr"):
-            w = f"{YELLOW}awaiting qr{RESET}"
-        elif wa.get("connecting"):
-            w = f"{YELLOW}connecting{RESET}"
-        else:
-            w = f"{YELLOW}disconnected{RESET}"
-    else:
-        w = f"{GREEN}active{RESET}" if integrations.get("whatsapp") else f"{GRAY}off{RESET}"
     print(f"    telegram {t}")
-    print(f"    whatsapp(beta) {w}")
 
     # Skills list only when running `asta status` (not on restart/update/start)
     show_skills = os.environ.get("ASTA_STATUS_FULL") == "1" or "--full" in sys.argv

@@ -392,6 +392,13 @@ struct ModelsSettingsTab: View {
     @ObservedObject var appState: AppState
     @State private var usageRows: [AstaUsageRow] = []
     @State private var usageLoading = true
+    @State private var pendingModelReset: PendingModelReset?
+
+    private struct PendingModelReset: Identifiable {
+        let provider: String
+        let currentModel: String
+        var id: String { provider }
+    }
 
     var body: some View {
         Form {
@@ -408,7 +415,14 @@ struct ModelsSettingsTab: View {
                         } else {
                             Picker(astaProviderDisplayName(provider), selection: Binding(
                                 get: { current.isEmpty ? "(default)" : current },
-                                set: { new in Task { await appState.setModel(provider: provider, model: new == "(default)" ? "" : new) } }
+                                set: { new in
+                                    let nextModel = new == "(default)" ? "" : new
+                                    if nextModel.isEmpty && !current.isEmpty {
+                                        pendingModelReset = PendingModelReset(provider: provider, currentModel: current)
+                                        return
+                                    }
+                                    Task { await appState.setModel(provider: provider, model: nextModel) }
+                                }
                             )) {
                                 Text("(default)").tag("(default)")
                                 ForEach(opts, id: \.self) { Text($0).tag($0) }
@@ -450,6 +464,16 @@ struct ModelsSettingsTab: View {
         }
         .formStyle(.grouped)
         .task { await loadUsage() }
+        .alert(item: $pendingModelReset) { pending in
+            Alert(
+                title: Text("Reset \(astaProviderDisplayName(pending.provider)) model?"),
+                message: Text("This removes custom model \"\(pending.currentModel)\" and switches back to the provider default."),
+                primaryButton: .destructive(Text("Reset")) {
+                    Task { await appState.setModel(provider: pending.provider, model: "") }
+                },
+                secondaryButton: .cancel()
+            )
+        }
     }
 
     private func fmtTokens(_ n: Int) -> String {
@@ -791,8 +815,16 @@ struct SkillsSettingsTab: View {
 
     var body: some View {
         Form {
+            let agentIDs = Set(appState.agentsList.map { $0.id.lowercased() })
+            let visibleSkills = appState.skillsList.filter { skill in
+                let sid = skill.id.lowercased()
+                if sid.isEmpty { return false }
+                if skill.is_agent == true { return false }
+                if agentIDs.contains(sid) { return false }
+                return true
+            }
             Section {
-                let availableSkills = appState.skillsList.filter { $0.available != false }
+                let availableSkills = visibleSkills.filter { $0.available != false }
                 if availableSkills.isEmpty && !appState.panelLoading {
                     Text("No skills loaded. Skills extend what Asta can do — upload a ZIP below.")
                         .font(.subheadline).foregroundStyle(.secondary)
@@ -815,7 +847,7 @@ struct SkillsSettingsTab: View {
                 }
             } header: { Text("Installed skills") }
 
-            let unavailableSkills = appState.skillsList.filter { $0.available == false }
+            let unavailableSkills = visibleSkills.filter { $0.available == false }
             if !unavailableSkills.isEmpty {
                 Section {
                     ForEach(unavailableSkills, id: \.id) { skill in

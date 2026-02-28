@@ -35,6 +35,8 @@ CACHE_TTL_SECONDS = 10 * 60  # 10 minutes
 PLAYLIST_MATCH_THRESHOLD = 80
 RECOMMENDATIONS_TO_QUEUE = 12
 PREFER_ALBUM_CONTEXT_FOR_TRACKS = True
+# Keep enhanced intent routing opt-in until legacy behavior parity is guaranteed.
+ENABLE_ENHANCED_INTENTS_BY_DEFAULT = False
 
 
 # ---- NEW: Simple TTL cache ----
@@ -358,6 +360,9 @@ class SpotifyService:
         db = get_db()
         
         extra_context["spotify_channel"] = channel
+        enhanced_intents_enabled = bool(
+            extra_context.get("spotify_enhanced_intents", ENABLE_ENHANCED_INTENTS_BY_DEFAULT)
+        )
 
         # 0. Pending device selection + retry
         pending = await db.get_pending_spotify_play(user_id)
@@ -382,11 +387,11 @@ class SpotifyService:
             else:
                 extra_context["spotify_play_connected"] = False
 
-        # ---- NEW: Intent-based processing ----
+        # ---- NEW: Intent-based processing (opt-in) ----
         intent = _parse_intent(text)
         
         # If high confidence intent, use enhanced handlers
-        if intent and intent.confidence >= 0.65:
+        if enhanced_intents_enabled and intent and intent.confidence >= 0.65:
             token = _token_check
             if not token:
                 row = await db.get_spotify_tokens(user_id)
@@ -712,7 +717,7 @@ class SpotifyService:
             row = await db.get_spotify_tokens(user_id)
             if row:
                 return "Token expired. Please reconnect in Settings."
-            return "Spotify is not connected."
+            return "Spotify is not connected. Connect in Settings."
         
         # Check for playlist
         playlist_name = playlist_name_from_message(original_text)
@@ -728,7 +733,8 @@ class SpotifyService:
             if len(devices) == 1:
                 dev = devices[0]
                 ok = await _start_uri_on_device(user_id, dev.get("id"), playlist_uri)
-                return f"Playing on {dev.get('name')}." if ok else "Failed."
+                label = matched_name or playlist_name
+                return f"Playing playlist {label} on {dev.get('name')}." if ok else "Failed."
             await db.set_pending_spotify_play(user_id, playlist_uri, json.dumps(devices))
             return "Which device?\n" + ", ".join([f"{i+1}. {d.get('name')}" for i, d in enumerate(devices)])
         

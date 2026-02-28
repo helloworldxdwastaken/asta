@@ -301,7 +301,7 @@ async def _announce_subagent_run(run_id: str) -> None:
 
     if parent_cid:
         await db.add_message(parent_cid, "assistant", message, "script")
-    if channel in ("telegram", "whatsapp") and target:
+    if channel == "telegram" and target:
         try:
             await send_notification(channel, target, message)
         except Exception as e:
@@ -563,6 +563,7 @@ async def spawn_subagent_run(
         "model": (model_override or "").strip() or None,
         "thinking": thinking_override,
         "createdAt": _now_iso(),
+        "note": "auto-announces on completion — do not poll or wait. Reply to the user immediately; the result will be delivered as an assistant message when the agent finishes.",
     }
 
 
@@ -747,7 +748,9 @@ async def run_subagent_tool(
         run_id = (params.get("runId") or "").strip()
         session_key = (params.get("sessionKey") or "").strip()
         message = (params.get("message") or "").strip()
-        timeout_seconds = _normalize_timeout(params.get("timeoutSeconds"))
+        # Default to 30s like OpenClaw — LLM waits briefly then moves on; agent continues in background
+        raw_timeout = params.get("timeoutSeconds")
+        timeout_seconds = _normalize_timeout(raw_timeout) if raw_timeout is not None else 30
         if not message:
             return _json({"error": "message is required"})
         rows = await db.list_subagent_runs(parent_conversation_id, limit=200)

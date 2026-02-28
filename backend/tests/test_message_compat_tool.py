@@ -53,13 +53,13 @@ async def test_run_message_compat_send_success(monkeypatch):
     monkeypatch.setattr("app.message_compat_tool.send_notification", _fake_send)
     raw = await run_message_compat(
         {"action": "send", "text": "hi"},
-        current_channel="whatsapp",
+        current_channel="web",
         current_target="42",
     )
     payload = json.loads(raw)
     assert payload["ok"] is True
     assert payload["status"] == "sent"
-    assert sent == {"channel": "whatsapp", "target": "42", "message": "hi"}
+    assert sent == {"channel": "web", "target": "42", "message": "hi"}
 
 
 @pytest.mark.asyncio
@@ -133,7 +133,7 @@ async def test_run_message_compat_canonicalizes_runtime_action(monkeypatch):
 @pytest.mark.asyncio
 async def test_run_message_compat_rejects_cross_channel():
     raw = await run_message_compat(
-        {"action": "send", "text": "hi", "channel": "whatsapp"},
+        {"action": "send", "text": "hi", "channel": "web"},
         current_channel="telegram",
         current_target="42",
     )
@@ -170,7 +170,7 @@ async def test_run_message_compat_rejects_unsupported_action():
 async def test_run_message_compat_rejects_rich_action_on_non_telegram():
     raw = await run_message_compat(
         {"action": "edit", "text": "hi", "messageId": "10"},
-        current_channel="whatsapp",
+        current_channel="web",
         current_target="42",
     )
     payload = json.loads(raw)

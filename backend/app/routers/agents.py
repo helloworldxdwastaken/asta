@@ -94,6 +94,9 @@ def _read_agent(slug: str) -> dict | None:
         "name": _fm("name") or slug,
         "description": _fm("description"),
         "emoji": _fm("emoji") or "🤖",
+        "icon": _fm("icon"),
+        "avatar": _fm("avatar"),
+        "category": _fm("category"),
         "model": _fm("model"),
         "thinking": _fm("thinking"),
         "skills": _fm_list("skills"),
@@ -145,6 +148,9 @@ def _write_agent(
     name: str,
     description: str,
     emoji: str,
+    icon: str,
+    avatar: str,
+    category: str,
     model: str,
     thinking: str,
     system_prompt: str,
@@ -164,6 +170,12 @@ def _write_agent(
         f"description: {description}",
         f"emoji: {emoji}",
     ]
+    if icon:
+        fm_lines.append(f"icon: {icon}")
+    if avatar:
+        fm_lines.append(f"avatar: {avatar}")
+    if category:
+        fm_lines.append(f"category: {category}")
     if model:
         fm_lines.append(f"model: {model}")
     if thinking:
@@ -214,6 +226,9 @@ class AgentCreate(BaseModel):
     name: str
     description: str = ""
     emoji: str = "🤖"
+    icon: str = ""
+    avatar: str = ""
+    category: str = ""
     model: str = ""
     thinking: str = ""
     skills: list[str] | None = None
@@ -224,6 +239,9 @@ class AgentUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     emoji: str | None = None
+    icon: str | None = None
+    avatar: str | None = None
+    category: str | None = None
     model: str | None = None
     thinking: str | None = None
     skills: list[str] | None = None
@@ -279,6 +297,9 @@ async def create_agent(body: AgentCreate):
         name=body.name.strip(),
         description=body.description.strip(),
         emoji=body.emoji.strip() or "🤖",
+        icon=body.icon.strip(),
+        avatar=body.avatar.strip(),
+        category=body.category.strip(),
         model=body.model.strip(),
         thinking=body.thinking.strip(),
         skills=_normalize_skill_ids(body.skills),
@@ -317,12 +338,27 @@ async def update_agent(agent_id: str, body: AgentUpdate):
     name = (body.name.strip() if body.name is not None else existing["name"])
     description = (body.description.strip() if body.description is not None else existing["description"])
     emoji = (body.emoji.strip() if body.emoji is not None else existing["emoji"]) or "🤖"
+    icon = (body.icon.strip() if body.icon is not None else str(existing.get("icon") or ""))
+    avatar = (body.avatar.strip() if body.avatar is not None else str(existing.get("avatar") or ""))
+    category = (body.category.strip() if body.category is not None else str(existing.get("category") or ""))
     model = (body.model.strip() if body.model is not None else existing["model"])
     thinking = (body.thinking.strip() if body.thinking is not None else existing["thinking"])
     skills = (_normalize_skill_ids(body.skills) if body.skills is not None else existing.get("skills"))
     system_prompt = (body.system_prompt.strip() if body.system_prompt is not None else existing["system_prompt"])
 
-    _write_agent(agent_id, name, description, emoji, model, thinking, system_prompt, skills=skills)
+    _write_agent(
+        agent_id,
+        name,
+        description,
+        emoji,
+        icon,
+        avatar,
+        category,
+        model,
+        thinking,
+        system_prompt,
+        skills=skills,
+    )
     updated = _read_agent(agent_id)
     if not updated:
         raise HTTPException(status_code=500, detail=f"Agent '{agent_id}' could not be reloaded")

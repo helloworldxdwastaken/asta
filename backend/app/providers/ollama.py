@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import uuid
@@ -84,7 +85,11 @@ def _to_ollama_tools(tools: list[dict] | None) -> list[dict]:
     return out
 
 
-def _to_ollama_messages(messages: list[Message], system_prompt: str | None = None) -> list[dict]:
+def _to_ollama_messages(
+    messages: list[Message],
+    system_prompt: str | None = None,
+    image_b64: str | None = None,
+) -> list[dict]:
     out: list[dict] = []
     tool_name_by_id: dict[str, str] = {}
 
@@ -131,7 +136,10 @@ def _to_ollama_messages(messages: list[Message], system_prompt: str | None = Non
             continue
 
         msg_role = "assistant" if role == "assistant" else "user"
-        out.append({"role": msg_role, "content": content})
+        msg: dict[str, Any] = {"role": msg_role, "content": content}
+        if msg_role == "user" and image_b64 and m == messages[-1]:
+            msg["images"] = [image_b64]
+        out.append(msg)
 
     return out
 
@@ -258,11 +266,28 @@ class OllamaProvider(BaseProvider):
             if think_instruction not in ctx:
                 kwargs["context"] = f"{ctx}\n\n{think_instruction}".strip()
 
+            # Compatibility path: some local reasoning models behave better with an explicit
+            # inline `/think <level>` directive on the final user turn.
+            injected_messages = [dict(m) for m in messages]
+            normalized_level = str(thinking_level).strip().lower()
+            for idx in range(len(injected_messages) - 1, -1, -1):
+                msg = injected_messages[idx]
+                if str(msg.get("role") or "").strip().lower() != "user":
+                    continue
+                content = str(msg.get("content") or "")
+                if content.strip().lower().startswith("/think"):
+                    break
+                msg["content"] = f"/think {normalized_level}\n\n{content}".strip()
+                break
+            messages = injected_messages
+
         base = get_ollama_base_url()
         tools = kwargs.get("tools")
         need_tools = bool(tools)
         system_prompt = kwargs.get("context", "")
-        ollama_messages = _to_ollama_messages(messages, system_prompt=system_prompt)
+        image_bytes: bytes | None = kwargs.get("image_bytes")
+        image_b64 = base64.b64encode(image_bytes).decode("utf-8") if image_bytes else None
+        ollama_messages = _to_ollama_messages(messages, system_prompt=system_prompt, image_b64=image_b64)
         ollama_tools = _to_ollama_tools(tools)
         models, model_error = await _resolve_models_for_request(
             model_raw=kwargs.get("model"),
@@ -354,7 +379,9 @@ class OllamaProvider(BaseProvider):
         tools = kwargs.get("tools")
         need_tools = bool(tools)
         system_prompt = kwargs.get("context", "")
-        ollama_messages = _to_ollama_messages(messages, system_prompt=system_prompt)
+        image_bytes: bytes | None = kwargs.get("image_bytes")
+        image_b64 = base64.b64encode(image_bytes).decode("utf-8") if image_bytes else None
+        ollama_messages = _to_ollama_messages(messages, system_prompt=system_prompt, image_b64=image_b64)
         ollama_tools = _to_ollama_tools(tools)
         models, model_error = await _resolve_models_for_request(
             model_raw=kwargs.get("model"),

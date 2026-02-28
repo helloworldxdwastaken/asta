@@ -4,8 +4,20 @@ from unittest.mock import patch
 import pytest
 
 from app.db import get_db
+from app.handler import _parse_learn_command
 from app.learn_about import parse_learn_about
 from app.services.learning_service import LearningService
+
+
+def test_parse_learn_command_treats_plain_topic_as_learn_action():
+    assert _parse_learn_command("/learn docker") == ("learn", ["docker"])
+    assert _parse_learn_command("/learn machine learning") == ("learn", ["machine", "learning"])
+    assert _parse_learn_command('/learn "machine learning"') == ("learn", ["machine learning"])
+
+
+def test_parse_learn_command_keeps_management_actions():
+    assert _parse_learn_command("/learn list") == ("list", [])
+    assert _parse_learn_command("/learn delete rust async") == ("delete", ["rust", "async"])
 
 
 def test_parse_learn_about_supports_aliases_with_duration():

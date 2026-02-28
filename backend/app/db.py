@@ -1,7 +1,9 @@
 """SQLite persistence: conversations, messages, tasks."""
 from __future__ import annotations
+import asyncio
 import aiosqlite
 import os
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -17,6 +19,16 @@ FINAL_MODES = ("off", "strict")
 ONE_SHOT_CRON_PREFIX = "@at "
 ONE_SHOT_REMINDER_NAME_PREFIX = "__reminder__:"
 ONE_SHOT_REMINDER_ID_OFFSET = 1_000_000_000
+
+
+def _is_sqlite_locked_error(err: Exception) -> bool:
+    try:
+        msg = str(err).lower()
+    except Exception:
+        msg = ""
+    if "database is locked" in msg or "database is busy" in msg or "database table is locked" in msg:
+        return True
+    return isinstance(err, sqlite3.OperationalError) and "locked" in msg
 
 
 def normalize_iso_utc(value: str) -> str:
@@ -97,13 +109,58 @@ def validate_cron_expression(expr: str, tz: str | None = None) -> tuple[bool, st
 class Db:
     def __init__(self) -> None:
         self._conn: aiosqlite.Connection | None = None
+        self._connect_lock = asyncio.Lock()
         import logging
         self.logger = logging.getLogger(__name__)
 
     async def connect(self) -> None:
-        self._conn = await aiosqlite.connect(DB_PATH)
-        self._conn.row_factory = aiosqlite.Row
-        await self._init_schema()
+        if self._conn is not None:
+            return
+        async with self._connect_lock:
+            if self._conn is not None:
+                return
+            conn: aiosqlite.Connection | None = None
+            try:
+                conn = await aiosqlite.connect(DB_PATH, timeout=30.0)
+                conn.row_factory = aiosqlite.Row
+                # Reduce lock contention under concurrent readers/writers.
+                await conn.execute("PRAGMA busy_timeout = 5000")
+                try:
+                    await conn.execute("PRAGMA journal_mode = WAL")
+                except Exception as e:
+                    if _is_sqlite_locked_error(e):
+                        self.logger.debug("Could not switch SQLite journal_mode to WAL (locked): %s", e)
+                    else:
+                        raise
+                try:
+                    await conn.execute("PRAGMA synchronous = NORMAL")
+                except Exception:
+                    pass
+                self._conn = conn
+                schema_error: Exception | None = None
+                for attempt in range(4):
+                    try:
+                        await self._init_schema()
+                        schema_error = None
+                        break
+                    except Exception as e:
+                        if not _is_sqlite_locked_error(e):
+                            raise
+                        schema_error = e
+                        await asyncio.sleep(0.15 * (attempt + 1))
+                if schema_error:
+                    self.logger.warning(
+                        "Skipping SQLite schema init due lock; reusing existing DB schema: %s",
+                        schema_error,
+                    )
+            except Exception:
+                if conn is not None:
+                    try:
+                        await conn.close()
+                    except Exception:
+                        pass
+                self._conn = None
+                raise
 
     async def _init_schema(self) -> None:
         if not self._conn:
@@ -1360,7 +1417,7 @@ class Db:
         cursor = await self._conn.execute(
             """SELECT id, name, cron_expr, tz, message, channel, channel_target, enabled, payload_kind, tlg_call, created_at
                FROM cron_jobs
-               WHERE user_id = ?
+               WHERE user_id = ? AND lower(trim(cron_expr)) NOT LIKE '@at %'
                ORDER BY created_at DESC""",
             (user_id,),
         )
@@ -1716,14 +1773,18 @@ class Db:
         await self._conn.execute("DELETE FROM spotify_retry_request WHERE user_id = ?", (user_id,))
         await self._conn.commit()
 
-    async def save_audio_note(self, user_id: str, title: str, transcript: str, formatted: str) -> None:
+    async def save_audio_note(self, user_id: str, title: str, transcript: str, formatted: str) -> int:
         if not self._conn:
             await self.connect()
-        await self._conn.execute(
+        cursor = await self._conn.execute(
             "INSERT INTO saved_audio_notes (user_id, created_at, title, transcript, formatted) VALUES (?, datetime('now'), ?, ?, ?)",
             (user_id, title, transcript, formatted),
         )
         await self._conn.commit()
+        try:
+            return int(cursor.lastrowid or 0)
+        except Exception:
+            return 0
 
     async def get_recent_audio_notes(self, user_id: str, limit: int = 5) -> list[dict[str, Any]]:
         if not self._conn:

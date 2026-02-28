@@ -449,7 +449,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             logger.exception("Telegram handler error")
             err_text = f"Error: {str(e)[:500]}"
             await update.message.reply_text(err_text)
-            # Persist user + error so web UI Telegram preview shows the same as Telegram (handler may have saved user already; duplicate is ok)
+            # Persist user + error so chat history stays consistent with what Telegram showed
+            # (handler may have saved user already; duplicate is ok).
             try:
                 from app.db import get_db
                 db = get_db()

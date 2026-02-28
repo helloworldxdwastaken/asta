@@ -132,7 +132,8 @@ class ClaudeProvider(BaseProvider):
                 error=ProviderError.AUTH,
                 error_message="Anthropic API key not set. Add it in Settings (API keys) or in backend/.env as ANTHROPIC_API_KEY."
             )
-        client = AsyncAnthropic(api_key=key)
+        timeout = kwargs.get("timeout")
+        client = AsyncAnthropic(api_key=key, timeout=float(timeout) if timeout else 120.0)
         system = kwargs.get("context", "")
         image_bytes: bytes | None = kwargs.get("image_bytes")
         image_mime: str = (kwargs.get("image_mime") or "image/jpeg").strip() or "image/jpeg"
@@ -142,15 +143,21 @@ class ClaudeProvider(BaseProvider):
         msgs = self._to_anthropic_messages(messages, image_b64=image_b64, image_mime=image_mime)
         model = kwargs.get("model") or "claude-3-5-sonnet-20241022"
         tools = self._to_anthropic_tools(kwargs.get("tools"))
+        thinking_level = str(kwargs.get("thinking_level") or "off").strip().lower()
+        budget = _THINKING_BUDGET.get(thinking_level)
+        max_tokens = max(budget + 2000, 8096) if budget else 8096
         try:
             create_kwargs = dict(
                 model=model,
-                max_tokens=2048,
+                max_tokens=max_tokens,
                 system=system or None,
                 messages=msgs,
             )
             if tools:
                 create_kwargs["tools"] = tools
+            if budget:
+                create_kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
+                create_kwargs["betas"] = ["interleaved-thinking-2025-05-14"]
             r = await client.messages.create(**create_kwargs)
             # Capture token usage
             _usage = getattr(r, "usage", None)
@@ -166,7 +173,11 @@ class ClaudeProvider(BaseProvider):
             tool_calls: list[dict] = []
             for b in (r.content or []):
                 btype = getattr(b, "type", "")
-                if btype == "text":
+                if btype == "thinking":
+                    thinking_text = (getattr(b, "thinking", "") or "").strip()
+                    if thinking_text:
+                        text_blocks.append(f"<think>{thinking_text}</think>")
+                elif btype == "text":
                     text = (getattr(b, "text", "") or "").strip()
                     if text:
                         text_blocks.append(text)

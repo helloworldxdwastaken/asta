@@ -122,7 +122,6 @@ Quick reference for errors you might see and how to fix them.
 |---------|-------|----------|
 | **Telegram handler error** | Bot token invalid or network issue | Check `TELEGRAM_BOT_TOKEN` in Settings or `backend/.env`. Get token from [@BotFather](https://t.me/BotFather). |
 | **Telegram shows raw `![...](...)` instead of image** | Running an older backend that only handled GIF links, not generic markdown images/data URLs. | Update backend to latest and restart (`./asta.sh restart`). Current builds send markdown image replies as native Telegram photos/animations. |
-| **Calling old WhatsApp endpoints returns 404** | WhatsApp bridge endpoints were removed from backend. | Use Telegram or the macOS app. |
 | **Sent image in macOS app chat but Asta cannot analyze it** | Web image upload path is not implemented yet. | Use Telegram photo input for vision turns. |
 
 ---

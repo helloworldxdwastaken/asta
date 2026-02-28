@@ -41,25 +41,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let btn = statusItem?.button {
             btn.image = CritterIconRenderer.makeIcon()
-            btn.action = #selector(trayClicked)
+            // Send action on both left and right mouse-up so we can distinguish them
+            btn.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            btn.action = #selector(trayClicked(_:))
             btn.target = self
         }
     }
 
-    @objc private func trayClicked() {
-        // Build a tiny menu: Open + Quit
+    @objc private func trayClicked(_ sender: NSStatusBarButton) {
+        guard let event = NSApp.currentEvent else { return }
+        let isRight = event.type == .rightMouseUp
+            || (event.type == .leftMouseUp && event.modifierFlags.contains(.control))
+        if isRight {
+            showTrayMenu()
+        } else {
+            MainWindowController.shared.show()
+        }
+    }
+
+    private func showTrayMenu() {
+        let isVisible = MainWindowController.shared.isWindowVisible
         let menu = NSMenu()
-        menu.addItem(withTitle: "Open Asta", action: #selector(openAsta), keyEquivalent: "")
+        menu.addItem(
+            withTitle: isVisible ? "Hide Asta" : "Open Asta",
+            action: #selector(toggleAsta),
+            keyEquivalent: "")
             .target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         statusItem?.menu = menu
         statusItem?.button?.performClick(nil)
-        statusItem?.menu = nil  // reset so next click works
+        statusItem?.menu = nil  // reset so next left-click fires the action again
     }
 
-    @objc private func openAsta() {
-        MainWindowController.shared.show()
+    @objc private func toggleAsta() {
+        MainWindowController.shared.toggle()
     }
 
     // MARK: - Cmd+Option+Space hotkey

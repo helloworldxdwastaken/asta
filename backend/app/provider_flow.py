@@ -5,7 +5,7 @@ from __future__ import annotations
 from app.providers.base import ProviderError
 
 # Fixed provider chain for single-user Asta flow.
-MAIN_PROVIDER_CHAIN: tuple[str, ...] = ("claude", "ollama", "openrouter")
+MAIN_PROVIDER_CHAIN: tuple[str, ...] = ("claude", "google", "openrouter", "ollama")
 DEFAULT_MAIN_PROVIDER = MAIN_PROVIDER_CHAIN[0]
 
 _BILLING_ERROR_HINTS: tuple[str, ...] = (

@@ -1,4 +1,5 @@
 """Asta API — control plane for AI, files, channels, and learning."""
+import asyncio
 import logging
 import os
 import subprocess
@@ -12,8 +13,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.db import get_db, DB_PATH
-from app.whatsapp_bridge import get_whatsapp_bridge_status
+from app.db import get_db, DB_PATH, _is_sqlite_locked_error
 from app.routers import chat, files, drive, rag, providers, tasks, settings as settings_router, spotify as spotify_router, audio as audio_router, cron as cron_router, agents as agents_router
 
 logger = logging.getLogger(__name__)
@@ -98,7 +98,31 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.exception("Failed to reload pending reminders: %s", e)
     # Telegram bot: do NOT block API startup if Telegram is unreachable or misconfigured.
-    token = await get_db().get_stored_api_key("telegram_bot_token") or get_settings().telegram_bot_token
+    # Also tolerate transient SQLite lock contention during restarts.
+    token: str | None = None
+    db = get_db()
+    for attempt in range(6):
+        try:
+            token = await db.get_stored_api_key("telegram_bot_token")
+            break
+        except Exception as e:
+            if not _is_sqlite_locked_error(e):
+                logger.exception("Failed to load Telegram token from DB; continuing with env token: %s", e)
+                break
+            delay = 0.25 * (attempt + 1)
+            if attempt == 5:
+                logger.warning(
+                    "Could not read Telegram token from DB after retries (database lock). "
+                    "Continuing without DB token."
+                )
+                break
+            logger.warning(
+                "Database locked while reading Telegram token (attempt %d/6), retrying in %.2fs",
+                attempt + 1,
+                delay,
+            )
+            await asyncio.sleep(delay)
+    token = token or get_settings().telegram_bot_token
     app.state.telegram_app = None
     if token:
         try:
@@ -131,7 +155,7 @@ except Exception:
 
 app = FastAPI(
     title="Asta",
-    description="Asta: personal control plane — AI, WhatsApp, Telegram, files, Drive, RAG.",
+    description="Asta: personal control plane — AI, Telegram, files, Drive, RAG.",
     version=VERSION,
     lifespan=lifespan,
 )
@@ -211,29 +235,3 @@ def restart_backend():
     return {"message": "Restarting backend…"}
 
 
-@app.get("/api/whatsapp/qr")
-async def whatsapp_qr():
-    """Proxy to WhatsApp bridge: return QR code (data URL) or connected status for the panel."""
-    import httpx
-    runtime = await get_whatsapp_bridge_status(settings.asta_whatsapp_bridge_url)
-    base = (runtime.get("bridge_url") or "").rstrip("/")
-    if not runtime.get("configured"):
-        return {"connected": False, "qr": None, "error": runtime.get("error"), "status": runtime}
-    if not runtime.get("reachable"):
-        return {"connected": False, "qr": None, "error": runtime.get("error"), "status": runtime}
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.get(f"{base}/qr")
-            payload = r.json() if r.content else {}
-            if not isinstance(payload, dict):
-                payload = {"connected": bool(runtime.get("connected")), "qr": None}
-            if "connected" not in payload:
-                payload["connected"] = bool(runtime.get("connected"))
-            if "qr" not in payload:
-                payload["qr"] = None
-            payload["status"] = runtime
-            if runtime.get("error") and not payload.get("error"):
-                payload["error"] = runtime["error"]
-            return payload
-    except Exception:
-        return {"connected": False, "qr": None, "error": runtime.get("error"), "status": runtime}

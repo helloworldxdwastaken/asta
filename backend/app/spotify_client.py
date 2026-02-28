@@ -480,3 +480,67 @@ async def set_volume_percent(user_id: str, volume_percent: int) -> bool:
     except Exception as e:
         logger.warning("Spotify volume failed: %s", e)
         return False
+
+
+async def get_spotify_user_id(token: str) -> str | None:
+    """Get current user's Spotify ID."""
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.get(
+                "https://api.spotify.com/v1/me",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=10.0,
+            )
+            r.raise_for_status()
+            return r.json().get("id")
+    except Exception as e:
+        logger.warning("Spotify get user ID failed: %s", e)
+        return None
+
+
+async def create_playlist(user_id: str, name: str, public: bool = False, description: str = "") -> dict[str, Any] | None:
+    """Create a new playlist for the user. Returns {id, uri, name, url} or None on failure."""
+    token = await get_user_access_token(user_id)
+    if not token:
+        return None
+    spotify_user_id = await get_spotify_user_id(token)
+    if not spotify_user_id:
+        return None
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                f"https://api.spotify.com/v1/users/{spotify_user_id}/playlists",
+                json={"name": name, "public": public, "description": description or ""},
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                timeout=10.0,
+            )
+            r.raise_for_status()
+            data = r.json()
+        return {
+            "id": data.get("id"),
+            "uri": data.get("uri"),
+            "name": data.get("name"),
+            "url": (data.get("external_urls") or {}).get("spotify"),
+        }
+    except Exception as e:
+        logger.warning("Spotify create playlist failed: %s", e)
+        return None
+
+
+async def add_tracks_to_playlist(user_id: str, playlist_id: str, track_uris: list[str]) -> bool:
+    """Add tracks to an existing playlist. Returns True on success."""
+    token = await get_user_access_token(user_id)
+    if not token or not playlist_id or not track_uris:
+        return False
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                f"https://api.spotify.com/v1/playlists/{playlist_id}/tracks",
+                json={"uris": track_uris},
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                timeout=10.0,
+            )
+            return r.status_code in (200, 201)
+    except Exception as e:
+        logger.warning("Spotify add tracks to playlist failed: %s", e)
+        return False

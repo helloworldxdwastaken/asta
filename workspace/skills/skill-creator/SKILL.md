@@ -25,7 +25,6 @@ Every skill needs YAML frontmatter and a markdown body:
 ---
 name: my-skill-id
 description: What this skill does. Use when the user asks for X or mentions Y.
-homepage: https://optional-link
 metadata: {}   # optional, e.g. emoji, requires.bins
 ---
 

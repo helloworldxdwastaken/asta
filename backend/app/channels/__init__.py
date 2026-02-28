@@ -1,1 +1,1 @@
-# Channel adapters: WhatsApp, Telegram, web. See docs/SPEC.md.
+# Channel adapters: Telegram, web. See docs/SPEC.md.

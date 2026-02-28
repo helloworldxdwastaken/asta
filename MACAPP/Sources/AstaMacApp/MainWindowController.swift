@@ -35,6 +35,8 @@ final class MainWindowController: NSObject, NSWindowDelegate {
         if let w = window, w.isVisible { hide() } else { show() }
     }
 
+    var isWindowVisible: Bool { window?.isVisible == true }
+
     // MARK: - Build
 
     private func buildWindow(appState: AppState) {

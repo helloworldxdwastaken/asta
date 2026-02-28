@@ -80,12 +80,15 @@ async def process_audio_to_notes(
         formatted = str(chat_resp or "").strip()
 
     # Save as "meeting" when instruction is meeting notes (so user can ask "last meeting?" later)
+    saved_path: str | None = None
     if _is_meeting_instruction(instruction) and formatted and transcript != "(no speech detected)":
         try:
             title = "Meeting " + datetime.now().strftime("%Y-%m-%d %H:%M")
-            await db.save_audio_note(user_id, title, transcript, formatted)
+            note_id = await db.save_audio_note(user_id, title, transcript, formatted)
+            if note_id > 0:
+                saved_path = f"saved_audio_notes/{note_id}"
             logger.info("Saved audio note as meeting for user %s: %s", user_id, title)
         except Exception as e:
             logger.warning("Could not save audio note: %s", e)
 
-    return {"transcript": transcript, "formatted": formatted}
+    return {"transcript": transcript, "formatted": formatted, "saved_path": saved_path}

@@ -80,9 +80,9 @@ async def test_get_provider_flow_returns_fixed_priority(monkeypatch):
     monkeypatch.setattr(settings_router, "_ollama_reachable", _ollama_up)
     out = await get_provider_flow(user_id="u")
 
-    assert out["order"] == ["claude", "ollama", "openrouter"]
+    assert out["order"] == list(settings_router.MAIN_PROVIDER_CHAIN)
     assert out["default_provider"] == "claude"
-    assert [row["position"] for row in out["providers"]] == [1, 2, 3]
+    assert [row["position"] for row in out["providers"]] == list(range(1, len(settings_router.MAIN_PROVIDER_CHAIN) + 1))
     assert all("active" in row for row in out["providers"])
 
 

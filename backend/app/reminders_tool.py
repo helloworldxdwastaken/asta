@@ -99,8 +99,7 @@ async def run_reminders_tool(
     s = get_settings()
     owner_phone = getattr(s, "asta_owner_phone_number", None)
     
-    # Default tlg_call to True if phone number is set and channel is telegram or whatsapp
-    # (actually we mainly care about automated calls for the owner)
+    # Default tlg_call to True if phone number is set
     default_call = bool(owner_phone)
     tlg_call = params.get("call", default_call)
     
@@ -131,7 +130,7 @@ async def run_reminders_tool(
             return "Error: remove action requires integer `id`."
         deleted = await db.delete_reminder(reminder_id, user_id)
         try:
-            from app.db import decode_one_shot_reminder_id
+            from app.db import decode_one_shot_reminder_id as _decode_one_shot_reminder_id
             from app.tasks.scheduler import get_scheduler
 
             sch = get_scheduler()
@@ -140,7 +139,7 @@ async def run_reminders_tool(
             if sch.get_job(legacy_job_id):
                 sch.remove_job(legacy_job_id)
             # One-shot cron-backed reminders.
-            one_shot_id = decode_one_shot_reminder_id(reminder_id)
+            one_shot_id = _decode_one_shot_reminder_id(reminder_id)
             if one_shot_id is not None:
                 cron_job_id = f"cron_{one_shot_id}"
                 if sch.get_job(cron_job_id):
@@ -206,7 +205,8 @@ async def run_reminders_tool(
         )
         if tlg_call is not None:
              # For reminders, tlg_call is stored in the cron_jobs table (one-shot job)
-             one_shot_id = decode_one_shot_reminder_id(reminder_id)
+             from app.db import decode_one_shot_reminder_id as _decode_one_shot_reminder_id
+             one_shot_id = _decode_one_shot_reminder_id(reminder_id)
              if one_shot_id is not None:
                  await db.update_cron_job(one_shot_id, tlg_call=tlg_call)
                  # If call enabled and target isn't a phone, update target in reminders table
@@ -219,11 +219,14 @@ async def run_reminders_tool(
         # Keep scheduler in sync after DB update.
         try:
             from app.cron_runner import add_cron_job_to_scheduler
-            from app.db import decode_one_shot_reminder_id, run_at_to_one_shot_cron_expr
+            from app.db import (
+                decode_one_shot_reminder_id as _decode_one_shot_reminder_id,
+                run_at_to_one_shot_cron_expr,
+            )
             from app.tasks.scheduler import get_scheduler
 
             sch = get_scheduler()
-            one_shot_id = decode_one_shot_reminder_id(reminder_id)
+            one_shot_id = _decode_one_shot_reminder_id(reminder_id)
             legacy_job_id = f"rem_{reminder_id}"
             if sch.get_job(legacy_job_id):
                 sch.remove_job(legacy_job_id)

@@ -69,6 +69,24 @@ Asta has two skill types:
 - **workspace/skills/skill-creator/** — Skill that helps you create and package skills (same format as OpenClaw). Use when designing or writing a new skill.
 - **Using OpenClaw skills in Asta:** Copy any skill folder from OpenClaw (e.g. `openclaw/workspace/skills/spotify-player/`) into **workspace/skills/**. Ensure `SKILL.md` has `name` and `description` in the frontmatter. The skill appears in Settings → Skills.
 
+## Agent Knowledge Folders (RAG-style docs per agent)
+
+For named agents (`is_agent: true`), Asta supports local per-agent knowledge folders:
+
+```text
+workspace/
+  agent-knowledge/
+    <agent-id>/
+      sources/
+      references/
+      notes/
+```
+
+- Route a message to an agent with `@Agent Name: ...`.
+- Asta retrieves relevant snippets from that agent's folder and injects them into context.
+- This is designed for manual curation: drop your research dumps, frameworks, and notes into these folders.
+- Preferred formats: `.md`, `.txt`, `.json`, `.yaml`, `.csv`, `.html`.
+
 ## Self-awareness skill
 
 When the user asks about Asta (features, how to use it, documentation), the **self-awareness** skill runs. It injects Asta’s `README.md`, `CHANGELOG.md`, and `docs/*.md` into context so the model can answer from the real docs. User context (who you are) comes from **workspace/USER.md**; no separate data folder is used. Enable or disable the skill in **Settings → Skills**.
@@ -112,8 +130,9 @@ From Telegram chat, you can control core runtime behavior without opening the pa
 | Workspace root | `ASTA_WORKSPACE_DIR` or `workspace/` | Context files + `skills/*/SKILL.md` (auto-created if missing) |
 | Context files | (none) | `AGENTS.md`, `USER.md`, `SOUL.md`, `TOOLS.md` (workspace root). **User** = workspace/USER.md only. |
 | Workspace skills | (none) | `workspace/skills/<id>/SKILL.md` |
+| Agent knowledge | (none) | `workspace/agent-knowledge/<agent-id>/{sources,references,notes}` |
 | Skill-creator | (none) | `workspace/skills/skill-creator/SKILL.md` |
 | Path allowlist | Env + DB (grant in Files UI) | OpenClaw-style request access |
 | Telegram allowlist | `ASTA_TELEGRAM_ALLOWED_IDS` | Backend only |
 
-This makes Asta “OpenClaw-adapted”: same workspace, skill format, and path management, with Asta’s backend, providers, and Telegram/WhatsApp integration.
+This makes Asta “OpenClaw-adapted”: same workspace, skill format, and path management, with Asta’s backend, providers, and Telegram/web integration.

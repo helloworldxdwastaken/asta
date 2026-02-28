@@ -712,6 +712,9 @@ public struct AstaAPIClient: Sendable {
         name: String,
         description: String,
         emoji: String,
+        icon: String = "",
+        avatar: String = "",
+        category: String = "",
         model: String,
         thinking: String,
         systemPrompt: String,
@@ -725,6 +728,9 @@ public struct AstaAPIClient: Sendable {
                 name: name,
                 description: description,
                 emoji: emoji,
+                icon: icon,
+                avatar: avatar,
+                category: category,
                 model: model,
                 thinking: thinking,
                 system_prompt: systemPrompt,
@@ -744,6 +750,9 @@ public struct AstaAPIClient: Sendable {
         name: String? = nil,
         description: String? = nil,
         emoji: String? = nil,
+        icon: String? = nil,
+        avatar: String? = nil,
+        category: String? = nil,
         model: String? = nil,
         thinking: String? = nil,
         systemPrompt: String? = nil,
@@ -758,6 +767,9 @@ public struct AstaAPIClient: Sendable {
                 name: name,
                 description: description,
                 emoji: emoji,
+                icon: icon,
+                avatar: avatar,
+                category: category,
                 model: model,
                 thinking: thinking,
                 system_prompt: systemPrompt,
@@ -1036,6 +1048,7 @@ public struct AstaSkillItem: Codable, Sendable {
     public let enabled: Bool?
     public let available: Bool?
     public let action_hint: String?
+    public let is_agent: Bool?
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -1045,10 +1058,11 @@ public struct AstaSkillItem: Codable, Sendable {
         enabled     = try? c.decode(Bool.self, forKey: .enabled)
         available   = try? c.decode(Bool.self, forKey: .available)
         action_hint = try? c.decode(String.self, forKey: .action_hint)
+        is_agent    = try? c.decode(Bool.self, forKey: .is_agent)
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, description, enabled, available, action_hint
+        case id, name, description, enabled, available, action_hint, is_agent
     }
 }
 
@@ -1249,6 +1263,9 @@ public struct AstaAgent: Codable, Sendable, Identifiable {
     public let name: String
     public let description: String
     public let emoji: String
+    public let icon: String?
+    public let avatar: String?
+    public let category: String?
     public let model: String
     public let thinking: String
     public let system_prompt: String
@@ -1364,11 +1381,13 @@ private struct AstaCronUpdateIn: Encodable, Sendable {
 }
 private struct AstaAgentCreateIn: Encodable, Sendable {
     let name: String; let description: String; let emoji: String
+    let icon: String; let avatar: String; let category: String
     let model: String; let thinking: String; let system_prompt: String
     let skills: [String]?
 }
 private struct AstaAgentUpdateIn: Encodable, Sendable {
     let name: String?; let description: String?; let emoji: String?
+    let icon: String?; let avatar: String?; let category: String?
     let model: String?; let thinking: String?; let system_prompt: String?
     let skills: [String]?
 }

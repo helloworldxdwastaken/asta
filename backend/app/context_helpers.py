@@ -262,62 +262,39 @@ def _get_spotify_section(extra: dict) -> list[str]:
     parts = []
     if not extra:
         return parts
-        
+
     if extra.get("spotify_reconnect_needed"):
-        parts.append("--- Spotify play ---")
-        parts.append("The user asked to play something. They had connected Spotify before but the connection is no longer valid (e.g. session expired or app credentials changed). Reply with ONE short sentence: tell them to go to Settings → Spotify and click 'Connect Spotify' again to re-authorize. Do NOT say they have never connected.")
+        parts.append("--- Spotify ---")
+        parts.append("Spotify was connected before but the token is no longer valid. Tell the user to go to Settings → Integrations → Spotify and click 'Connect Spotify' to re-authorize. Do NOT say they have never connected.")
         parts.append("")
     elif extra.get("spotify_play_connected") is False:
-        parts.append("--- Spotify play ---")
-        parts.append("The user asked to play something but has not connected their Spotify account. Reply with ONE short sentence: tell them to go to Settings → Spotify and click 'Connect Spotify' (one-time). After they connect, Asta WILL start playback on their devices — do NOT say you cannot control Spotify or that you can only give commands.")
+        parts.append("--- Spotify ---")
+        parts.append("Spotify is not connected. Tell the user to go to Settings → Integrations → Spotify and click 'Connect Spotify' (one-time). Do NOT say you cannot control Spotify once connected.")
         parts.append("")
     elif extra.get("spotify_play_connected") is True:
         parts.append("--- Spotify ---")
-        parts.append("The user has connected their Spotify account. Playback and search are available. Do NOT tell them to connect or reconnect. If they asked whether Spotify is connected, confirm it is. If they asked to play something, list available devices or confirm playback started based on the context above.")
-        parts.append("")
-    elif extra.get("spotify_devices") is not None and len(extra.get("spotify_devices", [])) == 0 and extra.get("spotify_play_track_uri"):
-        parts.append("--- Spotify play ---")
-        parts.append("No Spotify devices are available. Tell the user to open Spotify on a phone, computer, or speaker first, then ask again.")
-        parts.append("")
-    elif extra.get("spotify_play_failed"):
-        dev = extra.get("spotify_play_failed_device") or "that device"
-        parts.append("--- Spotify play ---")
-        parts.append(f"Playback failed on {dev}. Reply briefly that it didn't start and suggest: open the Spotify app on that device (phone/computer/speaker), make sure they have Spotify Premium if required for 'play on device', then try again or pick another device.")
-        parts.append("")
-    elif extra.get("spotify_played_on"):
-        parts.append("--- Spotify play ---")
-        parts.append(f"Playing on {extra['spotify_played_on']}. Confirm briefly (e.g. 'Playing on {extra['spotify_played_on']}!').")
-        parts.append("")
-    
-    if extra.get("spotify_skipped"):
-        parts.append("--- Spotify control ---")
-        parts.append("You skipped to the next track successfully. Briefly confirm (e.g. 'Skipped to the next track.').")
-        parts.append("")
-    if extra.get("spotify_volume_set"):
-        parts.append("--- Spotify control ---")
-        vol = extra.get("spotify_volume_value")
-        if isinstance(vol, int):
-            parts.append(f"You set the Spotify volume to {vol}%. Briefly confirm (e.g. 'Volume set to {vol}%.').")
-        else:
-            parts.append("You adjusted the Spotify volume successfully. Confirm briefly.")
-        parts.append("")
-    elif extra.get("spotify_devices") and len(extra["spotify_devices"]) >= 1:
-        parts.append("--- Spotify play ---")
-        dev_list = ", ".join(f"{i+1}. {d.get('name', 'Device')}" for i, d in enumerate(extra["spotify_devices"]))
-        parts.append(f"Asta will start playback when the user picks a device. List: {dev_list}. Ask: 'On which device? 1. X, 2. Y — reply with the number or name.' When they reply, the system plays on that device. Do NOT say you cannot control Spotify.")
-        parts.append("")
-    elif extra.get("spotify_results"):
-        parts.append("--- Spotify search results ---")
-        for i, tr in enumerate(extra["spotify_results"][:5], 1):
-            name = tr.get("name") or ""
-            artist = tr.get("artist") or ""
-            url = tr.get("url") or ""
-            parts.append(f"{i}. {name}" + (f" — {artist}" if artist else "") + (f" {url}" if url else ""))
+        parts.append(
+            "Spotify is connected. Use the spotify tool to handle any music request: "
+            "search tracks/playlists/artists (action=search), play by name or URI (action=play), "
+            "control playback (action=control), set volume (action=volume), "
+            "check now playing (action=now_playing), list playlists (action=list_playlists), "
+            "get tracks in a playlist (action=get_playlist_tracks), "
+            "create a playlist (action=create_playlist), add songs (action=add_to_playlist), "
+            "remove songs from a playlist (action=remove_from_playlist), "
+            "add a track to the queue (action=queue), like/save a track (action=save_track). "
+            "IMPORTANT play rules: "
+            "- To play a TRACK: action=play, type=track, query=<song name> "
+            "- To play a PLAYLIST (user says 'play my playlist X', 'play playlist X', 'run playlist X'): action=play, type=playlist, query=<playlist name> "
+            "- To play an ARTIST: action=play, type=artist, query=<artist name> "
+            "If the user says 'play my playlist [name]' or refers to their own playlist, ALWAYS use type=playlist. "
+            "Do NOT use shell commands or exec for Spotify. "
+            "CRITICAL: NEVER say you added, played, created, or changed anything without calling the spotify tool first. "
+            "Always call the tool, then reply based on what the tool actually returned."
+        )
         parts.append("")
     else:
-        # No Spotify flow data (e.g. user asked "what's playing?"). Do not use exec for Spotify.
         parts.append("--- Spotify ---")
-        parts.append("Spotify (search/play/control) is via Settings → Spotify. For 'what song is playing' / 'now playing', use Spotify APIs (not shell commands). Do NOT run a shell command for Spotify.")
+        parts.append("Spotify is available. Use the spotify tool for all music requests — do NOT use shell commands.")
         parts.append("")
     return parts
 
@@ -342,7 +319,7 @@ async def _get_reminders_section(db: "Db", user_id: str, extra: dict) -> list[st
 
     if extra.get("reminder_scheduled"):
         parts.append("--- Just scheduled ---")
-        parts.append("You have scheduled a reminder for the user. Briefly confirm it (e.g. 'I'll wake you up at 7:00 AM' or 'I'll remind you at 6pm to call mom'). At the set time the user will get a friendly message on Telegram/WhatsApp or in the web panel.")
+        parts.append("You have scheduled a reminder for the user. Briefly confirm it (e.g. 'I'll wake you up at 7:00 AM' or 'I'll remind you at 6pm to call mom'). At the set time the user will get a friendly message on Telegram or in the web panel.")
         parts.append("")
     return parts
 

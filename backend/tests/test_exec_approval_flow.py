@@ -17,7 +17,7 @@ class _DummyProvider:
         return ProviderResponse(content="ok")
 
 
-async def _fake_compact_history(messages, provider, context=None, max_tokens=None):
+async def _fake_compact_history(messages, provider, context=None, max_tokens=None, **kwargs):
     return messages
 
 

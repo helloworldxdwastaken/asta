@@ -5,7 +5,7 @@
 All sensitive data lives in **one place**: `backend/.env`. That file is **gitignored**, so it is never pushed to GitHub.
 
 - **Commit:** `.env.example` (this repo) — template only, no real keys or numbers.
-- **Do not commit:** `backend/.env` — your real API keys, tokens, paths, WhatsApp bridge URL.
+- **Do not commit:** `backend/.env` — your real API keys, tokens, and private paths.
 
 ## Where to put your real config
 
@@ -21,7 +21,7 @@ All sensitive data lives in **one place**: `backend/.env`. That file is **gitign
    - `GEMINI_API_KEY=...`
    - `OPENROUTER_API_KEY=...`
    - `TELEGRAM_BOT_TOKEN=123456:ABC...`
-   - `ASTA_WHATSAPP_BRIDGE_URL=http://localhost:3001`
+   - `ASTA_OWNER_PHONE_NUMBER=+15551234567` (if using Pingram voice calls)
    - `ASTA_ALLOWED_PATHS=/home/me/docs,/home/me/notes`
    - `SPOTIFY_CLIENT_ID=...` and `SPOTIFY_CLIENT_SECRET=...` (optional; can also be set in Settings → Spotify)
 
@@ -30,7 +30,7 @@ All sensitive data lives in **one place**: `backend/.env`. That file is **gitign
 3. **Never add these to the repo:**
    - API keys (Groq, Gemini, Anthropic, OpenAI, OpenRouter, Spotify)
    - Telegram bot token
-   - WhatsApp numbers (they only appear in your local DB if you use reminders)
+   - Phone numbers (e.g., owner reminder/call target numbers)
    - Paths that include your username or sensitive dirs (use generic docs in `.env.example`)
    - The file `backend/asta.db` (it may contain stored API keys and chat/reminder data)
 
@@ -39,7 +39,6 @@ All sensitive data lives in **one place**: `backend/.env`. That file is **gitign
 - `backend/.env` — env-based secrets
 - `backend/asta.db` — DB with chat, reminders, stored API keys (Settings), Spotify tokens
 - `backend/chroma_db/` — RAG vectors
-- `services/whatsapp/.wweb_auth/` — WhatsApp session (never commit)
 - Any file named `.env`, `.env.local`, or under `secrets/`
 
 See the project root **`.gitignore`** for the full list.
@@ -50,10 +49,10 @@ Run this — it should list **no** files; if it lists anything, unstage and add 
 
 ```bash
 git status
-git diff --cached --name-only | grep -E '\.env$|\.env\.|secrets/|\.db$|\.wweb_auth|credentials|token\.json' || true
+git diff --cached --name-only | grep -E '\.env$|\.env\.|secrets/|\.db$|credentials|token\.json' || true
 ```
 
-- You must **not** see `backend/.env`, any `.env`, `backend/asta.db`, or `services/whatsapp/.wweb_auth` in `git status`.
+- You must **not** see `backend/.env`, any `.env`, or `backend/asta.db` in `git status`.
 - If any of those appear, run: `git restore --staged <file>` then add the path to `.gitignore` if needed.
 
 **If you ever committed `.env` by mistake:**

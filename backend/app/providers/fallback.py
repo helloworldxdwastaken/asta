@@ -48,6 +48,7 @@ async def _provider_has_key(db, provider_name: str) -> bool:
     """Check if a provider has its API key configured."""
     key_map = {
         "claude": "anthropic_api_key",
+        "google": "gemini_api_key",
         "openrouter": "openrouter_api_key",
         "ollama": None,  # Local, no key needed
     }

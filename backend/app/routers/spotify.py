@@ -20,7 +20,7 @@ class PlayIn(BaseModel):
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-SCOPES = "user-read-playback-state user-modify-playback-state user-read-private"
+SCOPES = "user-read-playback-state user-modify-playback-state user-read-private playlist-read-private playlist-modify-private playlist-modify-public user-library-modify user-library-read"
 
 
 @router.get("/spotify/connect")
@@ -112,3 +112,13 @@ async def spotify_status(user_id: str = "default"):
     """Whether the user has connected Spotify for playback."""
     token = await get_user_access_token(user_id)
     return {"connected": bool(token)}
+
+
+@router.post("/spotify/disconnect")
+async def spotify_disconnect(user_id: str = "default"):
+    """Clear stored Spotify tokens so the user can re-authorize."""
+    from app.db import get_db
+    db = get_db()
+    await db.connect()
+    await db.clear_spotify_tokens(user_id)
+    return {"disconnected": True}

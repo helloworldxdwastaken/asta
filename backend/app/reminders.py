@@ -1,4 +1,4 @@
-"""Parse reminder intent, schedule, and send notifications (WhatsApp, Telegram, web)."""
+"""Parse reminder intent, schedule, and send notifications (Telegram, web)."""
 import logging
 import os
 import re
@@ -319,31 +319,19 @@ async def trigger_pingram_voice_call(number: str, message: str, template_id: str
 
 
 async def send_notification(channel: str, target: str, message: str) -> None:
-    """Send notification to user on the given channel (whatsapp, telegram, web)."""
+    """Send notification to user on the given channel (telegram, web)."""
     if channel == "telegram" and target:
         try:
             await send_telegram_message(target, message)
         except Exception as e:
             logger.warning("Failed to send reminder notification (channel=%s, target=%s): %s", channel, target, e)
-            # Don't re-raise - continue with attempt marked
-    elif channel == "whatsapp" and target:
-        s = get_settings()
-        url = getattr(s, "asta_whatsapp_bridge_url", None) or os.environ.get("ASTA_WHATSAPP_BRIDGE_URL")
-        if url:
-            import httpx
-            async with httpx.AsyncClient() as client:
-                await client.post(
-                    f"{url.rstrip('/')}/send",
-                    json={"to": target, "message": message},
-                    timeout=10.0,
-                )
     # web: stored in reminders with status=sent; panel can list them
     return
 
 
 async def send_skill_status(channel: str, channel_target: str, labels: list[str]) -> None:
-    """Send a short status to Telegram/WhatsApp showing which skills are in use (e.g. 'Searching the web… • Checking the weather…')."""
-    if not channel_target or channel not in ("telegram", "whatsapp"):
+    """Send a short status to Telegram showing which skills are in use."""
+    if not channel_target or channel != "telegram":
         return
     if not labels:
         return

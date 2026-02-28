@@ -25,6 +25,7 @@ from app.provider_flow import (
     MAIN_PROVIDER_CHAIN,
     normalize_main_provider,
 )
+from app.thinking_capabilities import get_thinking_options
 from app.ollama_catalog import (
     ollama_list_tool_models,
     resolve_ollama_model_name,
@@ -174,7 +175,16 @@ async def get_thinking(user_id: str = "default"):
     db = get_db()
     await db.connect()
     level = await db.get_user_thinking_level(user_id)
-    return {"thinking_level": level}
+    provider = normalize_main_provider(await db.get_user_default_ai(user_id))
+    model = await db.get_user_provider_model(user_id, provider)
+    options = get_thinking_options(provider, model)
+    return {
+        "thinking_level": level,
+        "provider": provider,
+        "model": model or "",
+        "options": list(options),
+        "supports_xhigh": "xhigh" in options,
+    }
 
 
 @router.put("/settings/thinking")
@@ -237,7 +247,7 @@ async def get_vision_settings():
     s = get_settings()
     return {
         "preprocess": bool(getattr(s, "asta_vision_preprocess", True)),
-        "provider_order": str(getattr(s, "asta_vision_provider_order", "openrouter,claude,openai") or ""),
+        "provider_order": str(getattr(s, "asta_vision_provider_order", "openrouter,ollama") or ""),
         "openrouter_model": str(
             getattr(s, "asta_vision_openrouter_model", "nvidia/nemotron-nano-12b-v2-vl:free") or ""
         ),
@@ -248,14 +258,14 @@ async def get_vision_settings():
 @router.put("/api/settings/vision")
 async def set_vision_settings(body: VisionSettingsIn):
     order_raw = (body.provider_order or "").strip().lower()
-    allowed = {"openrouter", "claude", "openai"}
+    allowed = {"openrouter", "ollama"}
     parsed_order = [p.strip() for p in order_raw.split(",") if p.strip()]
     if parsed_order and any(p not in allowed for p in parsed_order):
         raise HTTPException(
             status_code=400,
-            detail="provider_order must only include: openrouter, claude, openai",
+            detail="provider_order must only include: openrouter, ollama",
         )
-    provider_order = ",".join(parsed_order) if parsed_order else "openrouter,claude,openai"
+    provider_order = ",".join(parsed_order) if parsed_order else "openrouter,ollama"
     openrouter_model = (
         (body.openrouter_model or "").strip()
         or "nvidia/nemotron-nano-12b-v2-vl:free"
@@ -814,8 +824,21 @@ def _get_all_skill_defs():
     from app.workspace import discover_workspace_skills
     out = []
     for s in SKILLS:
-        out.append({**s, "source": "builtin", "install_cmd": None, "install_label": None, "required_bins": []})
+        out.append({
+            **s,
+            "source": "builtin",
+            "install_cmd": None,
+            "install_label": None,
+            "required_bins": [],
+            "is_agent": False,
+        })
     for r in discover_workspace_skills():
+        is_agent = False
+        try:
+            raw = r.file_path.read_text(encoding="utf-8")
+            is_agent = bool(re.search(r"(?im)^\s*is_agent\s*:\s*true\s*$", raw))
+        except Exception:
+            is_agent = False
         out.append({
             "id": r.name,
             "name": r.name.replace("-", " ").replace("_", " ").title(),
@@ -825,6 +848,7 @@ def _get_all_skill_defs():
             "install_label": getattr(r, "install_label", None),
             "required_bins": list(getattr(r, "required_bins", ())),
             "supported_os": list(getattr(r, "supported_os", ())),
+            "is_agent": is_agent,
         })
     deduped: list[dict] = []
     seen_ids: set[str] = set()

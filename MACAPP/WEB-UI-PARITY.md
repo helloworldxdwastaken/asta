@@ -1,12 +1,12 @@
-# Mac App vs Web UI – Page & Feature Parity
+# Mac App vs Legacy browser client – Page & Feature Parity
 
-This document compares every Web UI page/section with the Mac app (Asta Panel + Chat overlay) and lists gaps.
+This document compares every Legacy browser client page/section with the Mac app (Asta Panel + Chat overlay) and lists gaps.
 
 ---
 
 ## 1. Page / Tab Mapping
 
-| Web UI (route)        | Mac app equivalent                          | Notes |
+| Legacy browser client (route)        | Mac app equivalent                          | Notes |
 |-----------------------|---------------------------------------------|-------|
 | **/** Dashboard       | **Dashboard** tab                           | Bento-style overview; some cards differ. |
 | **/chat** Chat        | **Chat overlay** (Option+Space)             | No dedicated Chat tab in Panel. |
@@ -16,7 +16,7 @@ This document compares every Web UI page/section with the Mac app (Asta Panel + 
 | **/learning** RAG      | ❌ None                                     | No RAG/Learning page in Mac app. |
 | **/audio-notes** Audio| ❌ None                                     | No Audio notes page in Mac app. |
 | **/skills** Skills    | **Settings → Skills** sub-tab               | Toggle list; parity. |
-| **/channels** Channels| **Channels** tab                            | Telegram, Pingram, WhatsApp; parity. |
+| **/channels** Channels| **Channels** tab                            | Telegram, Pingram; parity. |
 | **/cron** Cron        | **Cron** tab                                | List + Add; Cron has fewer fields. |
 | **/settings** Settings | **Settings** tab (General, Vision, Models, Keys, Skills) | Sub-tabs; most parity, some missing. |
 | (not a page) Notifications | **Notifications** tab                    | List + Delete; Web shows in Dashboard. |
@@ -25,7 +25,7 @@ This document compares every Web UI page/section with the Mac app (Asta Panel + 
 
 ## 2. Dashboard
 
-| Feature | Web UI | Mac app |
+| Feature | Legacy browser client | Mac app |
 |--------|--------|---------|
 | Title + subtitle | ✅ "Asta Dashboard" / "System Overview & Diagnostics" | ✅ Same |
 | System status badge | ✅ Online/Offline + version | ✅ Same |
@@ -34,7 +34,7 @@ This document compares every Web UI page/section with the Mac app (Asta Panel + 
 | **The Brain** (AI providers + models) | ✅ List with model names, Ollama list | ✅ Provider list + model; similar |
 | **The Body** (CPU, RAM, Disk, Uptime) | ✅ Vitals + update prompt | ✅ Vitals + update prompt in card |
 | **The Eyes** (Vision) | ✅ OpenRouter vision status + model name | ✅ Vision Ready / not configured |
-| **Channels** (Telegram, WhatsApp) | ✅ Connector cards + "Configure Channels →" | ✅ Channel row + link to **Web** `/channels` (not in-app Channels tab) |
+| **Channels** (Telegram, Pingram) | ✅ Connector cards + "Configure Channels →" | ✅ Channel row + link to **Web** `/channels` (not in-app Channels tab) |
 | **Notes** (workspace notes count + link to /notes) | ✅ Bento card | ✅ Notes card (count + Open Notes →) |
 | **Schedule** (reminders + cron count + link to /cron) | ✅ Bento card | ✅ Same idea; link opens **Web** `/cron` |
 | **Capabilities** (skills count + link to /skills) | ✅ Bento card | ✅ Same; link opens **Web** `/skills` |
@@ -48,7 +48,7 @@ This document compares every Web UI page/section with the Mac app (Asta Panel + 
 
 ## 3. Chat
 
-| Feature | Web UI | Mac app (overlay) |
+| Feature | Legacy browser client | Mac app (overlay) |
 |--------|--------|--------------------|
 | Thread (user + assistant messages) | ✅ | ✅ |
 | Provider/channel selector | ✅ Web / Telegram | N/A (single context) |
@@ -68,7 +68,7 @@ This document compares every Web UI page/section with the Mac app (Asta Panel + 
 
 ## 4. Files, Notes, Drive, Learning (RAG), Audio Notes
 
-| Page | Web UI | Mac app |
+| Page | Legacy browser client | Mac app |
 |------|--------|---------|
 | **Files** | Browse roots, read/write files, User.md edit | ❌ No equivalent |
 | **Notes** | Workspace notes list + edit + markdown preview | ❌ No equivalent |
@@ -83,7 +83,7 @@ This document compares every Web UI page/section with the Mac app (Asta Panel + 
 
 ## 5. Skills
 
-| Feature | Web UI | Mac app (Settings → Skills) |
+| Feature | Legacy browser client | Mac app (Settings → Skills) |
 |--------|--------|------------------------------|
 | List skills with enabled/available | ✅ | ✅ |
 | Toggle enabled | ✅ | ✅ |
@@ -98,16 +98,13 @@ This document compares every Web UI page/section with the Mac app (Asta Panel + 
 
 ## 6. Channels
 
-| Feature | Web UI | Mac app |
+| Feature | Legacy browser client | Mac app |
 |--------|--------|---------|
 | Telegram token (save/remove) | ✅ | ✅ |
 | Telegram username (voice) | N/A on Channels (token only) | ✅ |
 | BotFather + commands hint | ✅ | ✅ (text) |
 | Pingram: Client ID, Secret, API Key, Notification ID, Template ID, Phone | ✅ | ✅ |
 | Pingram Save + Test call | ✅ | ✅ |
-| WhatsApp QR (poll) | ✅ | ✅ |
-| WhatsApp policy (owner, allowed, self-chat only) + Save | ✅ | ✅ |
-| WhatsApp Disconnect | ✅ | ✅ |
 | Quick start / subtitle | ✅ | ✅ | 
 | Status badges (Connected / Not configured etc.) | ✅ | ✅ (Mac: in section text) |
 
@@ -117,7 +114,7 @@ This document compares every Web UI page/section with the Mac app (Asta Panel + 
 
 ## 7. Cron
 
-| Feature | Web UI | Mac app |
+| Feature | Legacy browser client | Mac app |
 |--------|--------|---------|
 | List jobs (name, expr, tz, message, …) | ✅ Table with full columns | ✅ List with name + expr + message |
 | **Channel** (Web / Telegram) per job | ✅ Toggle + channel_target | ❌ Not shown; not in add form |
@@ -144,7 +141,7 @@ This document compares every Web UI page/section with the Mac app (Asta Panel + 
 
 ### 8.1 General (Default AI, Thinking, Reasoning, Final mode, Providers)
 
-| Feature | Web UI | Mac app (Settings → General) |
+| Feature | Legacy browser client | Mac app (Settings → General) |
 |--------|--------|-------------------------------|
 | Default AI provider | ✅ | ✅ |
 | Thinking level | ✅ | ✅ |
@@ -156,7 +153,7 @@ This document compares every Web UI page/section with the Mac app (Asta Panel + 
 
 ### 8.2 Vision
 
-| Feature | Web UI | Mac app (Settings → Vision) |
+| Feature | Legacy browser client | Mac app (Settings → Vision) |
 |--------|--------|-----------------------------|
 | Preprocess toggle, Provider order, OpenRouter model | ✅ | ✅ |
 
@@ -164,7 +161,7 @@ This document compares every Web UI page/section with the Mac app (Asta Panel + 
 
 ### 8.3 Models
 
-| Feature | Web UI | Mac app (Settings → Models) |
+| Feature | Legacy browser client | Mac app (Settings → Models) |
 |--------|--------|-----------------------------|
 | Model per provider (Claude presets, Ollama list, OpenRouter list) | ✅ Rich presets + custom | ✅ Picker or text; Ollama/OpenRouter options from API |
 | Default vs custom model | ✅ | ✅ "(default)" option |
@@ -173,7 +170,7 @@ This document compares every Web UI page/section with the Mac app (Asta Panel + 
 
 ### 8.4 API Keys
 
-| Feature | Web UI | Mac app (Settings → Keys) |
+| Feature | Legacy browser client | Mac app (Settings → Keys) |
 |--------|--------|----------------------------|
 | Status list (which keys are set) | ✅ | ✅ |
 | Edit fields (masked when set) + Save | ✅ | ✅ KeysEditView |
@@ -183,7 +180,7 @@ This document compares every Web UI page/section with the Mac app (Asta Panel + 
 
 ### 8.5 Settings only in Web (not in Mac)
 
-| Feature | Web UI | Mac app |
+| Feature | Legacy browser client | Mac app |
 |--------|--------|---------|
 | **Restart / Stop backend** button | ✅ | ✅ Settings → General → Backend |
 | **Auto-updater** (Daily Auto-Update cron edit) | ✅ Details + save cron expr/tz | ❌ |
@@ -200,7 +197,7 @@ This document compares every Web UI page/section with the Mac app (Asta Panel + 
 
 ## 9. Notifications
 
-| Feature | Web UI | Mac app |
+| Feature | Legacy browser client | Mac app |
 |--------|--------|---------|
 | List recent notifications | Shown in Dashboard; no dedicated page | ✅ Notifications tab |
 | Delete notification | ✅ (API) | ✅ |
@@ -234,4 +231,4 @@ This document compares every Web UI page/section with the Mac app (Asta Panel + 
 
 Remaining optional: Auto-updater cron edit in Settings, Allowed paths UI, Memory health / Security audit cards, Chat conversation history load, Provider order reorder.
 
-This file can be updated as features are added or when the Web UI changes.
+This file can be updated as features are added or when the Legacy browser client changes.

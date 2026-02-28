@@ -12,6 +12,10 @@ struct ChatMessage: Identifiable, Equatable {
     var content: String
     var thinkingContent: String?
     var toolsUsed: String?
+    /// Tools currently executing (live — shown as animated pills while streaming).
+    var activeTools: [String]
+    /// Tools that have finished this turn (accumulated via tool_end events).
+    var completedTools: [String]
     var provider: String?
     var isStreaming: Bool
     var phase: StreamPhase
@@ -30,6 +34,8 @@ struct ChatMessage: Identifiable, Equatable {
         content: String,
         thinkingContent: String? = nil,
         toolsUsed: String? = nil,
+        activeTools: [String] = [],
+        completedTools: [String] = [],
         provider: String? = nil,
         isStreaming: Bool = false,
         phase: StreamPhase = .done,
@@ -40,6 +46,8 @@ struct ChatMessage: Identifiable, Equatable {
         self.content = content
         self.thinkingContent = thinkingContent
         self.toolsUsed = toolsUsed
+        self.activeTools = activeTools
+        self.completedTools = completedTools
         self.provider = provider
         self.isStreaming = isStreaming
         self.phase = phase
@@ -210,6 +218,28 @@ struct FlowLayout: Layout {
             totalHeight = currentY + lineHeight
         }
         return (CGSize(width: maxWidth, height: totalHeight), positions)
+    }
+}
+
+// MARK: - Active tool pill (animated, shown while tool is executing)
+
+struct ActiveToolPill: View {
+    let label: String
+    let icon: String
+    @State private var pulsing = false
+
+    var body: some View {
+        HStack(spacing: 3) {
+            Image(systemName: icon).font(.system(size: 8))
+            Text(label).font(.system(size: 10))
+        }
+        .foregroundStyle(Color.accentColor)
+        .padding(.horizontal, 6).padding(.vertical, 3)
+        .background(Color.accentColor.opacity(pulsing ? 0.18 : 0.08))
+        .clipShape(Capsule())
+        .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: pulsing)
+        .onAppear { pulsing = true }
+        .help("Running: \(label)")
     }
 }
 

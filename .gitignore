@@ -25,17 +25,9 @@ data/
 backend/*.db
 backend/chroma_db/
 
-# WhatsApp bridge (session, cache, any stored numbers)
-services/whatsapp/.wweb_auth/
-services/whatsapp/.wweb_cache/
-services/whatsapp/auth_info_baileys/
-services/whatsapp/*.json
-!services/whatsapp/package.json
-
 # Node
 node_modules/
 frontend/node_modules/
-services/whatsapp/node_modules/
 npm-debug.log*
 
 # Python

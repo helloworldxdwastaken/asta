@@ -118,14 +118,17 @@ _IMAGE_GEN_REQUEST_OBJECTS = (
 # Providers that can participate in tool/fallback guardrails.
 # Ollama is included because Asta uses text tool-call protocols with it.
 _TOOL_CAPABLE_PROVIDERS = frozenset({"openai", "groq", "openrouter", "claude", "google", "ollama"})
-_VISION_CAPABLE_PROVIDERS = frozenset({"openrouter", "claude", "openai"})
+_VISION_PREPROCESSOR_PROVIDERS = frozenset({"openrouter", "ollama"})
 _VISION_PROVIDER_KEY = {
     "openrouter": "openrouter_api_key",
-    "claude": "anthropic_api_key",
-    "openai": "openai_api_key",
 }
-_VISION_PROVIDER_ORDER_DEFAULT = ("openrouter", "claude", "openai")  # Nemotron via OpenRouter first
+_VISION_PROVIDER_ORDER_DEFAULT = ("openrouter", "ollama")  # Nemotron first, Minimax fallback
 _VISION_OPENROUTER_MODEL_DEFAULT = "nvidia/nemotron-nano-12b-v2-vl:free"
+_VISION_OLLAMA_MODEL_DEFAULT = "minimax-m2.5:cloud"
+_VISION_PREPROCESSOR_UNAVAILABLE_MESSAGE = (
+    "Image received, but the dedicated vision preprocessor is unavailable. "
+    "Asta expects OpenRouter Nemotron first and Ollama Minimax as fallback."
+)
 _GIF_COOLDOWN_SECONDS = 30 * 60
 _SILENT_REPLY_TOKEN = "NO_REPLY"
 _FILES_LOCATION_HINTS = {
@@ -212,6 +215,23 @@ _REASONING_THINK_TAG_RE = re.compile(
     re.IGNORECASE,
 )
 _STATUS_PREFIX = "[[ASTA_STATUS]]"
+_SENSITIVE_DB_KEY_NAMES = (
+    "notion_api_key",
+    "giphy_api_key",
+    "openai_api_key",
+    "openrouter_api_key",
+    "anthropic_api_key",
+    "groq_api_key",
+    "gemini_api_key",
+    "google_ai_key",
+    "huggingface_api_key",
+    "spotify_client_secret",
+    "telegram_bot_token",
+)
+_REDACTED_SECRET = "[REDACTED_SECRET]"
+_REDACTED_NOTION_TOKEN = "[REDACTED_NOTION_TOKEN]"
+_NOTION_TOKEN_RE = re.compile(r"\bntn_[A-Za-z0-9_-]{8,}\b")
+_BEARER_HEADER_RE = re.compile(r"(?i)(authorization\s*:\s*bearer\s+)([^\s\"'`]+)")
 
 _TOOL_TRACE_GROUP = {
     "exec": "Terminal",
@@ -647,10 +667,14 @@ async def _run_vision_preprocessor(
     provider_order = [
         p.strip()
         for p in raw_order.split(",")
-        if p.strip() and p.strip() in _VISION_CAPABLE_PROVIDERS
+        if p.strip() and p.strip() in _VISION_PREPROCESSOR_PROVIDERS
     ]
     if not provider_order:
         provider_order = list(_VISION_PROVIDER_ORDER_DEFAULT)
+    else:
+        for fallback_provider in _VISION_PROVIDER_ORDER_DEFAULT:
+            if fallback_provider not in provider_order:
+                provider_order.append(fallback_provider)
 
     openrouter_model = (
         str(getattr(settings, "asta_vision_openrouter_model", _VISION_OPENROUTER_MODEL_DEFAULT) or "").strip()
@@ -667,12 +691,6 @@ async def _run_vision_preprocessor(
     )
 
     for candidate in provider_order:
-        key_name = _VISION_PROVIDER_KEY.get(candidate)
-        if not key_name:
-            continue
-        api_key = await get_api_key(key_name)
-        if not api_key:
-            continue
         provider = get_provider(candidate)
         if not provider:
             continue
@@ -682,8 +700,18 @@ async def _run_vision_preprocessor(
             "image_mime": image_mime or "image/jpeg",
             "thinking_level": "off",
         }
-        if candidate == "openrouter" and openrouter_model:
-            chat_kwargs["model"] = openrouter_model
+        if candidate == "openrouter":
+            key_name = _VISION_PROVIDER_KEY.get(candidate)
+            if not key_name:
+                continue
+            api_key = await get_api_key(key_name)
+            if not api_key:
+                continue
+            if openrouter_model:
+                chat_kwargs["model"] = openrouter_model
+            chat_kwargs["skip_model_policy"] = True
+        elif candidate == "ollama":
+            chat_kwargs["model"] = _VISION_OLLAMA_MODEL_DEFAULT
         try:
             resp = await provider.chat(
                 [{"role": "user", "content": image_prompt}],
@@ -1932,6 +1960,9 @@ def _extract_textual_tool_calls(
             name = (m.group(1) or "").strip()
             if not name:
                 continue
+            # Keep bracket cron payloads in text for dedicated cron protocol handling later.
+            if name.lower() == "cron":
+                continue
             if allowed_names and name not in allowed_names:
                 continue
             body = (m.group(2) or "").strip()
@@ -1991,7 +2022,8 @@ def _strip_bracket_tool_protocol(text: str) -> str:
     raw = text or ""
     if not raw:
         return ""
-    tool_names = sorted(_TOOL_TRACE_GROUP.keys(), key=len, reverse=True)
+    # Keep [cron: ...] payloads for dedicated cron protocol parsing later in the pipeline.
+    tool_names = [n for n in sorted(_TOOL_TRACE_GROUP.keys(), key=len, reverse=True) if n != "cron"]
     if not tool_names:
         return raw.strip()
     names_pat = "|".join(re.escape(n) for n in tool_names)
@@ -2043,6 +2075,65 @@ def _strip_shell_command_leakage(reply: str) -> tuple[str, bool]:
     return "\n".join(out_lines).strip(), removed
 
 
+def _redact_local_paths(text: str) -> str:
+    raw = text or ""
+    if not raw:
+        return ""
+    out = raw
+    path_patterns = (
+        r"/Users/[^\s\"'`]+",
+        r"/home/[^\s\"'`]+",
+        r"~/(?:[^\s\"'`]+)",
+        r"[A-Za-z]:\\[^\s\"'`]+",
+    )
+    for pat in path_patterns:
+        out = re.sub(pat, "[path]", out)
+    return out
+
+
+def _dedupe_secret_values(values: list[str]) -> list[str]:
+    uniq = {
+        v.strip()
+        for v in values
+        if isinstance(v, str) and v.strip() and len(v.strip()) >= 6
+    }
+    return sorted(uniq, key=len, reverse=True)
+
+
+async def _load_sensitive_key_values(db) -> list[str]:
+    values: list[str] = []
+    for key_name in _SENSITIVE_DB_KEY_NAMES:
+        try:
+            val = await db.get_stored_api_key(key_name)
+        except Exception:
+            continue
+        if isinstance(val, str) and val.strip():
+            values.append(val.strip())
+    return _dedupe_secret_values(values)
+
+
+async def _redact_sensitive_reply_content(reply: str, db) -> tuple[str, bool]:
+    out = reply or ""
+    if not out:
+        return "", False
+
+    changed = False
+    for secret in await _load_sensitive_key_values(db):
+        if secret in out:
+            out = out.replace(secret, _REDACTED_SECRET)
+            changed = True
+
+    out, notion_hits = _NOTION_TOKEN_RE.subn(_REDACTED_NOTION_TOKEN, out)
+    if notion_hits:
+        changed = True
+
+    out, bearer_hits = _BEARER_HEADER_RE.subn(r"\1[REDACTED_SECRET]", out)
+    if bearer_hits:
+        changed = True
+
+    return out, changed
+
+
 def _subagents_help_text() -> str:
     return (
         "Subagents commands:\n"
@@ -2079,8 +2170,11 @@ def _parse_learn_command(text: str) -> tuple[str, list[str]] | None:
         tokens = rest.split()
     if not tokens:
         return "help", []
-    action = (tokens[0] or "").strip().lower()
-    return action, [t for t in tokens[1:] if isinstance(t, str)]
+    first = (tokens[0] or "").strip().lower()
+    if first in ("help", "h", "?", "list", "ls", "delete", "remove", "rm"):
+        return first, [t for t in tokens[1:] if isinstance(t, str)]
+    # Default path: /learn <topic...>
+    return "learn", [t for t in tokens if isinstance(t, str)]
 
 
 async def _handle_learn_command(
@@ -2100,11 +2194,9 @@ async def _handle_learn_command(
         return _learn_help_text()
 
     if action in ("list", "ls"):
-        # List saved topics from RAG
-        from app.routers.settings import get_rag_learned_topics
+        from app.rag.service import get_rag
         try:
-            payload = await get_rag_learned_topics(user_id)
-            topics = payload.get("topics", []) if isinstance(payload, dict) else []
+            topics = get_rag().list_topics()
             if not topics:
                 return "You haven't saved any topics yet. Use /learn <topic> to save information."
             lines = [f"You have {len(topics)} saved topic(s):"]
@@ -2126,10 +2218,10 @@ async def _handle_learn_command(
         topic_name = " ".join(args).strip()
         if not topic_name:
             return "Please specify a topic to delete."
-        from app.routers.settings import delete_rag_topic
+        from app.rag.service import get_rag
         try:
-            result = await delete_rag_topic(user_id, topic_name)
-            if result and result.get("ok"):
+            deleted = int(get_rag().delete_topic(topic_name))
+            if deleted > 0:
                 return f"Deleted topic: {topic_name}"
             return f"Could not delete topic '{topic_name}'. It may not exist."
         except Exception as e:
@@ -3114,6 +3206,47 @@ def _append_selected_agent_context(context: str, extra: dict) -> str:
         sections.append("[AGENT PROMPT]")
         sections.append(agent_prompt)
 
+    # Reliability boost: if this agent is constrained to exactly one workspace
+    # skill, preload that SKILL.md so the model does not skip/forget to read it.
+    # This is especially important for API-heavy skills (e.g. Notion) where small
+    # command mistakes lead to false negatives.
+    skills_for_agent = selected.get("skills")
+    if isinstance(skills_for_agent, list):
+        normalized_skill_ids: list[str] = []
+        seen_skill_ids: set[str] = set()
+        for item in skills_for_agent:
+            sid = str(item).strip().lower()
+            if not sid or sid in seen_skill_ids:
+                continue
+            seen_skill_ids.add(sid)
+            normalized_skill_ids.append(sid)
+        if len(normalized_skill_ids) == 1:
+            try:
+                from app.workspace import discover_workspace_skills
+
+                target_skill_id = normalized_skill_ids[0]
+                resolved = next(
+                    (s for s in discover_workspace_skills() if str(s.name).strip().lower() == target_skill_id),
+                    None,
+                )
+                if resolved and resolved.file_path.is_file():
+                    raw_skill = resolved.file_path.read_text(encoding="utf-8", errors="replace").strip()
+                    if raw_skill:
+                        # Safety cap to avoid unbounded prompt growth from unusually large skill files.
+                        max_chars = 12000
+                        if len(raw_skill) > max_chars:
+                            raw_skill = raw_skill[:max_chars].rstrip() + "\n\n[TRUNCATED FOR CONTEXT SIZE]"
+                        sections.append("")
+                        sections.append("[AGENT SKILL DIRECTIVES]")
+                        sections.append(
+                            f"Preloaded allowed skill '{target_skill_id}' from {resolved.file_path}. "
+                            "Follow these instructions exactly for this turn."
+                        )
+                        sections.append("")
+                        sections.append(raw_skill)
+            except Exception as e:
+                logger.warning("Could not preload selected agent skill context: %s", e)
+
     snippets = extra.get("agent_knowledge_snippets") if isinstance(extra, dict) else None
     if isinstance(snippets, list) and snippets:
         sections.append("")
@@ -3633,6 +3766,9 @@ async def handle_message(
             image_bytes = None
             image_mime = None
             logger.info("Vision preprocess complete using %s", source)
+        else:
+            await db.add_message(cid, "assistant", _VISION_PREPROCESSOR_UNAVAILABLE_MESSAGE, "script")
+            return _VISION_PREPROCESSOR_UNAVAILABLE_MESSAGE
 
     # Load recent messages; skip old assistant error messages so the model doesn't repeat "check your API key"
     recent = await db.get_recent_messages(cid, limit=20)
@@ -3671,47 +3807,32 @@ async def handle_message(
     from app.compaction import compact_history
     provider_for_compact = get_provider(provider_name)
     if provider_for_compact:
-        messages = await compact_history(
-            messages,
-            provider_for_compact,
-            model=directive_model,
-            provider_name=provider_name,
-            context=context,
-        )
+        try:
+            messages = await compact_history(
+                messages,
+                provider_for_compact,
+                model=directive_model,
+                provider_name=provider_name,
+                context=context,
+            )
+        except TypeError as e:
+            # Backward-compat for tests/mocks patching compact_history with older signatures.
+            err = str(e).lower()
+            if "unexpected keyword argument" in err and ("model" in err or "provider_name" in err):
+                messages = await compact_history(
+                    messages,
+                    provider_for_compact,
+                    context=context,
+                )
+            else:
+                raise
 
     provider = get_provider(provider_name)
     if not provider:
         return f"No AI provider found for '{provider_name}'. Check your provider settings."
-    if image_bytes and provider.name not in _VISION_CAPABLE_PROVIDERS:
-        from app.keys import get_api_key
-        original = provider.name
-        switched = False
-        for candidate in ("openrouter", "claude", "openai"):
-            key_name = _VISION_PROVIDER_KEY.get(candidate)
-            if not key_name:
-                continue
-            key_val = await get_api_key(key_name)
-            if not key_val:
-                continue
-            p = get_provider(candidate)
-            if not p:
-                continue
-            provider = p
-            provider_name = candidate
-            switched = True
-            logger.info(
-                "Vision input: routing provider %s -> %s for image handling",
-                original,
-                candidate,
-            )
-            break
-        if not switched:
-            msg = (
-                f"Image received, but provider '{original}' does not support vision in Asta yet. "
-                "Use OpenRouter, Claude, or OpenAI and set its API key in Settings."
-            )
-            await db.add_message(cid, "assistant", msg, "script")
-            return msg
+    if image_bytes:
+        await db.add_message(cid, "assistant", _VISION_PREPROCESSOR_UNAVAILABLE_MESSAGE, "script")
+        return _VISION_PREPROCESSOR_UNAVAILABLE_MESSAGE
     user_model = await db.get_user_provider_model(user_id, provider.name)
     model_override = (
         extra.get("subagent_model_override")
@@ -4648,10 +4769,16 @@ async def handle_message(
     # If a tool-capable model skipped reminders/cron tool calls, apply deterministic fallback
     # from tool logic so we don't hallucinate list/remove outcomes.
     scheduler_fallback_used = False
+    has_explicit_scheduler_protocol = bool(
+        re.search(r"(?is)\[\s*cron\s*:", raw_reply or "")
+        or re.search(r"(?is)\[ASTA_CRON_(?:ADD|REMOVE):", raw_reply or "")
+        or re.search(r"(?im)^\s*CRON\s+ACTION\s*=\s*(?:add|remove)\b", raw_reply or "")
+    )
     if (
         _provider_supports_tools(provider_name)
         and not ran_reminders_tool
         and not ran_cron_tool
+        and not has_explicit_scheduler_protocol
     ):
         scheduler_fallback = await _handle_scheduler_intents(
             db=db,
@@ -4836,7 +4963,7 @@ async def handle_message(
         except Exception:
             pass
         # Show at least a preview of the tool output to be helpful
-        output_preview = (last_tool_output or "")[:500]
+        output_preview = _redact_local_paths((last_tool_output or "")[:500])
         if len(last_tool_output or "") > 500:
             output_preview += "..."
         reply = (
@@ -5092,6 +5219,10 @@ async def handle_message(
         stripped_reply, removed_shell = _strip_shell_command_leakage(reply)
         if removed_shell:
             reply = stripped_reply
+
+    reply, removed_secrets = await _redact_sensitive_reply_content(reply, db)
+    if removed_secrets:
+        logger.warning("Redacted sensitive data from assistant reply before returning to user")
 
     # Re-sanitize in case post-processing introduced marker leakage.
     reply, suppress_now = _sanitize_silent_reply_markers(reply)

@@ -116,7 +116,7 @@ async def _fire_cron_job_async(
             return s.isdigit() and len(s) >= 11
 
         # Prefer owner_phone for all cases except when channel_target is already a real phone number
-        # (e.g. WhatsApp targets start with country code). Telegram chat IDs are never phone numbers.
+        # (phone targets start with country code; Telegram chat IDs are never phone numbers).
         if owner_phone and _is_phone(owner_phone):
             target_to_call = owner_phone
             logger.debug("Cron job %s: Using owner_phone for voice call", cron_job_id)

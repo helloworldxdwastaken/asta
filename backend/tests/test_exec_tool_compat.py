@@ -83,3 +83,32 @@ async def test_run_allowlisted_command_full_mode_supports_leading_comments(monke
     assert "asta-openclaw-style" in stdout
     assert stderr == ""
     get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_run_allowlisted_command_blocks_secret_echo(monkeypatch):
+    monkeypatch.setenv("ASTA_EXEC_SECURITY", "full")
+    get_settings.cache_clear()
+    stdout, stderr, ok = await run_allowlisted_command(
+        'echo "$NOTION_API_KEY"',
+        allowed_bins=set(),
+    )
+    assert ok is False
+    assert stdout == ""
+    assert "blocked" in stderr.lower()
+    get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_run_allowlisted_command_redacts_notion_token_in_output(monkeypatch):
+    monkeypatch.setenv("ASTA_EXEC_SECURITY", "full")
+    get_settings.cache_clear()
+    stdout, stderr, ok = await run_allowlisted_command(
+        "echo ntn_1234567890abcdef",
+        allowed_bins=set(),
+    )
+    assert ok is True
+    assert "ntn_1234567890abcdef" not in stdout
+    assert "[REDACTED_NOTION_TOKEN]" in stdout
+    assert stderr == ""
+    get_settings.cache_clear()

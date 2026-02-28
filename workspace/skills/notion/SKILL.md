@@ -1,7 +1,6 @@
 ---
 name: notion
 description: Notion API for creating, reading, updating, and querying pages, databases (data sources), and blocks. Use when the user mentions Notion, asks to save to Notion, check a Notion board, query a Notion database, or manage Notion pages.
-homepage: https://developers.notion.com
 metadata: {"clawdbot":{"emoji":"📝","requires":{"bins":["curl"],"env":["NOTION_API_KEY"]},"primaryEnv":"NOTION_API_KEY"}}
 ---
 
@@ -9,23 +8,14 @@ metadata: {"clawdbot":{"emoji":"📝","requires":{"bins":["curl"],"env":["NOTION
 
 Use the Notion API to create/read/update pages, databases, and blocks.
 
-## Setup
-
-1. Create an integration at https://notion.so/my-integrations
-2. Copy the API key (starts with `ntn_` or `secret_`)
-3. Store it in `backend/.env`:
-   ```
-   NOTION_API_KEY=ntn_your_key_here
-   ```
-4. Share target pages/databases with your integration (click "..." → "Connect to" → your integration name)
-
 ## API Basics
+
+**IMPORTANT: `$NOTION_API_KEY` is already available in your environment — do NOT source any .env file or try to load the key from disk. Just use `$NOTION_API_KEY` directly in curl commands.**
 
 All requests need these headers:
 ```bash
-NOTION_KEY=$NOTION_API_KEY
 curl -X GET "https://api.notion.com/v1/..." \
-  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
   -H "Notion-Version: 2025-09-03" \
   -H "Content-Type: application/json"
 ```
@@ -37,7 +27,7 @@ curl -X GET "https://api.notion.com/v1/..." \
 **Search for pages and data sources:**
 ```bash
 curl -X POST "https://api.notion.com/v1/search" \
-  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
   -H "Notion-Version: 2025-09-03" \
   -H "Content-Type: application/json" \
   -d '{"query": "page title"}'
@@ -46,21 +36,21 @@ curl -X POST "https://api.notion.com/v1/search" \
 **Get page:**
 ```bash
 curl "https://api.notion.com/v1/pages/{page_id}" \
-  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
   -H "Notion-Version: 2025-09-03"
 ```
 
 **Get page content (blocks):**
 ```bash
 curl "https://api.notion.com/v1/blocks/{page_id}/children" \
-  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
   -H "Notion-Version: 2025-09-03"
 ```
 
 **Create page in a data source:**
 ```bash
 curl -X POST "https://api.notion.com/v1/pages" \
-  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
   -H "Notion-Version: 2025-09-03" \
   -H "Content-Type: application/json" \
   -d '{
@@ -75,7 +65,7 @@ curl -X POST "https://api.notion.com/v1/pages" \
 **Query a data source (database):**
 ```bash
 curl -X POST "https://api.notion.com/v1/data_sources/{data_source_id}/query" \
-  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
   -H "Notion-Version: 2025-09-03" \
   -H "Content-Type: application/json" \
   -d '{
@@ -87,7 +77,7 @@ curl -X POST "https://api.notion.com/v1/data_sources/{data_source_id}/query" \
 **Create a data source (database):**
 ```bash
 curl -X POST "https://api.notion.com/v1/data_sources" \
-  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
   -H "Notion-Version: 2025-09-03" \
   -H "Content-Type: application/json" \
   -d '{
@@ -104,7 +94,7 @@ curl -X POST "https://api.notion.com/v1/data_sources" \
 **Update page properties:**
 ```bash
 curl -X PATCH "https://api.notion.com/v1/pages/{page_id}" \
-  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
   -H "Notion-Version: 2025-09-03" \
   -H "Content-Type: application/json" \
   -d '{"properties": {"Status": {"select": {"name": "Done"}}}}'
@@ -113,7 +103,7 @@ curl -X PATCH "https://api.notion.com/v1/pages/{page_id}" \
 **Add blocks to page:**
 ```bash
 curl -X PATCH "https://api.notion.com/v1/blocks/{page_id}/children" \
-  -H "Authorization: Bearer $NOTION_KEY" \
+  -H "Authorization: Bearer $NOTION_API_KEY" \
   -H "Notion-Version: 2025-09-03" \
   -H "Content-Type: application/json" \
   -d '{
@@ -146,6 +136,33 @@ Common property formats for database items:
 - **Search results:** Databases return as `"object": "data_source"` with their `data_source_id`
 - **Parent in responses:** Pages show `parent.data_source_id` alongside `parent.database_id`
 - **Finding the data_source_id:** Search for the database, or call `GET /v1/data_sources/{data_source_id}`
+
+## Multi-Step Tasks (IMPORTANT)
+
+For any task that requires multiple Notion API calls (reorganizing pages, creating several subpages, moving content, setting up a structure), **write a single bash script that chains all the calls together and run it in one exec**. Never do API calls one-by-one across multiple exec rounds.
+
+Use `python3 -c` inline or `jq` to extract IDs from responses and chain them:
+
+```bash
+#!/bin/bash
+set -e
+KEY="$NOTION_API_KEY"
+HDR=('-H' "Authorization: Bearer $KEY" '-H' 'Notion-Version: 2025-09-03' '-H' 'Content-Type: application/json')
+
+# Step 1: Find the parent page
+PARENT_ID=$(curl -s -X POST "https://api.notion.com/v1/search" \
+  "${HDR[@]}" -d '{"query":"Esimo","filter":{"value":"page","property":"object"}}' \
+  | python3 -c "import sys,json; r=json.load(sys.stdin)['results']; print(r[0]['id'] if r else '')")
+
+# Step 2: Create a subpage using the returned ID
+curl -s -X POST "https://api.notion.com/v1/pages" "${HDR[@]}" \
+  -d "{\"parent\":{\"page_id\":\"$PARENT_ID\"},\"properties\":{\"title\":[{\"text\":{\"content\":\"Resources\"}}]}}"
+
+# Step 3: Do more operations...
+echo "Done"
+```
+
+Write this to `workspace/scripts/tmp/notion_task.sh`, run it with `bash workspace/scripts/tmp/notion_task.sh`, then delete it.
 
 ## Notes
 

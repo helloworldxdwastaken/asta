@@ -14,7 +14,7 @@ class _DummyProvider:
         return ProviderResponse(content="ok")
 
 
-async def _fake_compact_history(messages, provider, context=None, max_tokens=None):
+async def _fake_compact_history(messages, provider, context=None, max_tokens=None, **kwargs):
     return messages
 
 
@@ -86,3 +86,4 @@ async def test_shell_command_line_is_not_leaked_when_not_requested():
     assert "git describe" not in low
     assert "/dev/null" not in low
     assert "latest local build" in low
+
