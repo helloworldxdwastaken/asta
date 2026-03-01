@@ -165,7 +165,6 @@ async def _fire_cron_job_async(
                 channel=channel,
                 channel_target=channel_target,
                 text=message,
-                is_ai_turn=True,
             )
             run_status = "ok"
             run_output = (reply or "").strip()
