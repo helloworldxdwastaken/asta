@@ -37,13 +37,9 @@ class GoogleSearchSkill(Skill):
 
         import asyncio
         from app.search_web import search_web
-        from app.db import get_db
-
-        db = get_db()
-        brave_key = await db.get_stored_api_key("brave_search_api_key") if db._conn else None
 
         try:
-            results, err = await asyncio.to_thread(search_web, text, 5, brave_key or None)
+            results, err = await asyncio.to_thread(search_web, text, 5)
             return {"search_results": results, "search_error": err}
         except Exception as e:
             return {"search_error": str(e)}

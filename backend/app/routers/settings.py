@@ -97,7 +97,6 @@ ALLOWED_API_KEY_NAMES = frozenset({
     "telegram_bot_token", "giphy_api_key",
     "spotify_client_id", "spotify_client_secret",
     "notion_api_key",
-    "brave_search_api_key",
 })
 
 
@@ -657,7 +656,6 @@ class ApiKeysIn(BaseModel):
     spotify_client_id: str | None = None
     spotify_client_secret: str | None = None
     notion_api_key: str | None = None
-    brave_search_api_key: str | None = None
 
 
 @router.put("/settings/keys")
