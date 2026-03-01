@@ -173,7 +173,13 @@ async def run_web_search_compat(params: dict) -> str:
         return json.dumps({"error": "query is required", "results": []}, indent=0)
     count = _to_int(params.get("count"))
     count = DEFAULT_WEB_SEARCH_COUNT if count is None else max(1, min(count, MAX_WEB_SEARCH_COUNT))
-    results, err = search_web(query, max_results=count)
+
+    from app.db import get_db
+    db = get_db()
+    brave_key = await db.get_stored_api_key("brave_search_api_key") if db._conn else None
+
+    results, err = search_web(query, max_results=count, brave_api_key=brave_key or None)
+    provider = "brave_api" if brave_key and results else "ddgs"
     mapped = [
         {
             "title": r.get("title") or "",
@@ -185,7 +191,7 @@ async def run_web_search_compat(params: dict) -> str:
     ]
     payload = {
         "query": query,
-        "provider": "ddgs",
+        "provider": provider,
         "count": len(mapped),
         "results": mapped,
     }

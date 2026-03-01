@@ -35,7 +35,7 @@ def test_parse_openclaw_compat_args_aliases():
 
 @pytest.mark.asyncio
 async def test_web_search_compat_returns_structured_payload(monkeypatch):
-    def _fake_search_web(query: str, max_results: int = 5):
+    def _fake_search_web(query: str, max_results: int = 5, brave_api_key: str | None = None):
         assert query == "test query"
         assert max_results == 3
         return (
