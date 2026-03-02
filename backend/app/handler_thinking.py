@@ -477,6 +477,8 @@ def _strip_reasoning_tags_from_text(
         return raw
     if not _REASONING_QUICK_TAG_RE.search(raw):
         if strict_final:
+            # Streaming: suppress content that arrives before any <final> tag is seen.
+            # The caller (_extract_reasoning_blocks) handles the final-reply fallback.
             return ""
         return _apply_reasoning_trim(raw, trim)
 
@@ -511,7 +513,9 @@ def _strip_reasoning_tags_from_text(
     if strict_final:
         final_only, saw_final = _extract_final_tag_content(without_thinking)
         if not saw_final:
-            return ""
+            # Model had <think> tags but no <final> — don't silently drop the reply,
+            # return the text with thinking stripped out.
+            return _apply_reasoning_trim(without_thinking, trim)
         final_code_regions = _build_code_regions(final_only)
         final_only = _strip_pattern_outside_code(final_only, _REASONING_FINAL_TAG_RE, final_code_regions)
         return _apply_reasoning_trim(final_only, trim)
@@ -611,6 +615,13 @@ def _extract_reasoning_blocks(text: str, *, strict_final: bool = False) -> tuple
         trim="both",
         strict_final=strict_final,
     )
+    # When strict_final=True and the model didn't use <final> tags at all,
+    # _strip_reasoning_tags_from_text returns "" (correct for streaming, where content
+    # before <final> should be suppressed). But for the *complete* reply we must not
+    # silently lose the response — fall back to thinking-stripped text instead.
+    if strict_final and not final_text and raw:
+        if not _REASONING_FINAL_TAG_RE.search(raw):
+            final_text = _strip_reasoning_tags_from_text(raw, mode="strict", trim="both", strict_final=False)
     reasoning_text = _extract_thinking_from_tagged_text(raw)
     if not reasoning_text:
         reasoning_text = _extract_thinking_from_tagged_stream(raw)

@@ -362,6 +362,10 @@ def test_strip_reasoning_tags_from_text_supports_preserve_mode():
 
 
 def test_strip_reasoning_tags_from_text_strict_final_requires_final_tag():
+    # _strip_reasoning_tags_from_text returns "" when strict_final=True and no <final>
+    # tags are present — this is intentional for streaming (suppress pre-<final> content).
+    # The handler-level _extract_reasoning_blocks provides the graceful fallback for
+    # complete replies that lack <final> tags.
     assert (
         _strip_reasoning_tags_from_text(
             "Visible answer without final tag",
@@ -523,7 +527,10 @@ async def test_final_mode_strict_hides_non_final_text_and_uses_fallback():
             provider_name="openai",
         )
 
-    assert reply.startswith("I didn't get a reply back. Try again or rephrase.")
+    # _extract_reasoning_blocks now falls back to the full text (minus think blocks)
+    # when strict_final=True but the model returned no <final> tags at all, so the
+    # reply is returned as-is rather than replaced by the generic fallback message.
+    assert "Visible answer without final tag" in reply
 
 
 @pytest.mark.asyncio
