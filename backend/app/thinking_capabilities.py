@@ -4,7 +4,13 @@ from typing import Any
 
 # Models that support xhigh (extended reasoning/thinking)
 _XHIGH_MODEL_REFS: tuple[str, ...] = (
-    # OpenAI models
+    # OpenAI reasoning models (o-series + future gpt-5 — gpt-4o/gpt-4o-mini do NOT)
+    "o1",
+    "o1-mini",
+    "o1-preview",
+    "o3",
+    "o3-mini",
+    "o4-mini",
     "openai/gpt-5.2",
     "openai-codex/gpt-5.3-codex",
     "openai-codex/gpt-5.3-codex-spark",
@@ -12,22 +18,28 @@ _XHIGH_MODEL_REFS: tuple[str, ...] = (
     "openai-codex/gpt-5.1-codex",
     "github-copilot/gpt-5.2-codex",
     "github-copilot/gpt-5.2",
-    # Common models that support extended thinking
-    "gpt-4-turbo",
-    "gpt-4o",
-    "gpt-4o-mini",
-    "o1",
-    "o1-mini",
-    "o1-preview",
-    "o3",
-    "o3-mini",
-    "claude-3-5-sonnet",
-    "claude-3-5-sonnet-20241022",
+    # Anthropic extended-thinking models (3.7+ only — 3.5 does NOT have extended thinking)
+    "claude-3-7-sonnet",
+    "claude-opus-4",
+    "claude-sonnet-4",
     "claude-opus",
     "claude-4-opus",
     "claude-4-sonnet",
-    "claude-sonnet",
-    "claude-3.5-sonnet",
+    # Moonshot / Kimi reasoning models
+    "moonshot/moonshot-v1-8k",
+    "moonshot/moonshot-v1-32k",
+    "moonshot/moonshot-v1-128k",
+    "moonshot-v1-8k",
+    "moonshot-v1-32k",
+    "moonshot-v1-128k",
+    "kimi",
+    # DeepSeek reasoning models
+    "deepseek/deepseek-r1",
+    "deepseek-r1",
+    "deepseek-r1:8b",
+    "deepseek-r1:14b",
+    "deepseek-r1:32b",
+    "deepseek-r1:70b",
     # Qwen models with thinking/reasoning support
     "qwen2.5-coder",
     "qwen2.5-coder:32b",
@@ -99,19 +111,24 @@ def supports_xhigh_thinking(provider: str | None, model: str | None) -> bool:
         return True
     
     # Additional pattern-based detection for common models
-    # OpenAI models with extended thinking support
+    # OpenAI: only o-series reasoning models support extended thinking
     if provider_key in ("openai",):
-        if any(x in model_key for x in ("gpt-4-turbo", "gpt-4o", "o1-", "gpt-4-extended", "o3", "o4", "codex")):
+        if any(x in model_key for x in ("o1-", "o3-", "o4-")):
             return True
-    
-    # Anthropic Claude models with extended thinking
+
+    # Anthropic Claude: 3.7+, claude-4, claude-opus
     if provider_key in ("anthropic", "claude"):
-        if any(x in model_key for x in ("claude-3-5", "claude-opus", "claude-3.5", "claude-4-", "claude-sonnet")):
+        if any(x in model_key for x in ("claude-3-7", "claude-3.7", "claude-4-", "claude-opus", "claude-sonnet-4")):
             return True
-    
-    # OpenRouter: check if it's a Claude/OpenAI model that supports it
+
+    # OpenRouter: moonshot/kimi, deepseek-r1, claude extended-thinking, o-series
     if provider_key == "openrouter":
-        if any(x in model_key for x in ("claude-3-5", "claude-opus", "gpt-4-turbo", "gpt-4o", "o1", "o3", "claude-sonnet")):
+        if any(x in model_key for x in ("moonshot", "kimi", "deepseek-r1", "claude-3-7", "claude-opus", "o1", "o3", "o4-")):
+            return True
+
+    # Ollama: deepseek-r1 and kimi reasoning models
+    if provider_key == "ollama":
+        if any(x in model_key for x in ("deepseek-r1", "kimi", "qwen2.5", "qwen3")):
             return True
     
     # Qwen models with thinking/reasoning capabilities

@@ -2665,7 +2665,17 @@ async def handle_message(
     # Status: only the skills we're actually using, with emojis (workspace skills get generic label)
     skill_labels = [SKILL_STATUS_LABELS.get(s, f"📄 Using {s}…") for s in skills_to_use]
     if skill_labels and channel == "telegram" and channel_target:
-        await send_skill_status(channel, channel_target, skill_labels)
+        # On Telegram, skip skills that are tool-handled — _emit_tool_event already fires a
+        # notification when the tool is actually called, so the skill-status label would be
+        # a redundant (and premature) duplicate message.
+        _TOOL_HANDLED_SKILLS = {"reminders", "cron", "spotify"}
+        tg_labels = skill_labels if not _provider_supports_tools(provider_name) else [
+            SKILL_STATUS_LABELS.get(s, f"📄 Using {s}…")
+            for s in skills_to_use
+            if s not in _TOOL_HANDLED_SKILLS
+        ]
+        if tg_labels:
+            await send_skill_status(channel, channel_target, tg_labels)
     if skill_labels and (reasoning_mode or "").lower() == "stream":
         await _emit_stream_status(
             db=db,
