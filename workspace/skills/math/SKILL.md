@@ -1,6 +1,6 @@
 ---
 name: math
-description: Solve math problems, calculations, equations, statistics, algebra, calculus, and numerical operations. Use when the user asks to calculate, compute, solve, evaluate an expression, do math, or asks a numerical question.
+description: Solve math problems, calculations, equations, statistics, algebra, calculus, and numerical operations. Use when the user asks to calculate, compute, solve, evaluate, add, subtract, multiply, divide, sum, total, average, percentage, convert units, or asks "how much is", "what is X + Y", or any arithmetic/numerical question.
 metadata: {"clawdbot":{"emoji":"🧮","os":["darwin","linux"]}}
 ---
 
@@ -10,8 +10,11 @@ Solve any math problem by writing a Python script, running it, and returning the
 
 ## When to use
 
-- User says: "calculate", "compute", "solve", "what is X + Y", "evaluate", "integrate", "derivative", "statistics", "convert", etc.
-- Any numerical or symbolic math question.
+- Arithmetic: "how much is 5 - 15", "add these", "what's 12 * 8", "divide 100 by 3"
+- Keywords: "calculate", "compute", "solve", "total", "sum", "average", "percentage", "convert"
+- Expressions: "what is X + Y", "evaluate", "integrate", "derivative"
+- Statistics: "mean of", "standard deviation", "average of these numbers"
+- Any numerical, mathematical, or unit conversion question
 
 ## How to solve
 

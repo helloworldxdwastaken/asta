@@ -222,6 +222,7 @@ async def _get_available_skills_prompt(
         "- If exactly one skill clearly applies: call `read` on its <location>, then follow it.",
         "- If multiple could apply: choose the most specific one, then read/follow it.",
         "- If none clearly apply: do not read any SKILL.md.",
+        "- Simple arithmetic (5+3, 10-7, etc.): answer directly — do NOT use the math skill for trivial calculations.",
         "Constraints: never read more than one skill up front; only read after selecting.",
         "When a selected skill references relative paths, resolve them from the skill directory (parent of SKILL.md).",
         "Notes policy: prefer `apple-notes` for notes, memos, and shopping/grocery lists.",

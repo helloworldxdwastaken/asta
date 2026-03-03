@@ -94,6 +94,9 @@ def _extract_pdf_text(base64_data: str, max_pages: int = 8) -> str:
         text = "\n\n".join(p.strip() for p in pages if p.strip())
         if not text:
             return "[PDF contained no extractable text — may be a scanned image]"
+        # Cap extracted text to avoid bloating context
+        if len(text) > 12000:
+            text = text[:12000] + "\n\n[...text truncated at 12000 chars]"
         return text
     except Exception as e:
         logger.warning("PDF extraction failed: %s", e)
@@ -2815,6 +2818,13 @@ async def handle_message(
     # Extract text from any embedded PDF documents before sending to provider
     if "<document " in effective_user_text:
         effective_user_text = _preprocess_document_tags(effective_user_text)
+        # Guide: answer about the document directly, don't over-process with tools
+        context += (
+            "\n\n[DOCUMENT ATTACHED]\n"
+            "The user attached a file. The extracted text is in the message. "
+            "Answer their question about the document directly — do NOT use tools to re-process it. "
+            "If asked to summarize, extract info, or answer questions about it, use the extracted text inline."
+        )
 
     if image_bytes:
         vision_result = await _run_vision_preprocessor(
