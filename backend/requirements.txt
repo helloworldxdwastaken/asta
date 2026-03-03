@@ -32,6 +32,8 @@ notificationapi-python-server-sdk
 faster-whisper
 # Image/Video
 moviepy
+# PDF
+pymupdf
 psutil
 # Timezone from coordinates (local time, reminders)
 timezonefinder

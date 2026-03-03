@@ -63,6 +63,61 @@ from app.tool_call_parser import (
 
 logger = logging.getLogger(__name__)
 
+
+# ── PDF / document preprocessing ──────────────────────────────────────────────
+
+_DOCUMENT_TAG_RE = re.compile(
+    r'<document\s+name="([^"]+)"[^>]*>([\s\S]*?)</document>'
+)
+
+
+def _extract_pdf_text(base64_data: str, max_pages: int = 8) -> str:
+    """Extract text from a base64-encoded PDF using PyMuPDF.
+    Returns extracted text or an error note."""
+    try:
+        import fitz  # pymupdf
+        import base64 as b64mod
+
+        # Strip data-URL prefix if present
+        if base64_data.startswith("data:"):
+            base64_data = base64_data.split(",", 1)[-1]
+
+        pdf_bytes = b64mod.b64decode(base64_data)
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        pages = []
+        for i, page in enumerate(doc):
+            if i >= max_pages:
+                pages.append(f"[...truncated, {len(doc)} pages total]")
+                break
+            pages.append(page.get_text())
+        doc.close()
+        text = "\n\n".join(p.strip() for p in pages if p.strip())
+        if not text:
+            return "[PDF contained no extractable text — may be a scanned image]"
+        return text
+    except Exception as e:
+        logger.warning("PDF extraction failed: %s", e)
+        return f"[PDF text extraction failed: {e}]"
+
+
+def _preprocess_document_tags(text: str) -> str:
+    """Replace <document> tags containing file data with extracted content.
+    PDFs get text-extracted; other files are left as-is (already text)."""
+
+    def _replace_doc(m: re.Match) -> str:
+        name = m.group(1)
+        content = m.group(2).strip()
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+
+        if ext == "pdf":
+            extracted = _extract_pdf_text(content)
+            return f'<document name="{name}" type="pdf-extracted">\n{extracted}\n</document>'
+        # Non-PDF documents (text, code, etc.) — keep as-is
+        return m.group(0)
+
+    return _DOCUMENT_TAG_RE.sub(_replace_doc, text)
+
+
 # Short acknowledgments: when user sends only this, we nudge the model to reply with one phrase
 _SHORT_ACK_PHRASES = frozenset({
     "ok", "okay", "thanks", "thank you", "thx", "bye", "got it", "no", "sure", "yep", "yes",
@@ -2757,6 +2812,10 @@ async def handle_message(
         )
 
     effective_user_text = text
+    # Extract text from any embedded PDF documents before sending to provider
+    if "<document " in effective_user_text:
+        effective_user_text = _preprocess_document_tags(effective_user_text)
+
     if image_bytes:
         vision_result = await _run_vision_preprocessor(
             text=text,
@@ -2799,7 +2858,8 @@ async def handle_message(
             # the model — older messages may have <tool_call> / [ASTA_TOOL_CALL] tags stored
             # in the DB. If the model sees these in its own history it will try to re-execute
             # them, causing repeated identical tool calls on every new request.
-            "content": _strip_tool_call_markup(m["content"]) if m["role"] == "assistant" else (m["content"] or ""),
+            "content": _strip_tool_call_markup(m["content"]) if m["role"] == "assistant"
+                else (_preprocess_document_tags(m["content"]) if "<document " in (m["content"] or "") else (m["content"] or "")),
         }
         for m in recent
         # Simple heuristic for old string-based errors in DB, plus new structured ones if we saved them
