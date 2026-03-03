@@ -10,6 +10,7 @@ import {
   getDefaultAI, getThinking, getMoodSetting, truncateConversation,
 } from "../../lib/api";
 import type { StreamChunk } from "../../lib/api";
+import { getBackendUrl } from "../../lib/api";
 import ProviderLogo from "../ProviderLogo";
 
 const STATUS_PREFIX = "[[ASTA_STATUS]]";
@@ -383,6 +384,21 @@ export default function ChatView({ conversationId, onConversationCreated, agents
     return s.trim();
   }
 
+  /** Extract generated PDF references from assistant message content */
+  const PDF_PATH_RE = /PDF generated:\s*(.*?[/\\]workspace[/\\]pdfs[/\\](.+?\.pdf))/gi;
+  function extractPdfLinks(c: string): { path: string; name: string }[] {
+    const links: { path: string; name: string }[] = [];
+    let m;
+    const re = new RegExp(PDF_PATH_RE.source, PDF_PATH_RE.flags);
+    while ((m = re.exec(c)) !== null) {
+      links.push({ path: m[1], name: m[2] });
+    }
+    return links;
+  }
+  function stripPdfPaths(c: string): string {
+    return c.replace(PDF_PATH_RE, "").replace(/\n{3,}/g, "\n\n").trim();
+  }
+
   function isStatus(c: string) { return c.startsWith(STATUS_PREFIX); }
   function statusText(c: string) { return c.slice(STATUS_PREFIX.length).trim(); }
 
@@ -640,9 +656,26 @@ export default function ChatView({ conversationId, onConversationCreated, agents
                     ))}
                   </div>
                 )}
+                {/* Generated PDF download links */}
+                {extractPdfLinks(msg.content).length > 0 && (
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    {extractPdfLinks(msg.content).map((pdf, i) => (
+                      <a key={i} href={`${getBackendUrl()}/api/files/download-pdf/${encodeURIComponent(pdf.name)}`}
+                        target="_blank" rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 bg-accent/10 hover:bg-accent/20 border border-accent/20 rounded-xl px-3 py-2 text-13 text-accent transition-colors no-underline">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                          <polyline points="14 2 14 8 20 8" />
+                          <line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><line x1="10" y1="9" x2="8" y2="9" />
+                        </svg>
+                        {pdf.name}
+                      </a>
+                    ))}
+                  </div>
+                )}
                 {/* Content */}
                 <div className="text-label text-14 prose prose-invert prose-sm leading-relaxed">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{cleanContent(msg.content)}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{stripPdfPaths(cleanContent(msg.content))}</ReactMarkdown>
                 </div>
                 {/* Provider badge + actions */}
                 <div className="flex items-center gap-3 mt-1.5">

@@ -2992,6 +2992,9 @@ async def handle_message(
     if _gemini_key or _hf_key:
         from app.image_gen_tool import get_image_gen_tool_openai_def
         tools = tools + get_image_gen_tool_openai_def()
+    # PDF generation tool — always available (pymupdf has no API key requirement).
+    from app.pdf_tool import get_pdf_tool_openai_def
+    tools = tools + get_pdf_tool_openai_def()
     # Single-user OpenClaw-style subagent orchestration tools.
     if channel != "subagent":
         from app.subagent_orchestrator import get_subagent_tools_openai_def
@@ -3518,6 +3521,19 @@ async def handle_message(
                     out = await run_edit_compat(params, user_id, db)
                 ran_files_tool = True
                 used_tool_labels.append(_build_tool_trace_label(name))
+            elif name == "generate_pdf":
+                from app.pdf_tool import generate_pdf as generate_pdf_fn, parse_pdf_tool_args
+
+                params = parse_pdf_tool_args(args_str)
+                pdf_content = (params.get("content") or "").strip()
+                pdf_filename = (params.get("filename") or "document.pdf").strip()
+                pdf_title = params.get("title")
+                if not pdf_content:
+                    out = "Error: content is required"
+                else:
+                    pdf_path = generate_pdf_fn(pdf_content, filename=pdf_filename, title=pdf_title)
+                    out = f"PDF generated: {pdf_path}"
+                used_tool_labels.append(_build_tool_trace_label("generate_pdf"))
             elif name == "web_search":
                 from app.openclaw_compat_tools import parse_openclaw_compat_args, run_web_search_compat
 

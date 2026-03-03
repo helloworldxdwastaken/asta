@@ -1,7 +1,7 @@
 """Local file management (allowed paths only) + Asta knowledge + User memories. OpenClaw-style: request access when path not allowed."""
 from pathlib import Path
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
 from app.config import get_settings
 from app.db import get_db
@@ -263,3 +263,15 @@ async def allow_path(body: AllowPathIn, user_id: str = "default"):
         if parent != p and str(parent) != "/":
             await db.add_allowed_path(user_id, str(parent))
     return {"path": str(p), "ok": True}
+
+
+@router.get("/files/download-pdf/{filename:path}")
+async def download_pdf(filename: str):
+    """Serve a generated PDF from workspace/pdfs/."""
+    pdf_dir = Path(__file__).resolve().parent.parent.parent.parent / "workspace" / "pdfs"
+    # Sanitize: no path traversal
+    safe_name = Path(filename).name
+    pdf_path = pdf_dir / safe_name
+    if not pdf_path.exists() or not pdf_path.is_file():
+        raise HTTPException(404, "PDF not found")
+    return FileResponse(pdf_path, media_type="application/pdf", filename=safe_name)
