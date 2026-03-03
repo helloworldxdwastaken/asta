@@ -223,10 +223,10 @@ fn show_window<R: Runtime>(app: &tauri::AppHandle<R>) {
         #[cfg(target_os = "macos")]
         {
             use cocoa::appkit::NSApplication;
-            use cocoa::base::nil;
+            use cocoa::base::{nil, YES};
             unsafe {
                 let ns_app = NSApplication::sharedApplication(nil);
-                ns_app.activateIgnoringOtherApps_(true);
+                ns_app.activateIgnoringOtherApps_(YES);
             }
         }
 
