@@ -487,16 +487,35 @@ export default function ChatView({ conversationId, onConversationCreated, agents
 
         {/* Empty state */}
         {!loading && messages.length === 0 && !streaming && (
-          <div className="flex flex-col items-center justify-center h-full gap-4">
-            <div className="relative w-20 h-20">
+          <div className="flex flex-col items-center justify-center h-full gap-4 relative overflow-hidden">
+            {/* 8-bit floating pixel blocks */}
+            <div className="absolute inset-0 pointer-events-none" aria-hidden>
+              {/* Left side blocks */}
+              <div className="pixel-block absolute left-[8%] top-[15%] w-3 h-3 rounded-sm bg-accent/20" style={{ animationDelay: "0s", animationDuration: "6s" }} />
+              <div className="pixel-block absolute left-[12%] top-[35%] w-2.5 h-2.5 rounded-sm bg-violet-400/15" style={{ animationDelay: "1.2s", animationDuration: "7s" }} />
+              <div className="pixel-block absolute left-[5%] top-[55%] w-4 h-4 rounded-sm bg-accent/10" style={{ animationDelay: "2.5s", animationDuration: "8s" }} />
+              <div className="pixel-block absolute left-[15%] top-[72%] w-2 h-2 rounded-sm bg-success/15" style={{ animationDelay: "0.8s", animationDuration: "5.5s" }} />
+              <div className="pixel-block absolute left-[3%] top-[85%] w-3 h-3 rounded-sm bg-violet-400/10" style={{ animationDelay: "3.2s", animationDuration: "7.5s" }} />
+              {/* Right side blocks */}
+              <div className="pixel-block absolute right-[10%] top-[12%] w-2.5 h-2.5 rounded-sm bg-accent/15" style={{ animationDelay: "0.5s", animationDuration: "6.5s" }} />
+              <div className="pixel-block absolute right-[6%] top-[30%] w-3.5 h-3.5 rounded-sm bg-violet-400/12" style={{ animationDelay: "1.8s", animationDuration: "7.2s" }} />
+              <div className="pixel-block absolute right-[14%] top-[50%] w-2 h-2 rounded-sm bg-success/12" style={{ animationDelay: "3s", animationDuration: "5.8s" }} />
+              <div className="pixel-block absolute right-[4%] top-[68%] w-3 h-3 rounded-sm bg-accent/12" style={{ animationDelay: "2s", animationDuration: "8.2s" }} />
+              <div className="pixel-block absolute right-[11%] top-[82%] w-2.5 h-2.5 rounded-sm bg-violet-400/15" style={{ animationDelay: "0.3s", animationDuration: "6.8s" }} />
+              {/* Scattered extras */}
+              <div className="pixel-block absolute left-[22%] top-[22%] w-1.5 h-1.5 rounded-sm bg-warning/10" style={{ animationDelay: "4s", animationDuration: "9s" }} />
+              <div className="pixel-block absolute right-[20%] top-[25%] w-1.5 h-1.5 rounded-sm bg-warning/10" style={{ animationDelay: "1.5s", animationDuration: "8.5s" }} />
+            </div>
+
+            <div className="relative w-20 h-20 z-10">
               <div className="absolute inset-0 rounded-full bg-gradient-to-br from-[var(--user-bubble)] to-[var(--user-bubble-end)] opacity-20 blur-xl animate-[orb-float_8s_ease-in-out_infinite]" />
               <img src="/appicon-512.png" alt="Asta" className="relative w-20 h-20 rounded-2xl" />
             </div>
-            <div className="text-center">
+            <div className="text-center z-10">
               <p className="text-label text-16 font-semibold">What can I help with?</p>
               <p className="text-label-tertiary text-12 mt-1">Ask anything, or try a suggestion below</p>
             </div>
-            <div className="flex flex-wrap justify-center gap-2 max-w-md mt-2">
+            <div className="flex flex-wrap justify-center gap-2 max-w-md mt-2 z-10">
               {SUGGESTIONS.map(s => (
                 <button key={s} onClick={() => { setInput(s); inputRef.current?.focus(); }}
                   className="text-13 text-label-secondary bg-white/[.04] hover:bg-white/[.08] border border-separator hover:border-separator-bold rounded-full px-4 py-2 transition-all duration-200 active:scale-[0.97]">
@@ -504,7 +523,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
                 </button>
               ))}
             </div>
-            <p className="text-label-tertiary text-11 font-mono tracking-wide mt-3 opacity-50">Cmd+Alt+Space to toggle</p>
+            <p className="text-label-tertiary text-11 font-mono tracking-wide mt-3 opacity-50 z-10">Cmd+Alt+Space to toggle</p>
           </div>
         )}
 
@@ -679,7 +698,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
             className="w-9 h-9 flex items-center justify-center rounded-mac hover:bg-white/[.06] text-label-tertiary hover:text-label-secondary shrink-0 transition-colors" title="Attach file">
             <IconAttach size={18} />
           </button>
-          <input ref={fileInputRef} type="file" multiple accept="image/*,.txt,.md,.csv,.json" className="hidden"
+          <input ref={fileInputRef} type="file" multiple accept="image/*,.txt,.md,.csv,.json,.ts,.tsx,.js,.jsx,.py,.sh,.yaml,.yml,.toml,.xml,.html,.css" className="hidden"
             onChange={e => { if (e.target.files) handleFiles(Array.from(e.target.files)); e.target.value = ""; }} />
 
           {/* Agent picker */}
