@@ -188,17 +188,37 @@ fn check_app_update(current_version: String) -> Result<serde_json::Value, String
     let tag = parsed["tag_name"].as_str().unwrap_or("").trim_start_matches('v').to_string();
     let has_update = !tag.is_empty() && tag != current_version;
 
-    // Find DMG or MSI asset URL
+    // Find the best asset for this platform/architecture
     let assets = parsed["assets"].as_array();
     let download_url = assets.and_then(|arr| {
-        arr.iter().find_map(|a| {
-            let name = a["name"].as_str().unwrap_or("");
-            if name.ends_with(".dmg") || name.ends_with(".msi") {
-                a["browser_download_url"].as_str().map(|s| s.to_string())
-            } else {
-                None
-            }
-        })
+        let names_urls: Vec<(&str, &str)> = arr.iter().filter_map(|a| {
+            let name = a["name"].as_str()?;
+            let url = a["browser_download_url"].as_str()?;
+            Some((name, url))
+        }).collect();
+
+        #[cfg(target_os = "macos")]
+        {
+            // Prefer matching architecture, fall back to any DMG
+            let arch = std::env::consts::ARCH; // "aarch64" or "x86_64"
+            names_urls.iter()
+                .find(|(n, _)| n.ends_with(".dmg") && n.contains(arch))
+                .or_else(|| names_urls.iter().find(|(n, _)| n.ends_with(".dmg")))
+                .map(|(_, u)| u.to_string())
+        }
+        #[cfg(target_os = "windows")]
+        {
+            names_urls.iter()
+                .find(|(n, _)| n.ends_with(".msi"))
+                .or_else(|| names_urls.iter().find(|(n, _)| n.ends_with(".exe")))
+                .map(|(_, u)| u.to_string())
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            names_urls.iter()
+                .find(|(n, _)| n.ends_with(".dmg") || n.ends_with(".msi"))
+                .map(|(_, u)| u.to_string())
+        }
     });
 
     Ok(serde_json::json!({

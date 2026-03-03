@@ -357,14 +357,28 @@ export default function ChatView({ conversationId, onConversationCreated, agents
     }).join("\n");
   }
 
+  /** Extract attached file names from message content */
+  function extractFiles(c: string): { name: string; type: string }[] {
+    const files: { name: string; type: string }[] = [];
+    const docRe = /<document\s+name="([^"]+)"[^>]*>/g;
+    let m;
+    while ((m = docRe.exec(c)) !== null) {
+      const name = m[1];
+      const ext = name.split(".").pop()?.toLowerCase() ?? "";
+      files.push({ name, type: ext === "pdf" ? "pdf" : ext.match(/^(png|jpg|jpeg|gif|webp|svg)$/) ? "image" : "file" });
+    }
+    const imgRe = /!\[([^\]]*)\]\(data:[^)]+\)/g;
+    while ((m = imgRe.exec(c)) !== null) {
+      files.push({ name: m[1] || "image", type: "image" });
+    }
+    return files;
+  }
+
   /** Strip embedded file attachments from message content for display */
   function cleanContent(c: string): string {
     let s = c;
-    // Remove <document name="..." type="...">base64/text...</document> blocks → show file chip
-    s = s.replace(/<document\s+name="([^"]+)"[^>]*>[\s\S]*?<\/document>/g, (_m, name) => `[${name}]`);
-    // Remove ![filename](data:...) markdown images with data URLs → show file chip
-    s = s.replace(/!\[([^\]]*)\]\(data:[^)]+\)/g, (_m, alt) => `[${alt || "image"}]`);
-    // Collapse multiple newlines left by removals
+    s = s.replace(/<document\s+name="([^"]+)"[^>]*>[\s\S]*?<\/document>/g, "");
+    s = s.replace(/!\[([^\]]*)\]\(data:[^)]+\)/g, "");
     s = s.replace(/\n{3,}/g, "\n\n");
     return s.trim();
   }
@@ -578,8 +592,18 @@ export default function ChatView({ conversationId, onConversationCreated, agents
                       {copiedId === msg.id ? <IconCheck size={12} className="text-success" /> : <IconCopy size={12} />}
                     </button>
                   </div>
-                  <div className="bubble-gradient text-white rounded-bubble px-4 py-2.5 text-14 whitespace-pre-wrap shadow-sm">
-                    {cleanContent(msg.content)}
+                  <div className="bubble-gradient text-white rounded-bubble px-4 py-2.5 text-14 shadow-sm space-y-1.5">
+                    {extractFiles(msg.content).length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {extractFiles(msg.content).map((f, i) => (
+                          <span key={i} className="inline-flex items-center gap-1.5 bg-white/[.15] rounded-lg px-2.5 py-1 text-12">
+                            <span>{f.type === "pdf" ? "\u{1F4C4}" : f.type === "image" ? "\u{1F5BC}" : "\u{1F4CE}"}</span>
+                            <span className="max-w-40 truncate">{f.name}</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {cleanContent(msg.content) && <div className="whitespace-pre-wrap">{cleanContent(msg.content)}</div>}
                   </div>
                 </div>
               </div>

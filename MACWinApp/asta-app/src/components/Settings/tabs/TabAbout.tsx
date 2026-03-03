@@ -1,7 +1,9 @@
 import { useState, useEffect } from "react";
 import { getHealth, checkUpdate, triggerUpdate, getServerStatus, getUsage } from "../../../lib/api";
+import { getVersion } from "@tauri-apps/api/app";
 
 export default function TabAbout() {
+  const [appVersion, setAppVersion] = useState("–");
   const [backendVersion, setBackendVersion] = useState("–");
   const [serverStatus, setServerStatus] = useState<any>(null);
   const [usage, setUsage] = useState<any>(null);
@@ -9,6 +11,7 @@ export default function TabAbout() {
   const [updating, setUpdating] = useState(false);
 
   useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => {});
     getHealth().then(r => setBackendVersion(r.version ?? "–")).catch(()=>{});
     getServerStatus().then(setServerStatus).catch(()=>{});
     getUsage(7).then(setUsage).catch(()=>{});
@@ -49,7 +52,7 @@ export default function TabAbout() {
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-white/[.04] rounded-mac px-4 py-3">
           <p className="text-11 text-label-tertiary mb-0.5">App version</p>
-          <p className="text-14 font-mono">0.1.0</p>
+          <p className="text-14 font-mono">{appVersion}</p>
         </div>
         <div className="bg-white/[.04] rounded-mac px-4 py-3">
           <p className="text-11 text-label-tertiary mb-0.5">Backend</p>

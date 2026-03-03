@@ -1,12 +1,13 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getVersion } from "@tauri-apps/api/app";
 
-const APP_VERSION = "0.1.0"; // Should match tauri.conf.json
 const CHECK_INTERVAL = 60 * 60 * 1000; // 1 hour
 
 interface UpdateInfo {
   has_update: boolean;
   latest_version: string;
+  current_version: string;
   release_url: string;
   download_url?: string;
   release_notes?: string;
@@ -15,25 +16,37 @@ interface UpdateInfo {
 export default function UpdateToast() {
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [dismissed, setDismissed] = useState(false);
+  const versionRef = useRef<string | null>(null);
 
   useEffect(() => {
-    checkForUpdate();
-    const interval = setInterval(checkForUpdate, CHECK_INTERVAL);
-    return () => clearInterval(interval);
+    let interval: ReturnType<typeof setInterval>;
+    (async () => {
+      try {
+        versionRef.current = await getVersion();
+      } catch {
+        versionRef.current = null;
+      }
+      checkForUpdate();
+      interval = setInterval(checkForUpdate, CHECK_INTERVAL);
+    })();
+    return () => { if (interval) clearInterval(interval); };
   }, []);
 
   async function checkForUpdate() {
+    const ver = versionRef.current;
+    if (!ver) return;
     try {
       const result = await invoke<UpdateInfo>("check_app_update", {
-        currentVersion: APP_VERSION,
+        currentVersion: ver,
       });
       if (result.has_update) {
-        // Only show again if it's a new version (not the one we dismissed)
         const dismissedVersion = localStorage.getItem("dismissedAppUpdate");
         if (dismissedVersion !== result.latest_version) {
           setUpdate(result);
           setDismissed(false);
         }
+      } else {
+        setUpdate(null);
       }
     } catch {
       // Silently fail — not critical
