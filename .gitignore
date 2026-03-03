@@ -1,4 +1,4 @@
-# ─── SECRETS: never commit. Safe to push only when these are ignored. ───────
+# ─── SECRETS: never commit ────────────────────────────────────────────────────
 .env
 .env.*
 !.env.example
@@ -19,15 +19,13 @@ token.json
 # Backend (API keys, DB with chats/reminders/phone refs)
 backend/.env
 backend/asta.db
-data/
-.asta.pid
-.asta-frontend.pid
 backend/*.db
 backend/chroma_db/
+data/
+.asta.pid
 
 # Node
 node_modules/
-frontend/node_modules/
 npm-debug.log*
 
 # Python
@@ -66,21 +64,13 @@ reference/openclaw/
 asta.db
 backend.log.old
 *.db-journal
+*.db-shm
+*.db-wal
 
-# Build outputs
-MACAPP/build/
+# Tauri build outputs
+MACWinApp/asta-app/src-tauri/target/
+MACWinApp/asta-app/dist/
+MACWinApp/asta-app/node_modules/
 
-# Generated/test files
-*.pyc
-__pycache__/
-node_modules/
-.DS_Store
-
-# Personal data
-asta.db
-backend.log.old
-*.db-journal
-
-# Build
-MACAPP/build/
-frontend/dist/
+# Claude worktrees
+MACWinApp/.claude/

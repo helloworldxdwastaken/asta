@@ -162,11 +162,16 @@ app = FastAPI(
 
 settings = get_settings()
 
-_default_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+_default_origins = [
+    "http://localhost:5173", "http://127.0.0.1:5173",
+    "http://localhost:1420", "http://127.0.0.1:1420",  # Tauri dev
+    "tauri://localhost", "https://tauri.localhost",      # Tauri production
+]
 _extra_origins = [o.strip() for o in (settings.asta_cors_origins or "").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_default_origins + _extra_origins,
+    allow_origin_regex=r".*",          # personal backend — allow any origin
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

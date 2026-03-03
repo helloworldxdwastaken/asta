@@ -6,24 +6,24 @@
 
 ## 1. Vision
 
-Asta is a **personal control plane**: one place to talk to AI (Google, Claude, Ollama, etc.), automate tasks, manage files and cloud storage, and communicate via Telegram and the macOS app. It has a **native macOS app** (`MACAPP/`) as its primary UI, and can **learn** topics over time (RAG) so you can ask it to become an “expert” on a subject and answer from that knowledge.
+Asta is a **personal control plane**: one place to talk to AI (Google, Claude, Ollama, etc.), automate tasks, manage files and cloud storage, and communicate via Telegram and the desktop app. It has a **cross-platform desktop app** (`MACWinApp/`) built with Tauri as its primary UI, and can **learn** topics over time (RAG) so you can ask it to become an "expert" on a subject and answer from that knowledge.
 
-**Core idea:** You control things by chatting (Telegram or the macOS app). The bot reads your messages, runs tasks (files, Drive, learning, scheduled jobs), and uses the right AI backend to reply.
+**Core idea:** You control things by chatting (Telegram or the desktop app). The bot reads your messages, runs tasks (files, Drive, learning, scheduled jobs), and uses the right AI backend to reply.
 
 ---
 
 ## 2. Features (implemented vs planned)
 
-Use this as the source of truth. When you implement a feature, move it to “Implemented” and note where in the codebase it lives.
+Use this as the source of truth. When you implement a feature, move it to "Implemented" and note where in the codebase it lives.
 
 ### 2.1 Implemented
 
-- **macOS app** — `MACAPP/`: Dashboard, Chat, Files, Drive, Learning (RAG), Audio notes, Skills, Channels, **Cron**, Settings. Dashboard: Brain (AI providers), Body (CPU/RAM/disk, CPU model), Eyes (vision), Channels, Notes (latest `workspace/notes/*.md`), Schedule (pending reminders + recurring cron jobs), Capabilities (active skills count). Cron tab: list/delete/update recurring jobs (plus scheduler-backed run actions via tool); auto-updater creates "Daily Auto-Update" on startup when skill present. Settings → Auto-updater for schedule/timezone.
+- **Desktop app** — `MACWinApp/asta-app/`: Tauri v2 + React/TypeScript. Dashboard, Chat, Files, Drive, Learning (RAG), Audio notes, Skills, Channels, **Cron**, Settings. Dashboard: Brain (AI providers), Body (CPU/RAM/disk, CPU model), Eyes (vision), Channels, Notes (latest `workspace/notes/*.md`), Schedule (pending reminders + recurring cron jobs), Capabilities (active skills count). Cron tab: list/delete/update recurring jobs (plus scheduler-backed run actions via tool); auto-updater creates "Daily Auto-Update" on startup when skill present. Settings → Auto-updater for schedule/timezone.
 - **AI providers** — `backend/app/providers/`: Groq, Google (Gemini), Claude, OpenAI, OpenRouter, Ollama. Main runtime chain is fixed (OpenClaw-style) to `Claude -> Google -> OpenRouter -> Ollama`; users pick default + per-provider models in Settings. Set keys in Settings or `backend/.env`.
-- **Hybrid vision pipeline (Telegram photos)** — Image turns are preprocessed by a vision-capable model first (default priority: OpenRouter → Claude → OpenAI; OpenRouter default model: `nvidia/nemotron-nano-12b-v2-vl:free`). The extracted analysis is then passed to the user’s main agent model for final reply and tool actions. Settings UI keeps the vision model fixed to Nemotron for consistency.
+- **Hybrid vision pipeline (Telegram photos)** — Image turns are preprocessed by a vision-capable model first (default priority: OpenRouter → Claude → OpenAI; OpenRouter default model: `nvidia/nemotron-nano-12b-v2-vl:free`). The extracted analysis is then passed to the user's main agent model for final reply and tool actions. Settings UI keeps the vision model fixed to Nemotron for consistency.
 - **Unified context** — AI receives recent conversation, connected channels, ground-truth state (pending reminders count, location), allowed file paths, Google Workspace summary (Gmail, Calendar, Drive via gog), RAG snippets, time/weather/Spotify context, and tool instructions. Workspace `SKILL.md` bodies are not pre-injected; they are read on demand via tool call. `backend/app/context.py`, `handler.py`.
 - **Intent-based built-in skills** — `backend/app/skill_router.py`: only relevant built-in skills run per message (time, weather, Spotify, Google Workspace via gog, etc.). Saves tokens; status in Telegram shows only used skills. Service handlers are gated by skill toggles.
-- **OpenClaw-style workspace skill flow** — Context exposes `<available_skills>` (enabled workspace skills only). Model selects one relevant skill, calls `read(path)` for that skill’s `SKILL.md`, then follows it. This avoids context pollution from loading all enabled workspace skills.
+- **OpenClaw-style workspace skill flow** — Context exposes `<available_skills>` (enabled workspace skills only). Model selects one relevant skill, calls `read(path)` for that skill's `SKILL.md`, then follows it. This avoids context pollution from loading all enabled workspace skills.
 - **Workspace skill host gating** — Skills declaring `metadata.openclaw.os` and `requires.bins` are runtime-gated by host OS + required binaries (OpenClaw-style). This keeps macOS-only skills (e.g. Apple Notes) out of Linux runtime prompts.
 - **Notes behavior** — Default notes are markdown files in `workspace/notes/` (via `notes` skill). Apple Notes (`memo`) is only used when explicitly requested.
 - **Structured tool loop** — Handler executes provider tool calls for exec/files/reminders/cron/read, appends tool results, and re-calls the same provider for final user text.
@@ -51,7 +51,7 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 | Feature | Description | Notes |
 |--------|-------------|--------|
 | **Google Drive OAuth** | Full OAuth flow and list files in panel. | Stub in `routers/drive.py`; add token storage. |
-| **Learning / RAG** | “Learn X for Y hours” (also: “research/study/become expert on X”) → ingest content (URLs, files, paste), chunk, embed (Ollama or API), store in vector DB. Answer questions using that knowledge. | Use LangChain/LlamaIndex or custom pipeline; scheduler runs ingestion for the requested duration. |
+| **Learning / RAG** | "Learn X for Y hours" (also: "research/study/become expert on X") → ingest content (URLs, files, paste), chunk, embed (Ollama or API), store in vector DB. Answer questions using that knowledge. | Use LangChain/LlamaIndex or custom pipeline; scheduler runs ingestion for the requested duration. |
 | **Install script** | One-command install.sh / install.ps1. | See docs/INSTALL.md for manual steps. |
 
 ### 2.3 Future ideas (document only)
@@ -60,7 +60,7 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 - **Calendar:** Google Calendar — create events, reminders.
 - **Email:** Gmail — read/send, summarize.
 - **Browser automation:** Open URLs, fill forms (Playwright).
-- **Multi-agent / skills:** Different “personas” or skills (e.g. “code”, “writing”, “research”).
+- **Multi-agent / skills:** Different "personas" or skills (e.g. "code", "writing", "research").
 - **Encryption:** Encrypt API keys and sensitive chat history at rest.
 - **Backup/export:** Export conversations and RAG knowledge.
 
@@ -72,7 +72,7 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 
 ```
 [ User ]
-   | Telegram / Web panel
+   | Telegram / Desktop app
    v
 [ Asta Backend (FastAPI) ]
    | - Message router (which channel, which provider)
@@ -90,13 +90,13 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 | Component | Tech | Responsibility |
 |-----------|------|----------------|
 | **API** | FastAPI (Python 3.12/3.13) | REST + WebSocket; auth; route to providers and tasks. |
-| **macOS App** | SwiftUI | Native macOS UI: Dashboard, Chat, Files, Drive, Learning, Skills, Settings, Agents. |
+| **Desktop App** | Tauri v2 (Rust + React/TypeScript) | Cross-platform UI (macOS/Windows): Dashboard, Chat, Files, Drive, Learning, Skills, Settings, Agents. |
 | **AI adapters** | Python modules | One module per provider (Groq, Google, Claude, OpenAI, OpenRouter, Ollama); same interface: `chat(messages) -> response`. |
 | **Telegram** | python-telegram-bot | Webhook or long polling; forward to core message handler. |
 | **Files** | Python (pathlib, aiofiles) | Local file ops in allowed dirs; list, read, search. |
 | **Google Drive** | Google Drive API + OAuth2 | List, search, download; optional upload. |
 | **RAG / Learning** | LangChain or custom | Ingest (URLs, files, text), chunk, embed (Ollama or API), store in vector DB; retrieve + generate answers. |
-| **Scheduler** | APScheduler | “Learn for X hours”, cron-like tasks, reminders. |
+| **Scheduler** | APScheduler | "Learn for X hours", cron-like tasks, reminders. |
 | **Data** | SQLite + vector store | SQLite for users, tasks, config; Chroma/FAISS/sqlite-vec for embeddings. |
 
 ### 3.3 Data model (conceptual)
@@ -118,10 +118,10 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 
 - **New AI provider:** Implement `backend/app/providers/base.py` interface; add under `backend/app/providers/`. Register in provider registry.
 - **New skill:** Add intent and label in `skill_router.py`, run in `handler.py` (set `extra`), context in `context.py`, and entry in `routers/settings.py` SKILLS.
-- **Telegram:** `backend/app/channels/telegram_bot.py` — long polling; same message handler as macOS app.
-- **macOS App:** `MACAPP/Sources/AstaMacApp/` — SwiftUI app. New views under that directory; calls the same backend REST API.
-- **RAG:** `backend/app/rag/` — ingest pipeline, embedding (Ollama or API), vector store; expose “learn” and “ask about topic” endpoints.
-- **Scheduler:** `backend/app/tasks/` — APScheduler jobs; “learn for X hours” = enqueue ingestion job with end_time.
+- **Telegram:** `backend/app/channels/telegram_bot.py` — long polling; same message handler as desktop app.
+- **Desktop App:** `MACWinApp/asta-app/src/` — React/TypeScript components. New views under `src/components/`; calls the same backend REST API. Rust commands in `src-tauri/src/`.
+- **RAG:** `backend/app/rag/` — ingest pipeline, embedding (Ollama or API), vector store; expose "learn" and "ask about topic" endpoints.
+- **Scheduler:** `backend/app/tasks/` — APScheduler jobs; "learn for X hours" = enqueue ingestion job with end_time.
 
 ### 4.2 Exec + process tools (OpenClaw-style)
 
@@ -130,7 +130,7 @@ Use this as the source of truth. When you implement a feature, move it to “Imp
 - **Tool flow:** `handler.py` passes tools (exec/process/files/read/reminders/cron) to tool-capable providers (OpenAI, Groq, OpenRouter, Claude, Google). If the response has `tool_calls`, Asta runs each tool, appends tool output, and re-calls the same provider. Final reply is the last `response.content`.
 - **Vision flow:** For image turns, `handler.py` runs a dedicated vision preprocessor (`_run_vision_preprocessor`) and injects `[VISION_ANALYSIS ...]` into the user message. Final reasoning/tool execution remains on the main selected provider.
 - **Allowlist:** Env `ASTA_EXEC_ALLOWED_BINS` plus DB `exec_allowed_bins_extra`. Enabling a skill that declares `required_bins` (e.g. Apple Notes) adds those bins. Binary is resolved with `resolve_executable()` (PATH plus `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin`).
-- **Output limits (OpenClaw-style):** Combined stdout+stderr is capped at 200k chars (tail retained). Before sending to the model, exec output is truncated to the last 20k chars with a “… (truncated)” prefix so context stays bounded. Applies to both the exec/bash tool result and the `[ASTA_EXEC]` fallback path.
+- **Output limits (OpenClaw-style):** Combined stdout+stderr is capped at 200k chars (tail retained). Before sending to the model, exec output is truncated to the last 20k chars with a "… (truncated)" prefix so context stays bounded. Applies to both the exec/bash tool result and the `[ASTA_EXEC]` fallback path.
 - **Fallback:** We still parse `[ASTA_EXEC: command][/ASTA_EXEC]` in the reply, run the command, and re-call with the output (now guarded to exec-intent requests only). Main-provider failover order is fixed (`claude -> google -> openrouter -> ollama`) and runtime-state-aware (manual disable + auto-disable on auth/billing). Stream fallback now emits explicit lifecycle events per provider attempt, which the handler state machine consumes for live assistant/reasoning output consistency. See `exec_tool.py`, `process_tool.py`, `provider_flow.py`, `providers/fallback.py`, `handler.py`, `stream_state_machine.py`.
 
 ### 4.3 Subagent orchestration tools (OpenClaw-style, single-user)
@@ -177,19 +177,19 @@ is_agent: true
 - Never commit API keys. Use env vars or a secrets store; document in README.
 - Restrict file access to configured directories (e.g. `ASTA_ALLOWED_PATHS`).
 - Validate and sanitize all user input; rate-limit public endpoints (Telegram).
-- Prefer read-only Drive scope if only “see what’s on the drive” is needed.
+- Prefer read-only Drive scope if only "see what's on the drive" is needed.
 
 ### 4.5 Easy install (planned)
 
 - **Native:** `./asta.sh start` runs the backend after manual venv install. **Planned:** one command (e.g. `install.sh` or `curl ... | sh`) that pulls from GitHub and installs dependencies (venv, pip) so you can run `./asta.sh start` with minimal steps. Document in README and docs/INSTALL.md.
 
-### 4.6 What “learn for X time” should do
+### 4.6 What "learn for X time" should do
 
-1. User says: “Learn everything about Next.js for the next 2 hours.”
-2. Backend creates a **learning job:** sources (e.g. list of URLs or “crawl from this seed”), duration (2 hours), topic label (“Next.js”).
+1. User says: "Learn everything about Next.js for the next 2 hours."
+2. Backend creates a **learning job:** sources (e.g. list of URLs or "crawl from this seed"), duration (2 hours), topic label ("Next.js").
 3. Scheduler runs an **ingestion loop** for 2 hours: fetch content (crawl/read), chunk, embed, store in vector DB with topic metadata.
-4. When user asks “How do I use App Router in Next.js?”, the **RAG path** filters by topic “Next.js”, retrieves chunks, and generates answer with the chosen AI provider.
-5. Optional: “Become an expert” = same as above with longer duration and possibly more sources (docs, tutorials, etc.).
+4. When user asks "How do I use App Router in Next.js?", the **RAG path** filters by topic "Next.js", retrieves chunks, and generates answer with the chosen AI provider.
+5. Optional: "Become an expert" = same as above with longer duration and possibly more sources (docs, tutorials, etc.).
 
 ---
 
@@ -220,8 +220,10 @@ asta/
 │   │   ├── rag/         # Ingest, embed, retrieve
 │   │   └── tasks/       # Scheduler (learning, reminders)
 │   └── requirements.txt
-├── MACAPP/              # Native macOS SwiftUI app (primary UI)
-│   └── Sources/AstaMacApp/
+├── MACWinApp/           # Cross-platform desktop app (Tauri v2)
+│   └── asta-app/
+│       ├── src/         # React/TypeScript frontend
+│       └── src-tauri/   # Rust backend (Tauri commands)
 ├── asta.sh              # Start/stop/restart backend
 ├── .env.example         # Template; copy to backend/.env
 └── README.md
@@ -231,6 +233,7 @@ asta/
 
 ## 6. Changelog (spec)
 
-- **Current (1.3.46):** Removed React/Vite web panel (`frontend/`). macOS app (`MACAPP/`) is now the sole UI. All docs and self-knowledge updated accordingly.
+- **Current (1.3.47):** Replaced native SwiftUI macOS app (`MACAPP/`) with cross-platform Tauri desktop app (`MACWinApp/`). Tauri v2 + React/TypeScript, builds for macOS (DMG) and Windows (MSI). All docs updated accordingly.
+- **Previous (1.3.46):** Removed React/Vite web panel (`frontend/`). macOS app was the sole UI.
 - **Previous (1.3.45):** macOS chat now exposes inline message actions (copy for both roles, edit for user turns), and editing a past user message rewinds the same conversation via `POST /api/chat/conversations/{conversation_id}/truncate` before re-running so later context is discarded.
 - **Previous (1.3.17):** Added support for automated voice calls via Pingram (NotificationAPI) for both recurring jobs and one-shot reminders. Improved one-shot reminder visibility on the Cron page with descriptive "One-Shot" badges and updated header context. Introduced custom Pingram Template ID support via Settings API and Channels UI. Reordered Channels UI to prioritize Telegram and Voice Calls. Fixed issue where reminders defaulted to Telegram instead of voice calls by injecting the owner's phone number as a default target when applicable. OpenClaw-style workspace skill selection (`<available_skills>` + on-demand `read`), strict frontmatter metadata parsing for required bins, and structured tool loop across OpenAI/Groq/OpenRouter/Claude/Google/Ollama. Added structured `files`, `reminders`, and `cron` tools, OpenClaw-style `process` tool for background exec session management (`list/poll/log/write/kill/clear/remove`), and single-user subagent orchestration tools (`sessions_spawn/list/history/send/stop`, plus `agents_list`) with persisted lifecycle + completion announcements. Subagents include max-concurrency guard, per-spawn model/thinking overrides, and auto-archive timers for keep-mode sessions. Main-provider failover uses a fixed runtime chain (`claude -> google -> openrouter -> ollama`) with provider runtime states (`enabled/auto_disabled/disabled_reason`) and auto-disable on billing/auth failures. Settings expose this fixed provider flow directly, with model policy hardened for reliability (OpenRouter restricted to Kimi/Trinity families; Ollama overrides restricted to locally detected tool-capable models). Thinking/reasoning controls remain in Settings + Telegram (`/think` with `/thinking`/`/t` aliases, plus `/reasoning`) with levels `off/minimal/low/medium/high/xhigh`. Reasoning stream mode now runs through a dedicated stream event state machine with explicit provider-attempt lifecycle events, improving chunk-time assistant/reasoning consistency across fallback and tool-loop streaming paths; web SSE remains `/api/chat/stream`. Strict `<final>` mode (`final_mode=strict`) enforces output visibility to `<final>...</final>` content only (including stream-time assistant text). Cron tool parity includes `run`, `runs`, and `wake` actions with normalized flattened argument recovery and persisted `cron_job_runs` history. Hybrid vision preprocessing remains enabled for Telegram photos (vision model first, main model final response), with Settings UI fixed to Nemotron for consistent vision behavior. Dashboard and Settings UI include additional medium/small-screen hardening and provider-flow load resilience. Skills catalog/runtime dedupe colliding IDs to prevent duplicate or missing cards in the Skills UI. Drive OAuth is still planned.

@@ -2,14 +2,37 @@
 
 All notable changes to Asta are documented here.
 
+## [1.3.48] - 2026-03-03
+
+### Changed
+
+- **Chat UI polish** — Redesigned empty chat state with suggestion chips, added code block copy buttons, scroll-to-bottom FAB, keyboard hints below input, improved user message action button positioning.
+- **Streaming provider fix** — Fixed stale closure bug where the provider badge on assistant messages could be missing (used ref instead of state in streaming callback).
+- **Tauri v2 detection** — Fixed `api.ts` to check `window.__TAURI_INTERNALS__` (Tauri v2 marker) alongside `window.__TAURI__` for reliable plugin-http detection.
+- **CI/CD** — Added GitHub Actions workflow for automated Tauri builds (macOS + Windows) and GitHub Releases with DMG/MSI artifacts.
+- **Cleanup** — Removed stale Claude worktrees, cleaned .gitignore.
+
+---
+
+## [1.3.47] - 2026-03-03
+
+### Changed
+
+- **Cross-platform Tauri desktop app** — Replaced native SwiftUI macOS app (`MACAPP/`) with a cross-platform Tauri v2 app (`MACWinApp/asta-app/`). Built with React/TypeScript + Rust. Builds for macOS (DMG) and Windows (MSI).
+- **Desktop app features** — Sidebar conversation history, agent picker, provider icons, file drag-and-drop, Tailscale remote access, tray icon, Settings (API keys, providers, connection, cron, skills, Spotify, persona, about).
+- **Bug fixes** — Fixed About page crash (RAM object rendering), API key detection (statusKey mapping), Tailscale detection (proper Tauri invoke import), toggle styling across all pages.
+- **Docs updated** — README, SPEC, INSTALL, TOOLS, TEST_RESULTS, CHANGELOG all updated to reference the Tauri app instead of MACAPP/SwiftUI.
+
+---
+
 ## [1.3.46] - 2026-02-27
 
 ### Changed
 
-- **macOS app is now the primary UI** — Removed the React/Vite web panel (`frontend/`). The macOS SwiftUI app (`MACAPP/`) is the only supported UI. All docs and self-knowledge updated to reflect this.
-- **Docs cleaned up** — SPEC, INSTALL, ERRORS, TOOLS updated to remove all frontend/React/npm/5173 references and point to the macOS app instead.
+- **macOS app was the primary UI** — Removed the React/Vite web panel (`frontend/`). The macOS SwiftUI app was the only supported UI. (Now replaced by Tauri app in 1.3.47.)
+- **Docs cleaned up** — SPEC, INSTALL, ERRORS, TOOLS updated to remove all frontend/React/npm/5173 references.
 - **asta.sh doc** — Removed npm check from diagnostics (no longer relevant).
-- **TOOLS.md architecture note** — Added explicit architecture entry clarifying macOS app is the UI, backend is FastAPI.
+- **TOOLS.md architecture note** — Added explicit architecture entry clarifying desktop app is the UI, backend is FastAPI.
 
 ---
 

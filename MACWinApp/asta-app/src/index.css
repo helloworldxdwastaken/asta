@@ -1,0 +1,296 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Theme: "Graphite Luxe" ───────────────────────────────────────────────── */
+
+/* Dark mode (default) */
+:root, .dark {
+  --surface:         #0A0A0C;
+  --surface-raised:  #121215;
+  --surface-overlay: #1A1A1F;
+  --surface-glass:   rgba(18,18,21,0.78);
+  --label:           #F0EDE8;
+  --label-secondary: rgba(240,237,232,0.55);
+  --label-tertiary:  rgba(240,237,232,0.28);
+  --separator:       rgba(255,255,255,0.06);
+  --separator-bold:  rgba(255,255,255,0.1);
+  --sidebar:         rgba(14,14,17,0.85);
+  --sidebar-hover:   rgba(255,255,255,0.04);
+  --code-bg:         rgba(255,255,255,0.03);
+  --code-border:     rgba(255,255,255,0.06);
+  --scrollbar-thumb: rgba(255,255,255,0.1);
+  --scrollbar-thumb-hover: rgba(255,255,255,0.18);
+  --select-bg:       rgba(255,255,255,0.05);
+  --select-option-bg:#1A1A1F;
+  --blockquote-border: rgba(255,255,255,0.12);
+  --blockquote-text: rgba(240,237,232,0.55);
+  --table-border:    rgba(255,255,255,0.08);
+  --table-header-bg: rgba(255,255,255,0.03);
+  --inline-code-bg:  rgba(255,255,255,0.06);
+  --user-bubble:     #FF6B2C;
+  --user-bubble-end: #FF3D7F;
+  --user-bubble-text:#FFFFFF;
+  --accent-glow:     rgba(255,107,44,0.15);
+  --accent-dim:      rgba(255,107,44,0.08);
+  --ring-color:      rgba(255,107,44,0.3);
+  color-scheme: dark;
+}
+
+/* Light mode */
+.light {
+  --surface:         #F8F7F4;
+  --surface-raised:  #FFFFFF;
+  --surface-overlay: #EEECEA;
+  --surface-glass:   rgba(248,247,244,0.82);
+  --label:           #1A1715;
+  --label-secondary: rgba(26,23,21,0.55);
+  --label-tertiary:  rgba(26,23,21,0.28);
+  --separator:       rgba(0,0,0,0.07);
+  --separator-bold:  rgba(0,0,0,0.12);
+  --sidebar:         rgba(240,238,234,0.88);
+  --sidebar-hover:   rgba(0,0,0,0.03);
+  --code-bg:         rgba(0,0,0,0.03);
+  --code-border:     rgba(0,0,0,0.07);
+  --scrollbar-thumb: rgba(0,0,0,0.12);
+  --scrollbar-thumb-hover: rgba(0,0,0,0.22);
+  --select-bg:       rgba(0,0,0,0.04);
+  --select-option-bg:#FFFFFF;
+  --blockquote-border: rgba(0,0,0,0.12);
+  --blockquote-text: rgba(26,23,21,0.55);
+  --table-border:    rgba(0,0,0,0.08);
+  --table-header-bg: rgba(0,0,0,0.03);
+  --inline-code-bg:  rgba(0,0,0,0.05);
+  --user-bubble:     #E8581A;
+  --user-bubble-end: #D4326A;
+  --user-bubble-text:#FFFFFF;
+  --accent-glow:     rgba(232,88,26,0.1);
+  --accent-dim:      rgba(232,88,26,0.06);
+  --ring-color:      rgba(232,88,26,0.25);
+  color-scheme: light;
+}
+
+/* ── Base ─────────────────────────────────────────────────────────────────── */
+
+:root {
+  font-family: "Outfit", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  --font-mono: "JetBrains Mono", "SF Mono", "Cascadia Mono", ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--surface);
+  color: var(--label);
+}
+
+/* ── Scrollbar ────────────────────────────────────────────────────────────── */
+
+.scrollbar-thin::-webkit-scrollbar { width: 5px; }
+.scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 10px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* ── Forms ────────────────────────────────────────────────────────────────── */
+
+select {
+  background-color: var(--select-bg) !important;
+  color: var(--label);
+}
+select option {
+  background: var(--select-option-bg);
+  color: var(--label);
+}
+
+/* ── Code ─────────────────────────────────────────────────────────────────── */
+
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* Code block wrapper with language header */
+.group\/code {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.group\/code pre {
+  border: none;
+  border-radius: 0;
+}
+code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+}
+:not(pre) > code {
+  background: var(--inline-code-bg);
+  padding: 2px 6px;
+  border-radius: 5px;
+}
+
+/* ── Prose ────────────────────────────────────────────────────────────────── */
+
+.prose { max-width: none; }
+.prose p { margin: 0.5em 0; }
+.prose ul, .prose ol { margin: 0.4em 0; padding-left: 1.5em; }
+.prose li { margin: 0.15em 0; }
+.prose a { color: var(--user-bubble); text-decoration: none; }
+.prose a:hover { text-decoration: underline; }
+.prose strong { font-weight: 600; }
+.prose blockquote {
+  border-left: 3px solid var(--blockquote-border);
+  padding-left: 14px;
+  color: var(--blockquote-text);
+  margin: 0.5em 0;
+}
+.prose table { border-collapse: collapse; width: 100%; margin: 0.5em 0; }
+.prose th, .prose td {
+  border: 1px solid var(--table-border);
+  padding: 8px 12px;
+  text-align: left;
+}
+.prose th {
+  background: var(--table-header-bg);
+  font-weight: 600;
+}
+
+/* ── Light mode overrides ────────────────────────────────────────────────── */
+
+.light .bg-white\/\[\.06\],
+.light .bg-white\/\[\.04\],
+.light .bg-white\/\[\.045\],
+.light .bg-white\/\[\.05\],
+.light .bg-white\/\[\.08\],
+.light .bg-white\/\[\.1\] {
+  --tw-bg-opacity: 1;
+  background-color: rgba(0,0,0,0.04);
+}
+.light .hover\:bg-white\/\[\.05\]:hover,
+.light .hover\:bg-white\/\[\.06\]:hover,
+.light .hover\:bg-white\/\[\.08\]:hover,
+.light .hover\:bg-white\/\[\.1\]:hover {
+  background-color: rgba(0,0,0,0.07) !important;
+}
+.light .bg-black\/50 { background-color: rgba(0,0,0,0.25); }
+.light .bg-black\/60 { background-color: rgba(0,0,0,0.2); }
+
+/* Toggle switch */
+.toggle-off { background-color: rgba(255,255,255,0.18); }
+.toggle-knob { background-color: #fff; }
+.light .toggle-off { background-color: rgba(120,120,128,0.28); }
+.light .toggle-knob { background-color: #fff; }
+.light .bg-white\/\[\.2\] { background-color: rgba(0,0,0,0.12); }
+
+/* Accent dim backgrounds */
+.light .bg-accent\/\[\.12\] { background-color: rgba(232,88,26,0.06); }
+.light .bg-accent\/\[\.15\] { background-color: rgba(232,88,26,0.08); }
+
+/* ── Glass morphism ──────────────────────────────────────────────────────── */
+
+.glass {
+  background: var(--surface-glass);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+}
+
+.glass-subtle {
+  background: var(--surface-glass);
+  backdrop-filter: blur(12px) saturate(150%);
+  -webkit-backdrop-filter: blur(12px) saturate(150%);
+}
+
+/* ── Gradient user bubble ────────────────────────────────────────────────── */
+
+.bubble-gradient {
+  background: linear-gradient(135deg, var(--user-bubble), var(--user-bubble-end));
+}
+
+/* ── Glow effects ────────────────────────────────────────────────────────── */
+
+.glow-accent {
+  box-shadow: 0 0 20px var(--accent-glow), 0 0 60px rgba(255,107,44,0.05);
+}
+
+/* ── Grain overlay ───────────────────────────────────────────────────────── */
+
+.grain::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  opacity: 0.018;
+  pointer-events: none;
+  z-index: 9999;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  background-size: 128px 128px;
+}
+.light .grain::before { opacity: 0.025; }
+
+/* ── Gradient text ───────────────────────────────────────────────────────── */
+
+.text-gradient {
+  background: linear-gradient(135deg, var(--user-bubble), var(--user-bubble-end));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Focus ring ──────────────────────────────────────────────────────────── */
+
+.focus-ring:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--ring-color);
+}
+
+/* ── Tauri window drag ───────────────────────────────────────────────────── */
+
+.titlebar-drag { -webkit-app-region: drag; }
+.titlebar-drag button,
+.titlebar-drag input,
+.titlebar-drag select,
+.titlebar-drag textarea { -webkit-app-region: no-drag; }
+
+/* ── Animations ──────────────────────────────────────────────────────────── */
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes orb-float {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  25%      { transform: translate(20px, -15px) scale(1.05); }
+  50%      { transform: translate(-10px, -25px) scale(0.95); }
+  75%      { transform: translate(-20px, -10px) scale(1.02); }
+}
+
+.animate-slide-up  { animation: slide-up 0.35s cubic-bezier(0.16, 1, 0.3, 1); }
+.animate-fade-in   { animation: fade-in 0.25s ease-out; }
+.animate-scale-in  { animation: scale-in 0.3s cubic-bezier(0.16, 1, 0.3, 1); }

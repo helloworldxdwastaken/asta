@@ -56,9 +56,9 @@ The script handles all items in one shot. After execution, delete the script fil
 
 ## Architecture
 
-- **Frontend / UI**: The macOS app (`MACAPP/`) — this is what the user interacts with. There is no React web panel in active use.
+- **Frontend / UI**: The cross-platform desktop app (`MACWinApp/asta-app/`) built with Tauri v2 + React/TypeScript — this is what the user interacts with. Builds for macOS (DMG) and Windows (MSI).
 - **Backend**: FastAPI server at `backend/` — handles chat, tools, skills, Telegram bot.
-- When asked to make UI or frontend changes, the target is always the macOS SwiftUI app, not any web interface.
+- When asked to make UI or frontend changes, the target is always the Tauri desktop app (`MACWinApp/asta-app/src/`).
 
 ---
 

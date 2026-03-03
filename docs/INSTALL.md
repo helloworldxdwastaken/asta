@@ -1,6 +1,6 @@
 # Asta — Installation (macOS, Linux, Windows)
 
-**Native install only** (no Docker). You need **Python 3.12 or 3.13** (3.14 not yet supported by pydantic/ChromaDB). The primary UI is the **macOS app** (`MACAPP/`) — see the app's README for build instructions.
+**Native install only** (no Docker). You need **Python 3.12 or 3.13** (3.14 not yet supported by pydantic/ChromaDB). The primary UI is the **desktop app** (`MACWinApp/asta-app/`) — a cross-platform Tauri app that runs on macOS and Windows.
 
 ---
 
@@ -15,7 +15,7 @@ cp .env.example backend/.env
 ./asta.sh start
 ```
 
-Open **http://localhost:8010/docs** for API docs. Connect the macOS app to `http://localhost:8010`.
+Open **http://localhost:8010/docs** for API docs. Connect the desktop app to `http://localhost:8010`.
 
 ---
 
@@ -37,14 +37,28 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8010
 ```
 
-### 3. Open
+### 3. Desktop app
 
-- API docs: **http://localhost:8010/docs**
-- macOS app: connect to `http://localhost:8010` in the app's connection settings.
+The desktop app is built with **Tauri v2** (Rust + React/TypeScript). To run in dev mode:
+
+```bash
+cd MACWinApp/asta-app
+npm install
+npx tauri dev
+```
+
+To build a release (DMG on macOS, MSI on Windows):
+
+```bash
+cd MACWinApp/asta-app
+npx tauri build
+```
+
+Connect the app to `http://localhost:8010` in Settings → Connection.
 
 ### 4. Optional
 
-In the macOS app: **Settings** → add API keys (Groq, Gemini, Claude, OpenAI, OpenRouter, Hugging Face, Telegram, Spotify), set default AI (main runtime chain is fixed to `Claude -> Google -> OpenRouter -> Ollama`), choose **Thinking level** (`off/minimal/low/medium/high/xhigh`), **Reasoning visibility** (`off/on/stream`), and **Final tag mode** (`off/strict`), adjust **Vision controls** (preprocess toggle with fixed Nemotron model), and toggle skills. Set your **location** in Chat (e.g. “Holon, Israel”) for time and weather.
+In the desktop app: **Settings** → add API keys (Groq, Gemini, Claude, OpenAI, OpenRouter, Hugging Face, Telegram, Spotify), set default AI (main runtime chain is fixed to `Claude -> Google -> OpenRouter -> Ollama`), choose **Thinking level** (`off/minimal/low/medium/high/xhigh`), **Reasoning visibility** (`off/on/stream`), and **Final tag mode** (`off/strict`), adjust **Vision controls** (preprocess toggle with fixed Nemotron model), and toggle skills. Set your **location** in Chat (e.g. "Holon, Israel") for time and weather.
 
 **Telegram commands:** `/status`, `/exec_mode`, `/allow`, `/allowlist`, `/approvals` (inline `Once/Always/Deny` actions, with automatic post-approval continuation), `/think` (aliases: `/thinking`, `/t`), `/reasoning`, `/subagents`.
 `/reasoning stream` emits live reasoning status on OpenAI/Groq/OpenRouter provider paths.
@@ -66,7 +80,16 @@ In the macOS app: **Settings** → add API keys (Groq, Gemini, Claude, OpenAI, O
    uvicorn app.main:app --reload --host 0.0.0.0 --port 8010
    ```
 
-3. Open **http://localhost:8010/docs**. Connect the macOS app to `http://localhost:8010`.
+3. **Desktop app:**
+
+   ```powershell
+   cd MACWinApp\asta-app
+   npm install
+   npx tauri dev     # dev mode
+   npx tauri build   # release (MSI installer)
+   ```
+
+4. Open **http://localhost:8010/docs** for API docs. The desktop app connects to `http://localhost:8010` by default.
 
 ---
 
@@ -83,7 +106,7 @@ From the repo root, **`./asta.sh`** starts/stops the backend:
 ./asta.sh doc --fix # run diagnostics + auto-fix common setup/dependency issues
 ```
 
-**Settings → Restart backend** in the macOS app runs `./asta.sh restart`.
+**Settings → Restart backend** in the desktop app runs `./asta.sh restart`.
 
 ---
 
@@ -128,9 +151,9 @@ Many keys can also be set in **Settings → API keys** or **Settings → Spotify
 
 ---
 
-## Run the API when it’s down
+## Run the API when it's down
 
-If the panel shows **“API off”**:
+If the panel shows **"API off"**:
 
 1. **Linux / macOS:** From repo root run `./asta.sh start` (or `./asta.sh restart`).
 2. **Or manually:** `cd backend`, activate venv, then `uvicorn app.main:app --host 0.0.0.0 --port 8010`.
@@ -142,17 +165,17 @@ If the panel shows **“API off”**:
 
 See **docs/ERRORS.md** for a full list of common errors and fixes. Quick checks:
 
-- **”Address already in use” (8010)** — Run `./asta.sh restart` to free the port and start fresh. Or use another port, e.g. `uvicorn app.main:app --reload --port 8001` and update `ASTA_API_URL` accordingly.
-- **”Cannot reach Asta API” / “API off”** — Start the backend: `./asta.sh start` or run uvicorn as above. The macOS app connects to `http://localhost:8010` by default.
-- **“No AI provider available”** — Add at least one of: `GROQ_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, or run Ollama and set `OLLAMA_BASE_URL`.
-- **Backend can’t find .env** — Backend reads **`backend/.env`** only. Run `cp .env.example backend/.env` from the repo root.
+- **"Address already in use" (8010)** — Run `./asta.sh restart` to free the port and start fresh. Or use another port, e.g. `uvicorn app.main:app --reload --port 8001` and update `ASTA_API_URL` accordingly.
+- **"Cannot reach Asta API" / "API off"** — Start the backend: `./asta.sh start` or run uvicorn as above. The desktop app connects to `http://localhost:8010` by default.
+- **"No AI provider available"** — Add at least one of: `GROQ_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, or run Ollama and set `OLLAMA_BASE_URL`.
+- **Backend can't find .env** — Backend reads **`backend/.env`** only. Run `cp .env.example backend/.env` from the repo root.
 - **Lyrics / Spotify / Reminders** — Enable the skill in **Settings → Skills**. For Spotify, add Client ID and Secret in Settings → Spotify; for reminders, set location in Chat.
-- **“Wake me up at 7am” asks for location first** — Expected when no location is set. Asta now requires location/timezone for absolute-time reminders.
+- **"Wake me up at 7am" asks for location first** — Expected when no location is set. Asta now requires location/timezone for absolute-time reminders.
 - **Reminders not firing** — Restart the backend once so pending reminders are re-loaded (`./asta.sh restart`).
-- **Audio notes: “faster-whisper is not installed”** — Run `pip install -r requirements.txt` in the backend venv. First run may download the Whisper model (~140 MB).
+- **Audio notes: "faster-whisper is not installed"** — Run `pip install -r requirements.txt` in the backend venv. First run may download the Whisper model (~140 MB).
 
 ---
 
 ## Easy install (planned)
 
-Planned: a single command (e.g. `curl ... | sh` or `install.sh`) that pulls from GitHub and installs dependencies (Python venv, pip, Node/npm) so you can run `./asta.sh start` with minimal steps. See SPEC.md when available.
+Planned: a single command (e.g. `curl ... | sh` or `install.sh`) that pulls from GitHub and installs dependencies (Python venv, pip, Node/npm, Rust) so you can run `./asta.sh start` with minimal steps. See SPEC.md when available.

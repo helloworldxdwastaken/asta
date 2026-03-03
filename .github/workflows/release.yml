@@ -1,0 +1,74 @@
+name: Release Desktop App
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-tauri:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: --target aarch64-apple-darwin
+            rust_target: aarch64-apple-darwin
+          - platform: macos-latest
+            args: --target x86_64-apple-darwin
+            rust_target: x86_64-apple-darwin
+          - platform: windows-latest
+            args: ""
+            rust_target: ""
+
+    runs-on: ${{ matrix.platform }}
+    defaults:
+      run:
+        working-directory: MACWinApp/asta-app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: MACWinApp/asta-app/src-tauri
+
+      - name: Install npm dependencies
+        run: npm ci || npm install
+
+      # macOS: no extra system deps needed
+      # Windows: no extra system deps needed (WebView2 is bundled by Tauri)
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: MACWinApp/asta-app
+          tagName: ${{ github.ref_name }}
+          releaseName: "Asta ${{ github.ref_name }}"
+          releaseBody: |
+            Desktop app release for macOS and Windows.
+
+            **macOS:** Download the `.dmg` file for your architecture (aarch64 = Apple Silicon, x86_64 = Intel).
+            **Windows:** Download the `.msi` installer.
+
+            See [CHANGELOG.md](https://github.com/helloworldxdwastaken/asta/blob/main/CHANGELOG.md) for details.
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
