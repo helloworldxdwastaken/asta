@@ -309,3 +309,12 @@ code {
   animation: pixel-drift 6s ease-in-out infinite;
   image-rendering: pixelated;
 }
+
+/* ── Dot grid background for empty chat ────────────────────────────────── */
+
+.dot-grid {
+  background-image: radial-gradient(circle, var(--separator-bold) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: radial-gradient(ellipse 70% 60% at 50% 50%, black 30%, transparent 80%);
+  -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 50%, black 30%, transparent 80%);
+}

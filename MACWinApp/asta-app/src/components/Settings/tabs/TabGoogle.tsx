@@ -8,13 +8,13 @@ export default function TabGoogle() {
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
-    getKeyStatus().then(r => setHasKey(!!r.google_key)).catch(()=>{});
+    getKeyStatus().then(r => setHasKey(!!r.gemini_api_key)).catch(()=>{});
   }, []);
 
   async function save() {
     if (!key.trim()) return;
     setSaving(true);
-    await setKeys({ google_key: key });
+    await setKeys({ gemini_api_key: key });
     setSaving(false); setSaved(true); setHasKey(true);
     setTimeout(() => setSaved(false), 2000);
   }

@@ -34,8 +34,9 @@ export default function TabSpotify() {
   }
 
   async function disconnect() {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = undefined; }
     await spotifyDisconnect();
-    setConnected(false); setAccount(""); setDevices([]);
+    setConnected(false); setConnecting(false); setAccount(""); setDevices([]);
   }
 
   return (

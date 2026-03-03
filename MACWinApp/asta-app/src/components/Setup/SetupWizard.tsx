@@ -71,8 +71,8 @@ export default function SetupWizard({ onComplete }: Props) {
 
   async function saveApiKeys() {
     const keys: Record<string, string> = {};
-    if (anthropicKey.trim()) keys.anthropic_key = anthropicKey.trim();
-    if (openaiKey.trim()) keys.openai_key = openaiKey.trim();
+    if (anthropicKey.trim()) keys.anthropic_api_key = anthropicKey.trim();
+    if (openaiKey.trim()) keys.openai_api_key = openaiKey.trim();
     if (Object.keys(keys).length === 0) {
       setStep(3);
       return;

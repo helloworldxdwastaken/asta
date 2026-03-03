@@ -25,6 +25,7 @@ export default function App() {
   const [showAgents, setShowAgents] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [sidebarRefresh, setSidebarRefresh] = useState(0);
+  const [chatKey, setChatKey] = useState(0);
   const [isOnline, setIsOnline] = useState(false);
   const [providerKey, setProviderKey] = useState("anthropic");
 
@@ -40,7 +41,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  function handleNewChat() { setConversationId(undefined); }
+  function handleNewChat() { setConversationId(undefined); setChatKey(k => k + 1); }
   function handleConversationCreated(id: string) {
     setConversationId(id);
     setSidebarRefresh(n => n + 1);
@@ -73,6 +74,7 @@ export default function App() {
       {/* Chat */}
       <div className="flex-1 min-w-0 relative">
         <ChatView
+          key={chatKey}
           conversationId={conversationId}
           onConversationCreated={handleConversationCreated}
           agents={agents}

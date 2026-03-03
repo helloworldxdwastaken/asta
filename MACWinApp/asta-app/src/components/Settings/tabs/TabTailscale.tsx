@@ -12,25 +12,25 @@ export default function TabTailscale() {
   }
 
   return (
-    <div className="text-white space-y-6">
-      <h2 className="text-lg font-semibold">Network / Tailscale</h2>
-      <p className="text-sm text-white/50">
+    <div className="text-label space-y-6">
+      <h2 className="text-16 font-semibold">Network / Tailscale</h2>
+      <p className="text-13 text-label-secondary">
         Set the backend URL. Use this to connect to a Mac backend from Windows via Tailscale or LAN.
       </p>
       <div>
-        <label className="text-xs text-white/40 block mb-2">Backend URL</label>
+        <label className="text-11 text-label-tertiary block mb-2">Backend URL</label>
         <input
           type="text"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm font-mono text-white outline-none focus:border-[#007AFF]"
+          className="w-full bg-white/[.04] border border-separator rounded-mac px-4 py-2.5 text-13 font-mono text-label outline-none focus:border-accent/50 transition-colors"
         />
       </div>
       <button
         onClick={save}
-        className="bg-[#007AFF] hover:bg-[#0066CC] text-white text-sm rounded-xl px-5 py-2 transition-colors"
+        className="bubble-gradient hover:opacity-90 text-white text-13 font-medium rounded-mac px-5 py-2.5 shadow-glow-sm hover:shadow-glow transition-all duration-200 active:scale-[0.97]"
       >
-        {saved ? "✓ Saved" : "Save"}
+        {saved ? "Saved" : "Save"}
       </button>
     </div>
   );

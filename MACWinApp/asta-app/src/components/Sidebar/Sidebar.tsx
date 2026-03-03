@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { createPortal } from "react-dom";
 import {
   IconNewChat, IconAgents, IconSettings, IconFolder, IconNewFolder,
   IconChevronRight, IconChevronDown, IconTrash,
@@ -278,52 +279,55 @@ export default function Sidebar({
         </div>
       )}
 
-      {/* Context menu */}
-      {ctx && (
-        <div className="fixed bg-surface-raised border border-separator rounded-mac shadow-modal py-1.5 z-50 w-48 animate-scale-in" style={{ left: ctx.x, top: ctx.y }}>
-          {ctx.type === "conv" && (
-            <>
-              {folders.length > 0 && (
-                <>
-                  <p className="px-3.5 py-1 text-11 text-label-tertiary font-medium uppercase tracking-wider">Move to</p>
-                  {folders.filter(f => f.id !== ctx.folderId).map(f => (
-                    <button key={f.id} className="w-full text-left px-4 py-1.5 text-13 text-label-secondary hover:bg-white/[.05] rounded-lg mx-1 transition-colors" style={{ width: "calc(100% - 8px)" }}
-                      onClick={async () => { await assignConversationFolder(ctx.id, f.id); setCtx(null); refresh(); }}>
-                      <IconFolder size={11} className="inline mr-2 -mt-px" />{f.name}
-                    </button>
-                  ))}
-                  {ctx.folderId && (
-                    <button className="w-full text-left px-4 py-1.5 text-13 text-label-secondary hover:bg-white/[.05] transition-colors"
-                      onClick={async () => { await assignConversationFolder(ctx.id, null); setCtx(null); refresh(); }}>
-                      Remove from folder
-                    </button>
-                  )}
-                  <div className="border-t border-separator my-1.5 mx-2" />
-                </>
-              )}
-              <button className="w-full text-left px-4 py-1.5 text-13 text-label-secondary hover:bg-white/[.05] transition-colors"
-                onClick={async () => { await truncateConversation(ctx.id, 10); setCtx(null); }}>
-                Truncate to 10
-              </button>
-              <button className="w-full text-left px-4 py-1.5 text-13 text-danger hover:bg-danger/10 flex items-center gap-2 transition-colors"
-                onClick={() => handleDeleteConv(ctx.id)}>
-                <IconTrash size={12} /> Delete
-              </button>
-            </>
-          )}
-          {ctx.type === "folder" && (
-            <>
-              <button className="w-full text-left px-4 py-1.5 text-13 text-label-secondary hover:bg-white/[.05] transition-colors"
-                onClick={() => { const f = folders.find(x => x.id === ctx.id); if (f) { setRenamingId(f.id); setRenamingText(f.name); } setCtx(null); }}>
-                Rename
-              </button>
-              <button className="w-full text-left px-4 py-1.5 text-13 text-danger hover:bg-danger/10 flex items-center gap-2 transition-colors"
-                onClick={async () => { await deleteFolder(ctx.id); setCtx(null); refresh(); }}>
-                <IconTrash size={12} /> Delete
-              </button>
-            </>
-          )}
-        </div>
+      {/* Context menu — rendered via portal to escape sidebar stacking context */}
+      {ctx && createPortal(
+        <div className="fixed inset-0 z-[9999]" onClick={() => setCtx(null)}>
+          <div className="fixed bg-surface-raised border border-separator-bold rounded-xl shadow-modal py-1.5 w-52 animate-scale-in" style={{ left: ctx.x, top: ctx.y }} onClick={e => e.stopPropagation()}>
+            {ctx.type === "conv" && (
+              <>
+                {folders.length > 0 && (
+                  <>
+                    <p className="px-3.5 py-1 text-11 text-label-tertiary font-medium uppercase tracking-wider">Move to</p>
+                    {folders.filter(f => f.id !== ctx.folderId).map(f => (
+                      <button key={f.id} className="w-full text-left px-4 py-1.5 text-13 text-label-secondary hover:bg-white/[.05] rounded-lg mx-1 transition-colors" style={{ width: "calc(100% - 8px)" }}
+                        onClick={async () => { await assignConversationFolder(ctx.id, f.id); setCtx(null); refresh(); }}>
+                        <IconFolder size={11} className="inline mr-2 -mt-px" />{f.name}
+                      </button>
+                    ))}
+                    {ctx.folderId && (
+                      <button className="w-full text-left px-4 py-1.5 text-13 text-label-secondary hover:bg-white/[.05] transition-colors"
+                        onClick={async () => { await assignConversationFolder(ctx.id, null); setCtx(null); refresh(); }}>
+                        Remove from folder
+                      </button>
+                    )}
+                    <div className="border-t border-separator my-1.5 mx-2" />
+                  </>
+                )}
+                <button className="w-full text-left px-4 py-1.5 text-13 text-label-secondary hover:bg-white/[.05] transition-colors"
+                  onClick={async () => { await truncateConversation(ctx.id, 10); setCtx(null); }}>
+                  Keep last 10 messages
+                </button>
+                <button className="w-full text-left px-4 py-1.5 text-13 text-danger hover:bg-danger/10 flex items-center gap-2 transition-colors"
+                  onClick={() => handleDeleteConv(ctx.id)}>
+                  <IconTrash size={12} /> Delete
+                </button>
+              </>
+            )}
+            {ctx.type === "folder" && (
+              <>
+                <button className="w-full text-left px-4 py-1.5 text-13 text-label-secondary hover:bg-white/[.05] transition-colors"
+                  onClick={() => { const f = folders.find(x => x.id === ctx.id); if (f) { setRenamingId(f.id); setRenamingText(f.name); } setCtx(null); }}>
+                  Rename
+                </button>
+                <button className="w-full text-left px-4 py-1.5 text-13 text-danger hover:bg-danger/10 flex items-center gap-2 transition-colors"
+                  onClick={async () => { await deleteFolder(ctx.id); setCtx(null); refresh(); }}>
+                  <IconTrash size={12} /> Delete
+                </button>
+              </>
+            )}
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );

@@ -20,7 +20,7 @@ const THEME_MODES: { mode: ThemeMode; label: string; Icon: React.FC<{ size?: num
 export default function TabGeneral() {
   const [provider, setProvider] = useState("anthropic");
   const [thinking, setThinkingState] = useState("off");
-  const [reasoning, setReasoningState] = useState("default");
+  const [reasoning, setReasoningState] = useState("off");
   const [mood, setMoodState] = useState("normal");
   const [finalMode, setFinalModeState] = useState("off");
   const [vision, setVisionState] = useState(false);
@@ -29,7 +29,7 @@ export default function TabGeneral() {
   useEffect(() => {
     getDefaultAI().then(r => setProvider(r.provider ?? r.default_ai_provider ?? "anthropic")).catch(()=>{});
     getThinking().then(r => setThinkingState(r.thinking_level ?? "off")).catch(()=>{});
-    getReasoning().then(r => setReasoningState(r.reasoning_mode ?? "default")).catch(()=>{});
+    getReasoning().then(r => setReasoningState(r.reasoning_mode ?? r.reasoning_budget ?? "off")).catch(()=>{});
     getMoodSetting().then(r => setMoodState(r.mood ?? "normal")).catch(()=>{});
     getFinalMode().then(r => setFinalModeState(r.final_mode ?? "off")).catch(()=>{});
     getVision().then(r => setVisionState(r.vision_enabled ?? false)).catch(()=>{});
@@ -76,7 +76,7 @@ export default function TabGeneral() {
 
       <Section title="Reasoning Mode">
         <div className="flex gap-2">
-          {["default", "brief", "detailed"].map(m => (
+          {["off", "on", "stream"].map(m => (
             <Chip key={m} label={m} active={reasoning === m}
               onClick={async () => { setReasoningState(m); await setReasoning(m); }} />
           ))}
@@ -95,7 +95,7 @@ export default function TabGeneral() {
 
       <Section title="Final Mode">
         <div className="flex gap-2">
-          {["off", "trim", "strict"].map(m => (
+          {["off", "strict"].map(m => (
             <Chip key={m} label={m} active={finalMode === m}
               onClick={async () => { setFinalModeState(m); await setFinalMode(m); }} />
           ))}

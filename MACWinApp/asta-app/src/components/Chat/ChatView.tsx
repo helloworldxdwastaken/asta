@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  IconSliders, IconBrain, IconBook, IconGlobe,
+  IconSliders, IconBrain, IconBook,
   IconAttach, IconSend, IconStop, IconCopy, IconChevronDown, IconEdit, IconCheck,
 } from "../../lib/icons";
 import {
@@ -37,6 +37,7 @@ interface Message {
   activeTools: string[]; completedTools: string[];
 }
 interface Agent { id: string; name: string; icon?: string; enabled: boolean; }
+interface PendingFile { name: string; type: "image" | "text" | "pdf"; content: string; }
 
 interface Props {
   conversationId?: string;
@@ -88,7 +89,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
   const [input, setInput] = useState("");
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const [showThinking, setShowThinking] = useState(localStorage.getItem("showThinking") === "true");
-  const [webEnabled, setWebEnabled] = useState(localStorage.getItem("webEnabled") === "true");
+  const [webEnabled] = useState(localStorage.getItem("webEnabled") === "true");
   const [learningMode, setLearningMode] = useState(false);
   const [provider, setProvider] = useState("anthropic");
   const [thinkingLevel, setThinkingLevel] = useState("off");
@@ -101,6 +102,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
   const [editText, setEditText] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
+  const [streamStatus, setStreamStatus] = useState<string | null>(null);
 
   const endRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -155,13 +157,16 @@ export default function ChatView({ conversationId, onConversationCreated, agents
   const providerName = PROVIDERS.find(p => p.key === provider)?.name ?? provider;
 
   async function send(overrideText?: string) {
-    const text = (overrideText ?? input).trim();
-    if (!text || streaming) return;
+    const rawText = (overrideText ?? input).trim();
+    const fileCtx = buildFileContext();
+    const text = fileCtx ? `${rawText}\n\n${fileCtx}` : rawText;
+    if (!rawText || streaming) return;
     if (!overrideText) setInput("");
+    setPendingFiles([]);
     // Reset textarea height
     if (inputRef.current) inputRef.current.style.height = "auto";
 
-    const userMsg: Message = { id: Date.now().toString(), role: "user", content: text, activeTools: [], completedTools: [] };
+    const userMsg: Message = { id: Date.now().toString(), role: "user", content: rawText + (pendingFiles.length > 0 ? ` [${pendingFiles.map(f => f.name).join(", ")}]` : ""), activeTools: [], completedTools: [] };
     setMessages(prev => [...prev, userMsg]);
     setStreaming(true);
     setStreamContent("");
@@ -224,6 +229,11 @@ export default function ChatView({ conversationId, onConversationCreated, agents
             }
             break;
           }
+          case "status": {
+            const msg = chunk.text ?? chunk.delta ?? "";
+            if (msg) setStreamStatus(msg);
+            break;
+          }
           case "error": {
             accumulated = chunk.error ?? chunk.text ?? "Server error";
             setStreamContent(accumulated);
@@ -242,7 +252,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
           completedTools: [...doneTools],
         };
         setMessages(prev => [...prev, msg]);
-        setStreamContent(""); setStreamThinking(""); setActiveTools([]); setCompletedTools([]); setStreaming(false);
+        setStreamContent(""); setStreamThinking(""); setActiveTools([]); setCompletedTools([]); setStreamStatus(null); setStreaming(false);
         stopRef.current = null;
       },
       (err) => {
@@ -250,7 +260,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
           id: (Date.now()+1).toString(), role: "assistant", content: `Error: ${err.message}`,
           activeTools: [], completedTools: [],
         }]);
-        setStreamContent(""); setStreaming(false); stopRef.current = null;
+        setStreamContent(""); setStreamStatus(null); setStreaming(false); stopRef.current = null;
       },
     );
   }
@@ -287,7 +297,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
 
   // Drag & drop files
   const dragCounterRef = useRef(0);
-  const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
+  const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
 
   function handleDragEnter(e: React.DragEvent) {
     e.preventDefault();
@@ -312,31 +322,51 @@ export default function ChatView({ conversationId, onConversationCreated, agents
   }
 
   function handleFiles(files: File[]) {
-    const names: string[] = [];
-    const imageFiles = files.filter(f => f.type.startsWith("image/"));
-    if (imageFiles.length > 0) {
-      imageFiles.forEach(file => {
-        names.push(file.name);
+    const textExts = [".md", ".txt", ".csv", ".json", ".ts", ".tsx", ".js", ".jsx", ".py", ".sh", ".yaml", ".yml", ".toml", ".xml", ".html", ".css"];
+    files.forEach(file => {
+      if (file.type.startsWith("image/")) {
         const reader = new FileReader();
         reader.onload = () => {
-          const base64 = reader.result as string;
-          setInput(prev => prev + (prev ? "\n" : "") + `![${file.name}](${base64})`);
+          setPendingFiles(prev => [...prev, { name: file.name, type: "image", content: reader.result as string }]);
         };
         reader.readAsDataURL(file);
-      });
-    }
-    const textExts = [".md", ".txt", ".csv", ".json", ".ts", ".tsx", ".js", ".jsx", ".py", ".sh", ".yaml", ".yml", ".toml", ".xml", ".html", ".css"];
-    const textFiles = files.filter(f => f.type.startsWith("text/") || textExts.some(ext => f.name.endsWith(ext)));
-    textFiles.forEach(file => {
-      names.push(file.name);
-      file.text().then(text => {
-        setInput(prev => prev + (prev ? "\n" : "") + "```" + file.name + "\n" + text + "\n```");
-      });
+      } else if (file.type === "application/pdf" || file.name.endsWith(".pdf")) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          setPendingFiles(prev => [...prev, { name: file.name, type: "pdf", content: reader.result as string }]);
+        };
+        reader.readAsDataURL(file);
+      } else if (file.type.startsWith("text/") || textExts.some(ext => file.name.endsWith(ext))) {
+        file.text().then(text => {
+          setPendingFiles(prev => [...prev, { name: file.name, type: "text", content: text }]);
+        });
+      }
     });
-    if (names.length > 0) {
-      setAttachedFiles(names);
-      setTimeout(() => setAttachedFiles([]), 3000);
-    }
+  }
+
+  function removeFile(index: number) {
+    setPendingFiles(prev => prev.filter((_, i) => i !== index));
+  }
+
+  function buildFileContext(): string {
+    if (pendingFiles.length === 0) return "";
+    return pendingFiles.map(f => {
+      if (f.type === "image") return `![${f.name}](${f.content})`;
+      if (f.type === "pdf") return `<document name="${f.name}" type="pdf">${f.content}</document>`;
+      return `<document name="${f.name}">\n${f.content}\n</document>`;
+    }).join("\n");
+  }
+
+  /** Strip embedded file attachments from message content for display */
+  function cleanContent(c: string): string {
+    let s = c;
+    // Remove <document name="..." type="...">base64/text...</document> blocks → show file chip
+    s = s.replace(/<document\s+name="([^"]+)"[^>]*>[\s\S]*?<\/document>/g, (_m, name) => `[${name}]`);
+    // Remove ![filename](data:...) markdown images with data URLs → show file chip
+    s = s.replace(/!\[([^\]]*)\]\(data:[^)]+\)/g, (_m, alt) => `[${alt || "image"}]`);
+    // Collapse multiple newlines left by removals
+    s = s.replace(/\n{3,}/g, "\n\n");
+    return s.trim();
   }
 
   function isStatus(c: string) { return c.startsWith(STATUS_PREFIX); }
@@ -383,19 +413,13 @@ export default function ChatView({ conversationId, onConversationCreated, agents
         </div>
       )}
 
-      {/* Attached file toast */}
-      {attachedFiles.length > 0 && (
-        <div className="absolute top-14 left-1/2 -translate-x-1/2 z-50 bg-success text-white text-12 font-medium px-5 py-2.5 rounded-mac shadow-float animate-slide-up">
-          Attached: {attachedFiles.join(", ")}
-        </div>
-      )}
 
       {/* Toolbar */}
       <div className="flex items-center justify-end gap-1.5 px-4 border-b border-separator shrink-0 titlebar-drag" style={{ height: 46 }}>
         {/* Provider chip */}
         <div className="relative">
           <button
-            onClick={e => { e.stopPropagation(); setShowProviderMenu(!showProviderMenu); setShowThinkingMenu(false); setShowAgentMenu(false); }}
+            onClick={e => { e.stopPropagation(); setShowProviderMenu(!showProviderMenu); setShowThinkingMenu(false); }}
             className="flex items-center gap-1.5 text-11 font-semibold text-label-secondary bg-white/[.05] hover:bg-white/[.08] rounded-mac px-2.5 py-1.5 transition-all duration-200 active:scale-[0.97]"
           >
             <ProviderLogo provider={provider} size={14} />
@@ -420,7 +444,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
         {/* Thinking + Mood chip */}
         <div className="relative">
           <button
-            onClick={e => { e.stopPropagation(); setShowThinkingMenu(!showThinkingMenu); setShowProviderMenu(false); setShowAgentMenu(false); }}
+            onClick={e => { e.stopPropagation(); setShowThinkingMenu(!showThinkingMenu); setShowProviderMenu(false); }}
             className="flex items-center gap-1.5 text-11 text-label-secondary bg-white/[.05] hover:bg-white/[.08] rounded-mac px-2.5 py-1.5 transition-all duration-200 active:scale-[0.97]"
             style={{ height: 28, minWidth: 44 }}
           >
@@ -467,11 +491,6 @@ export default function ChatView({ conversationId, onConversationCreated, agents
           {learningMode && <span className="font-medium">Learn</span>}
         </button>
 
-        {/* Web toggle */}
-        <button onClick={() => { const v = !webEnabled; setWebEnabled(v); localStorage.setItem("webEnabled", String(v)); }}
-          className={`flex items-center gap-1 rounded-mac px-2 py-1.5 text-11 transition-all duration-200 active:scale-[0.95] ${webEnabled ? "text-accent bg-accent/[.12]" : "text-label-tertiary bg-white/[.05] hover:bg-white/[.08]"}`}>
-          <IconGlobe size={12} />
-        </button>
       </div>
 
       {/* Message list */}
@@ -488,6 +507,8 @@ export default function ChatView({ conversationId, onConversationCreated, agents
         {/* Empty state */}
         {!loading && messages.length === 0 && !streaming && (
           <div className="flex flex-col items-center justify-center h-full gap-4 relative overflow-hidden">
+            {/* Dot grid background */}
+            <div className="absolute inset-0 dot-grid pointer-events-none opacity-60" aria-hidden />
             {/* 8-bit floating pixel blocks */}
             <div className="absolute inset-0 pointer-events-none" aria-hidden>
               {/* Left side blocks */}
@@ -558,7 +579,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
                     </button>
                   </div>
                   <div className="bubble-gradient text-white rounded-bubble px-4 py-2.5 text-14 whitespace-pre-wrap shadow-sm">
-                    {msg.content}
+                    {cleanContent(msg.content)}
                   </div>
                 </div>
               </div>
@@ -597,7 +618,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
                 )}
                 {/* Content */}
                 <div className="text-label text-14 prose prose-invert prose-sm leading-relaxed">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{msg.content}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{cleanContent(msg.content)}</ReactMarkdown>
                 </div>
                 {/* Provider badge + actions */}
                 <div className="flex items-center gap-3 mt-1.5">
@@ -620,7 +641,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
         })}
 
         {/* Streaming content */}
-        {streaming && (streamContent || streamThinking || activeTools.length > 0 || completedTools.length > 0) && (
+        {streaming && (streamContent || streamThinking || activeTools.length > 0 || completedTools.length > 0 || streamStatus) && (
           <div className="flex justify-start gap-2.5 animate-fade-in">
             <img src="/appicon-512.png" alt="" className="w-7 h-7 rounded-[8px] shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
@@ -653,6 +674,13 @@ export default function ChatView({ conversationId, onConversationCreated, agents
                   ))}
                 </div>
               )}
+              {/* Status line */}
+              {streamStatus && !streamContent && (
+                <div className="flex items-center gap-2 text-12 text-label-tertiary italic animate-fade-in">
+                  <span className="w-1.5 h-1.5 rounded-full bg-accent/50 animate-pulse shrink-0" />
+                  <span className="truncate">{streamStatus}</span>
+                </div>
+              )}
               {/* Content stream */}
               {streamContent && (
                 <div className="text-label text-14 prose prose-invert prose-sm leading-relaxed">
@@ -664,7 +692,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
         )}
 
         {/* Bounce dots */}
-        {streaming && !streamContent && !streamThinking && activeTools.length === 0 && (
+        {streaming && !streamContent && !streamThinking && activeTools.length === 0 && !streamStatus && (
           <div className="flex justify-start gap-2.5 animate-fade-in">
             <img src="/appicon-512.png" alt="" className="w-7 h-7 rounded-[8px] shrink-0" />
             <div className="flex items-center gap-1.5 px-2 py-3">
@@ -692,31 +720,42 @@ export default function ChatView({ conversationId, onConversationCreated, agents
 
       {/* Input area */}
       <div className="border-t border-separator px-4 py-3">
-        <div className="flex items-end gap-2">
+        {/* Pending file chips */}
+        {pendingFiles.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mb-2 px-1">
+            {pendingFiles.map((f, i) => (
+              <span key={i} className="inline-flex items-center gap-1.5 bg-white/[.06] border border-separator rounded-lg px-2.5 py-1 text-11 text-label-secondary animate-scale-in">
+                <span>{f.type === "image" ? "\uD83D\uDDBC" : f.type === "pdf" ? "\uD83D\uDCC4" : "\uD83D\uDCCE"}</span>
+                <span className="max-w-32 truncate">{f.name}</span>
+                <button onClick={() => removeFile(i)} className="text-label-tertiary hover:text-label ml-0.5 transition-colors">&times;</button>
+              </span>
+            ))}
+          </div>
+        )}
+
+        <div className="flex items-end gap-1.5">
           {/* Attach button */}
           <button onClick={() => fileInputRef.current?.click()}
-            className="w-9 h-9 flex items-center justify-center rounded-mac hover:bg-white/[.06] text-label-tertiary hover:text-label-secondary shrink-0 transition-colors" title="Attach file">
-            <IconAttach size={18} />
+            className="w-9 h-9 flex items-center justify-center rounded-xl hover:bg-white/[.06] text-label-tertiary hover:text-label-secondary shrink-0 transition-colors" title="Attach file">
+            <IconAttach size={16} />
           </button>
-          <input ref={fileInputRef} type="file" multiple accept="image/*,.txt,.md,.csv,.json,.ts,.tsx,.js,.jsx,.py,.sh,.yaml,.yml,.toml,.xml,.html,.css" className="hidden"
+          <input ref={fileInputRef} type="file" multiple accept="image/*,.pdf,.txt,.md,.csv,.json,.ts,.tsx,.js,.jsx,.py,.sh,.yaml,.yml,.toml,.xml,.html,.css" className="hidden"
             onChange={e => { if (e.target.files) handleFiles(Array.from(e.target.files)); e.target.value = ""; }} />
 
-          {/* Agent picker */}
+          {/* Agent dropdown */}
           {enabledAgents.length > 0 && (
             <div className="relative shrink-0">
               <button
                 onClick={e => { e.stopPropagation(); setShowAgentMenu(!showAgentMenu); setShowProviderMenu(false); setShowThinkingMenu(false); }}
-                className={`flex items-center gap-1.5 text-11 rounded-mac px-2.5 py-2 transition-all duration-200 active:scale-[0.97] ${
-                  selectedAgent ? "bg-accent/[.12] text-accent font-semibold border border-accent/20" : "bg-white/[.05] text-label-secondary hover:bg-white/[.08] border border-transparent"
+                className={`flex items-center gap-1.5 text-11 rounded-xl h-9 px-2.5 transition-all duration-200 active:scale-[0.97] ${
+                  selectedAgent
+                    ? "bg-accent/[.12] text-accent font-semibold border border-accent/20"
+                    : "bg-white/[.04] text-label-tertiary hover:text-label-secondary hover:bg-white/[.06] border border-transparent"
                 }`}>
                 {selectedAgent ? (
                   <>
-                    {selectedAgent.icon ? (
-                      <img src={selectedAgent.icon} alt="" className="w-4 h-4 rounded-full" />
-                    ) : (
-                      <span className="w-4 h-4 rounded-full bg-accent/30 text-[8px] font-bold flex items-center justify-center text-white">{selectedAgent.name[0]}</span>
-                    )}
-                    <span className="max-w-20 truncate">{selectedAgent.name}</span>
+                    <span className="w-4 h-4 rounded-full bg-accent/30 text-[8px] font-bold flex items-center justify-center text-white shrink-0">{selectedAgent.name[0]}</span>
+                    <span className="max-w-16 truncate">{selectedAgent.name}</span>
                   </>
                 ) : (
                   <span>Agent</span>
@@ -724,11 +763,11 @@ export default function ChatView({ conversationId, onConversationCreated, agents
                 <IconChevronDown size={8} className="text-label-tertiary" />
               </button>
               {showAgentMenu && (
-                <div className="absolute left-0 bottom-full mb-1.5 bg-surface-raised border border-separator-bold rounded-mac shadow-modal py-1.5 z-50 w-56 max-h-64 overflow-y-auto scrollbar-thin animate-scale-in">
+                <div className="absolute left-0 bottom-full mb-1.5 bg-surface-raised border border-separator-bold rounded-xl shadow-modal py-1.5 z-50 w-56 max-h-64 overflow-y-auto scrollbar-thin animate-scale-in">
                   <button
                     className={`w-full text-left px-4 py-2.5 text-13 transition-all duration-150 ${!selectedAgent ? "text-accent bg-accent/[.08]" : "text-label-secondary hover:bg-white/[.04]"}`}
                     onClick={() => { setSelectedAgent(null); setShowAgentMenu(false); }}>
-                    No agent
+                    No agent (default)
                   </button>
                   <div className="border-t border-separator mx-3 my-1" />
                   {enabledAgents.map(a => (
@@ -737,12 +776,11 @@ export default function ChatView({ conversationId, onConversationCreated, agents
                         selectedAgent?.id === a.id ? "text-accent bg-accent/[.08]" : "text-label-secondary hover:bg-white/[.04]"
                       }`}
                       onClick={() => { setSelectedAgent(a); setShowAgentMenu(false); }}>
-                      {a.icon ? (
-                        <img src={a.icon} alt="" className="w-5 h-5 rounded-full shrink-0" />
-                      ) : (
-                        <span className="w-5 h-5 rounded-full bg-accent/20 text-accent text-[10px] font-bold flex items-center justify-center shrink-0">{a.name[0]}</span>
-                      )}
+                      <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center shrink-0 ${
+                        selectedAgent?.id === a.id ? "bg-accent/20 text-accent" : "bg-white/[.08] text-label-tertiary"
+                      }`}>{a.name[0]}</span>
                       <span className="truncate">{a.name}</span>
+                      {selectedAgent?.id === a.id && <IconCheck size={12} className="ml-auto text-accent shrink-0" />}
                     </button>
                   ))}
                 </div>
@@ -750,34 +788,36 @@ export default function ChatView({ conversationId, onConversationCreated, agents
             </div>
           )}
 
+          {/* Text input */}
           <textarea
             ref={inputRef} rows={1} value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={selectedAgent ? `Message @${selectedAgent.name}...` : "Type a message..."}
-            className="flex-1 bg-white/[.04] border border-separator hover:border-separator-bold rounded-[14px] px-4 py-2.5 text-14 text-label placeholder-label-tertiary outline-none focus:border-accent/40 focus:bg-white/[.06] resize-none transition-all duration-200"
+            className="flex-1 bg-white/[.04] border border-separator hover:border-separator-bold rounded-2xl px-4 py-2.5 text-14 text-label placeholder-label-tertiary outline-none focus:border-accent/30 focus:bg-white/[.06] resize-none transition-all duration-200"
             style={{ minHeight: 42, maxHeight: 200, lineHeight: "20px" }}
             onInput={e => { const el = e.currentTarget; el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, 200) + "px"; }}
           />
 
+          {/* Send / Stop */}
           <button
             onClick={streaming ? () => stopRef.current?.() : () => send()}
             disabled={!streaming && !input.trim()}
-            className={`w-9 h-9 flex items-center justify-center rounded-mac shrink-0 transition-all duration-200 active:scale-[0.93] ${
+            className={`w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all duration-200 active:scale-[0.93] ${
               streaming
                 ? "bg-danger/20 text-danger hover:bg-danger/30"
                 : input.trim()
                   ? "bubble-gradient text-white shadow-glow-sm hover:shadow-glow"
-                  : "bg-white/[.05] text-label-tertiary"
+                  : "bg-white/[.04] text-label-tertiary"
             }`}
           >
             {streaming ? <IconStop size={14} /> : <IconSend size={14} />}
           </button>
         </div>
         {/* Keyboard hint */}
-        <div className="flex justify-end mt-1 pr-11">
+        <div className="flex justify-end mt-1 pr-1">
           <span className="text-10 text-label-tertiary/40 font-mono">
-            {streaming ? "Click stop to cancel" : "Enter to send · Shift+Enter for newline"}
+            {streaming ? "Click stop to cancel" : "Enter · Shift+Enter for newline"}
           </span>
         </div>
       </div>

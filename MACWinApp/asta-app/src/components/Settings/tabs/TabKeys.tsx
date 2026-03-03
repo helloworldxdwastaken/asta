@@ -4,16 +4,16 @@ import ProviderLogo from "../../ProviderLogo";
 
 // key = field name sent to PUT /api/settings/keys
 // statusKey = field name returned by GET /api/settings/keys (backend uses _api_key suffix)
+// key = field name matching backend ApiKeysIn model (PUT /api/settings/keys)
 const FIELDS = [
-  { key: "anthropic_key", statusKey: "anthropic_api_key", label: "Anthropic (Claude)", ph: "sk-ant-...", prov: "anthropic", icon: "anthropic", url: "https://console.anthropic.com/settings/keys" },
-  { key: "openai_key", statusKey: "openai_api_key", label: "OpenAI", ph: "sk-...", prov: "openai", icon: "openai", url: "https://platform.openai.com/api-keys" },
-  { key: "openrouter_key", statusKey: "openrouter_api_key", label: "OpenRouter", ph: "sk-or-...", prov: "openrouter", icon: "openrouter", url: "https://openrouter.ai/keys" },
-  { key: "google_key", statusKey: "gemini_api_key", label: "Google / Gemini", ph: "AIza...", prov: "google", icon: "google", url: "https://aistudio.google.com/app/apikey" },
-  { key: "groq_key", statusKey: "groq_api_key", label: "Groq", ph: "gsk_...", prov: "groq", icon: "groq", url: "https://console.groq.com/keys" },
-  { key: "huggingface_key", statusKey: "huggingface_api_key", label: "HuggingFace", ph: "hf_...", prov: null, icon: "huggingface", url: "https://huggingface.co/settings/tokens" },
-  { key: "giphy_key", statusKey: "giphy_api_key", label: "Giphy", ph: "", prov: null, icon: "giphy", url: "https://developers.giphy.com/" },
-  { key: "brave_key", statusKey: "brave_api_key", label: "Brave Search", ph: "", prov: null, icon: "brave", url: "https://brave.com/search/api/" },
-  { key: "notion_key", statusKey: "notion_api_key", label: "Notion", ph: "ntn_...", prov: null, icon: "notion", url: "https://www.notion.so/my-integrations" },
+  { key: "anthropic_api_key", label: "Anthropic (Claude)", ph: "sk-ant-...", prov: "anthropic", icon: "anthropic", url: "https://console.anthropic.com/settings/keys" },
+  { key: "openai_api_key", label: "OpenAI", ph: "sk-...", prov: "openai", icon: "openai", url: "https://platform.openai.com/api-keys" },
+  { key: "openrouter_api_key", label: "OpenRouter", ph: "sk-or-...", prov: "openrouter", icon: "openrouter", url: "https://openrouter.ai/keys" },
+  { key: "gemini_api_key", label: "Google / Gemini", ph: "AIza...", prov: "google", icon: "google", url: "https://aistudio.google.com/app/apikey" },
+  { key: "groq_api_key", label: "Groq", ph: "gsk_...", prov: "groq", icon: "groq", url: "https://console.groq.com/keys" },
+  { key: "huggingface_api_key", label: "HuggingFace", ph: "hf_...", prov: null, icon: "huggingface", url: "https://huggingface.co/settings/tokens" },
+  { key: "giphy_api_key", label: "Giphy", ph: "", prov: null, icon: "giphy", url: "https://developers.giphy.com/" },
+  { key: "notion_api_key", label: "Notion", ph: "ntn_...", prov: null, icon: "notion", url: "https://www.notion.so/my-integrations" },
 ];
 
 export default function TabKeys() {
@@ -54,7 +54,7 @@ export default function TabKeys() {
       <h2 className="text-16 font-semibold">API Keys</h2>
       <div className="space-y-5">
         {FIELDS.map(f => {
-          const isSet = status[f.statusKey] ?? status[f.key];
+          const isSet = status[f.key];
           return (
             <div key={f.key}>
               <div className="flex items-center gap-2 mb-1.5">

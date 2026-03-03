@@ -29,29 +29,36 @@ const THINKING_LEVELS = [
   { value: "xhigh", label: "Extra High" },
 ];
 
+const AGENT_ICONS = [
+  "\uD83E\uDD16", "\uD83E\uDDD1\u200D\uD83D\uDCBB", "\uD83D\uDD0D", "\uD83D\uDCCA", "\u270D\uFE0F", "\uD83C\uDFAF", "\uD83D\uDE80", "\uD83E\uDDE0",
+  "\uD83D\uDCA1", "\uD83D\uDCDD", "\uD83D\uDCC8", "\uD83D\uDD27", "\uD83C\uDF10", "\uD83D\uDCE7", "\uD83C\uDFA8", "\uD83D\uDEE1\uFE0F",
+  "\u2699\uFE0F", "\uD83D\uDCDA", "\uD83D\uDCBC", "\uD83C\uDF1F", "\uD83E\uDD1D", "\uD83D\uDCAC", "\uD83D\uDCC1", "\uD83E\uDDEA",
+  "\uD83C\uDFD7\uFE0F", "\uD83D\uDD2C", "\uD83C\uDFB5", "\uD83D\uDCF0", "\uD83D\uDCF1", "\u26A1", "\uD83C\uDF31", "\uD83D\uDCE6",
+];
+
 const PROMPT_TEMPLATES = [
   {
-    name: "Competitor Analyst", category: "Research", icon: "magnifying-glass",
+    name: "Competitor Analyst", category: "Research", icon: "\uD83D\uDD0D",
     description: "Researches and analyzes competitors",
     prompt: "You are a competitor research analyst. Your job is to research competitors, analyze their strengths and weaknesses, track their product updates, pricing changes, and strategic moves. Provide structured, data-driven reports with actionable insights. Always cite your sources and distinguish between confirmed facts and educated speculation.",
   },
   {
-    name: "Code Reviewer", category: "Engineering", icon: "code",
+    name: "Code Reviewer", category: "Engineering", icon: "\uD83D\uDD27",
     description: "Reviews code for quality and best practices",
     prompt: "You are an expert code reviewer. Review code for bugs, security vulnerabilities, performance issues, and adherence to best practices. Provide specific, actionable feedback with code examples. Prioritize issues by severity. Be constructive and educational in your feedback, explaining the 'why' behind each suggestion.",
   },
   {
-    name: "Research Assistant", category: "Research", icon: "book",
+    name: "Research Assistant", category: "Research", icon: "\uD83D\uDCDA",
     description: "Helps research and summarize information",
     prompt: "You are a thorough research assistant. Help gather, analyze, and synthesize information on any topic. Provide well-organized summaries with key findings, supporting evidence, and recommendations for further investigation. Always note the reliability of sources and flag any conflicting information.",
   },
   {
-    name: "Data Analyst", category: "Data", icon: "chart",
+    name: "Data Analyst", category: "Data", icon: "\uD83D\uDCCA",
     description: "Analyzes data and creates insights",
     prompt: "You are a data analyst. Help analyze datasets, identify patterns and trends, create statistical summaries, and generate insights. Write clear, well-commented analysis code. Present findings in a structured format with visualizations when helpful. Always validate data quality and note any limitations in your analysis.",
   },
   {
-    name: "Writing Editor", category: "Marketing", icon: "pen",
+    name: "Writing Editor", category: "Marketing", icon: "\u270D\uFE0F",
     description: "Edits and improves written content",
     prompt: "You are a skilled writing editor. Help improve clarity, tone, grammar, and structure of written content. Adapt your editing style to the audience and purpose (blog post, email, report, etc.). Preserve the author's voice while enhancing readability. Provide specific suggestions with explanations for major changes.",
   },
@@ -105,16 +112,22 @@ function AgentForm({
       )}
 
       {/* Identity */}
-      <div className="grid grid-cols-[1fr_80px] gap-3">
-        <div>
-          <label className="text-11 text-label-tertiary block mb-1">Name</label>
-          <input autoFocus type="text" value={name} onChange={e => setName(e.target.value)}
-            className="w-full bg-white/[.06] border border-separator rounded-mac px-3 py-2 text-13 text-label outline-none focus:border-accent/50" placeholder="Agent name" />
-        </div>
-        <div>
-          <label className="text-11 text-label-tertiary block mb-1">Icon</label>
-          <input type="text" value={icon} onChange={e => setIcon(e.target.value)}
-            className="w-full bg-white/[.06] border border-separator rounded-mac px-3 py-2 text-13 text-label outline-none focus:border-accent/50 text-center" />
+      <div>
+        <label className="text-11 text-label-tertiary block mb-1">Name</label>
+        <input autoFocus type="text" value={name} onChange={e => setName(e.target.value)}
+          className="w-full bg-white/[.06] border border-separator rounded-mac px-3 py-2 text-13 text-label outline-none focus:border-accent/50" placeholder="Agent name" />
+      </div>
+      <div>
+        <label className="text-11 text-label-tertiary block mb-1">Icon</label>
+        <div className="flex flex-wrap gap-1">
+          {AGENT_ICONS.map(e => (
+            <button key={e} type="button" onClick={() => setIcon(e)}
+              className={`w-8 h-8 rounded-lg text-base flex items-center justify-center transition-all duration-150 ${
+                icon === e ? "bg-accent/20 border border-accent/40 scale-110" : "bg-white/[.04] hover:bg-white/[.08] border border-transparent"
+              }`}>{e}</button>
+          ))}
+          <input type="text" value={icon} onChange={e => setIcon(e.target.value)} placeholder="or type"
+            className="w-16 bg-white/[.04] border border-separator rounded-lg px-2 py-1 text-13 text-label text-center outline-none focus:border-accent/50" />
         </div>
       </div>
       <div className="grid grid-cols-2 gap-3">
@@ -259,50 +272,54 @@ export default function AgentsSheet({ onClose, onAgentsChange }: Props) {
   });
 
   return (
-    <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-40" onClick={onClose}>
-      <div className="bg-sidebar rounded-2xl shadow-2xl flex flex-col overflow-hidden" style={{ width: 760, height: 560 }} onClick={e => e.stopPropagation()}>
+    <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-40 animate-fade-in" onClick={onClose}>
+      <div className="bg-surface-raised rounded-2xl shadow-2xl border border-separator flex flex-col overflow-hidden animate-scale-in" style={{ width: 780, maxHeight: "85vh" }} onClick={e => e.stopPropagation()}>
         {/* Header */}
-        <div className="px-6 py-3 border-b border-separator shrink-0">
+        <div className="px-6 py-4 border-b border-separator shrink-0">
           <div className="flex items-center justify-between">
-            <h2 className="text-15 text-label font-semibold">Agents</h2>
-            <div className="flex items-center gap-3">
+            <div>
+              <h2 className="text-16 text-label font-semibold">Agents</h2>
+              <p className="text-11 text-label-tertiary mt-0.5">Specialist AIs with their own personality and expertise</p>
+            </div>
+            <div className="flex items-center gap-2">
               <button onClick={() => setEditing("new")}
-                className="text-12 bg-accent hover:bg-accent-hover text-white px-3 py-1.5 rounded-lg flex items-center gap-1 transition-colors">
+                className="text-12 bg-accent hover:bg-accent-hover text-white px-3.5 py-1.5 rounded-lg flex items-center gap-1.5 transition-colors font-medium">
                 <IconPlus size={12} /> New Agent
               </button>
-              <button onClick={onClose} className="text-label-tertiary hover:text-label transition-colors"><IconClose size={16} /></button>
+              <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg text-label-tertiary hover:text-label hover:bg-white/[.06] transition-colors"><IconClose size={14} /></button>
             </div>
           </div>
-          <p className="text-11 text-label-tertiary mt-1">Specialist AIs with their own personality and expertise. Asta can delegate to them automatically.</p>
         </div>
 
         {/* Search + filter */}
-        <div className="flex items-center gap-3 px-6 py-2.5 border-b border-separator shrink-0">
-          <div className="flex-1 relative">
-            <IconSearch size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-label-tertiary" />
-            <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search agents..."
-              className="w-full bg-white/[.04] border border-separator rounded-mac pl-8 pr-3 py-1.5 text-13 text-label placeholder-label-tertiary outline-none focus:border-accent/50" />
+        {!editing && (
+          <div className="flex items-center gap-3 px-6 py-2.5 border-b border-separator shrink-0">
+            <div className="flex-1 relative">
+              <IconSearch size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-label-tertiary" />
+              <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search agents..."
+                className="w-full bg-white/[.04] border border-separator rounded-xl pl-8 pr-3 py-1.5 text-13 text-label placeholder-label-tertiary outline-none focus:border-accent/40 transition-colors" />
+            </div>
+            <div className="flex bg-white/[.04] rounded-xl p-0.5">
+              {FILTERS.map(f => (
+                <button key={f} onClick={() => setFilter(f)}
+                  className={`px-3 py-1 rounded-lg text-12 font-medium transition-all duration-200 ${filter === f ? "bg-white/[.1] text-label shadow-sm" : "text-label-tertiary hover:text-label-secondary"}`}>
+                  {f}
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="flex bg-white/[.04] rounded-mac p-0.5">
-            {FILTERS.map(f => (
-              <button key={f} onClick={() => setFilter(f)}
-                className={`px-3 py-1 rounded-lg text-12 font-medium transition-colors ${filter === f ? "bg-white/[.1] text-label" : "text-label-tertiary hover:text-label-secondary"}`}>
-                {f}
-              </button>
-            ))}
-          </div>
-        </div>
+        )}
 
         {/* Category tabs */}
         {categories.length > 0 && !editing && (
           <div className="flex items-center gap-1.5 px-6 py-2 border-b border-separator overflow-x-auto scrollbar-thin shrink-0">
             <button onClick={() => setSelectedCat(null)}
-              className={`text-11 px-2.5 py-1 rounded-full shrink-0 transition-colors ${!selectedCat ? "bg-accent/15 text-accent" : "text-label-tertiary hover:text-label-secondary"}`}>
+              className={`text-11 px-3 py-1 rounded-full shrink-0 transition-all duration-200 ${!selectedCat ? "bg-accent/15 text-accent font-medium" : "text-label-tertiary hover:text-label-secondary hover:bg-white/[.04]"}`}>
               All
             </button>
             {categories.map(c => (
               <button key={c} onClick={() => setSelectedCat(selectedCat === c ? null : c)}
-                className={`text-11 px-2.5 py-1 rounded-full shrink-0 transition-colors ${selectedCat === c ? "bg-accent/15 text-accent" : "text-label-tertiary hover:text-label-secondary"}`}>
+                className={`text-11 px-3 py-1 rounded-full shrink-0 transition-all duration-200 ${selectedCat === c ? "bg-accent/15 text-accent font-medium" : "text-label-tertiary hover:text-label-secondary hover:bg-white/[.04]"}`}>
                 {c}
               </button>
             ))}
@@ -317,54 +334,66 @@ export default function AgentsSheet({ onClose, onAgentsChange }: Props) {
             <div className="grid grid-cols-2 gap-3">
               {filtered.map(a => (
                 <div key={a.id}
-                  className="bg-white/[.02] hover:bg-white/[.05] border border-white/[.08] rounded-xl p-4 flex gap-3 group transition-colors">
-                  {/* Avatar */}
-                  <div className="w-[46px] h-[46px] rounded-full bg-white/[.06] flex items-center justify-center text-2xl shrink-0 overflow-hidden">
-                    {a.avatar ? (
-                      <img src={a.avatar} alt="" className="w-full h-full object-cover" />
-                    ) : (
-                      a.icon || a.name?.charAt(0)?.toUpperCase() || "A"
-                    )}
+                  className="bg-white/[.03] hover:bg-white/[.06] border border-separator hover:border-separator-bold rounded-2xl p-4 group transition-all duration-200">
+                  <div className="flex items-start gap-3">
+                    {/* Avatar */}
+                    <div className="w-10 h-10 rounded-xl bg-white/[.06] flex items-center justify-center text-lg shrink-0 overflow-hidden">
+                      {a.avatar ? (
+                        <img src={a.avatar} alt="" className="w-full h-full object-cover" />
+                      ) : (
+                        a.icon || a.name?.charAt(0)?.toUpperCase() || "A"
+                      )}
+                    </div>
+                    {/* Info */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="text-13 font-semibold text-label truncate">{a.name}</p>
+                        <button onClick={() => handleToggle(a.id)}
+                          className={`relative w-9 rounded-full transition-colors shrink-0 ${a.enabled ? "bg-accent" : "bg-white/[.15]"}`}
+                          style={{ height: 22 }}>
+                          <span className="absolute w-4 h-4 bg-white rounded-full shadow-sm transition-all duration-200"
+                            style={{ top: 3, left: a.enabled ? 18 : 3 }} />
+                        </button>
+                      </div>
+                      {a.description && <p className="text-11 text-label-tertiary line-clamp-2 mt-0.5 leading-relaxed">{a.description}</p>}
+                    </div>
                   </div>
-                  {/* Info */}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-13 font-medium text-label truncate">{a.name}</p>
-                    {a.description && <p className="text-11 text-label-tertiary line-clamp-2 mt-0.5">{a.description}</p>}
-                    <div className="flex gap-1.5 mt-2 flex-wrap">
+                  {/* Footer: badges + actions */}
+                  <div className="flex items-center justify-between mt-3 pt-2.5 border-t border-separator/50">
+                    <div className="flex gap-1.5 flex-wrap">
                       {a.category && (
                         <span className="text-[10px] font-semibold bg-accent/10 text-accent px-2 py-0.5 rounded-full">{a.category}</span>
                       )}
                       {a.model_override && (
-                        <span className="text-[10px] font-semibold bg-white/[.06] text-label-tertiary px-2 py-0.5 rounded-full font-mono">{a.model_override}</span>
+                        <span className="text-[10px] font-medium bg-white/[.06] text-label-tertiary px-2 py-0.5 rounded-full font-mono">{a.model_override}</span>
                       )}
                       {a.skills && a.skills.length > 0 && (
                         <span className="text-[10px] bg-white/[.06] text-label-tertiary px-2 py-0.5 rounded-full">
-                          Skills: {a.skills.length}
+                          {a.skills.length} skill{a.skills.length !== 1 ? "s" : ""}
                         </span>
                       )}
                     </div>
-                  </div>
-                  {/* Actions */}
-                  <div className="flex flex-col items-end gap-1 shrink-0">
-                    <button onClick={() => handleToggle(a.id)}
-                      className={`relative w-10 h-6 rounded-full transition-colors ${a.enabled ? "bg-accent" : "bg-white/[.2]"}`}>
-                      <span className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform ${a.enabled ? "translate-x-5" : "translate-x-1"}`} />
-                    </button>
                     <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => setEditing(a)} className="text-label-tertiary hover:text-label p-1"><IconEdit size={11} /></button>
-                      <button onClick={() => setConfirmDelete(a.id)} className="text-danger/50 hover:text-danger p-1"><IconTrash size={11} /></button>
+                      <button onClick={() => setEditing(a)} className="text-label-tertiary hover:text-label p-1.5 rounded-lg hover:bg-white/[.06] transition-colors"><IconEdit size={12} /></button>
+                      <button onClick={() => setConfirmDelete(a.id)} className="text-label-tertiary hover:text-danger p-1.5 rounded-lg hover:bg-danger/10 transition-colors"><IconTrash size={12} /></button>
                     </div>
                   </div>
                 </div>
               ))}
               {filtered.length === 0 && (
-                <div className="col-span-2 text-center py-10">
-                  <p className="text-label-tertiary text-13">
+                <div className="col-span-2 flex flex-col items-center justify-center py-16">
+                  <div className="w-12 h-12 rounded-2xl bg-white/[.04] flex items-center justify-center text-2xl mb-3">
+                    {search ? "?" : agents.length === 0 ? "+" : "~"}
+                  </div>
+                  <p className="text-label-secondary text-14 font-medium">
                     {search ? "No agents match your search" : agents.length === 0 ? "No agents yet" : "No agents in this filter"}
+                  </p>
+                  <p className="text-label-tertiary text-12 mt-1">
+                    {agents.length === 0 ? "Create specialist AIs to help with specific tasks" : "Try adjusting your filters"}
                   </p>
                   {agents.length === 0 && (
                     <button onClick={() => setEditing("new")}
-                      className="text-12 text-accent hover:text-accent-hover mt-2 transition-colors">
+                      className="text-12 text-accent hover:text-accent-hover mt-3 font-medium transition-colors">
                       Create your first agent
                     </button>
                   )}
@@ -377,17 +406,17 @@ export default function AgentsSheet({ onClose, onAgentsChange }: Props) {
 
       {/* Delete confirmation */}
       {confirmDelete && (
-        <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setConfirmDelete(null)}>
-          <div className="bg-surface-raised rounded-2xl p-5 w-72 shadow-2xl" onClick={e => e.stopPropagation()}>
-            <h3 className="text-label text-14 font-semibold mb-2">Delete Agent</h3>
-            <p className="text-13 text-label-secondary mb-4">
+        <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-50 animate-fade-in" onClick={() => setConfirmDelete(null)}>
+          <div className="bg-surface-raised rounded-2xl p-6 w-80 shadow-2xl border border-separator animate-scale-in" onClick={e => e.stopPropagation()}>
+            <h3 className="text-label text-15 font-semibold mb-2">Delete Agent</h3>
+            <p className="text-13 text-label-secondary mb-5 leading-relaxed">
               Are you sure? This action cannot be undone.
             </p>
             <div className="flex gap-2 justify-end">
               <button onClick={() => setConfirmDelete(null)}
-                className="px-3 py-1.5 text-13 text-label-secondary hover:text-label">Cancel</button>
+                className="px-4 py-2 text-13 text-label-secondary hover:text-label rounded-lg hover:bg-white/[.04] transition-colors">Cancel</button>
               <button onClick={() => handleDelete(confirmDelete)}
-                className="px-4 py-1.5 text-13 bg-danger/15 text-danger hover:bg-danger/25 rounded-lg transition-colors">Delete</button>
+                className="px-4 py-2 text-13 bg-danger/15 text-danger hover:bg-danger/25 rounded-lg font-medium transition-colors">Delete</button>
             </div>
           </div>
         </div>
