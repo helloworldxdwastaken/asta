@@ -21,6 +21,16 @@ GOOGLE_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 DEFAULT_MODEL = "gemini-2.5-flash"
 MODEL_TIMEOUT = 90
 
+# Thinking level → OpenAI-compatible reasoning_effort for Gemini
+_THINKING_TO_REASONING_EFFORT: dict[str, str | None] = {
+    "off": "none",
+    "minimal": "low",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+    "xhigh": "high",
+}
+
 
 def _clean(s: object) -> str:
     """Strip lone surrogate characters that cause UTF-8/JSON serialization failures."""
@@ -121,12 +131,17 @@ class GoogleProvider(BaseProvider):
         tools = kwargs.get("tools")
 
         msgs = _build_msgs(messages, system, image_bytes, image_mime)
+        thinking_level = str(kwargs.get("thinking_level") or "off").strip().lower()
+        reasoning_effort = _THINKING_TO_REASONING_EFFORT.get(thinking_level)
 
         try:
             create_kwargs: dict = {"model": model, "messages": msgs, "max_tokens": 8096}
             if tools:
                 create_kwargs["tools"] = tools
                 create_kwargs["tool_choice"] = "auto"
+            if reasoning_effort and reasoning_effort != "none":
+                create_kwargs["reasoning_effort"] = reasoning_effort
+                logger.info("Gemini thinking: level=%s reasoning_effort=%s", thinking_level, reasoning_effort)
 
             r = await client.chat.completions.create(**create_kwargs)
             choice = r.choices[0] if r.choices else None
@@ -166,12 +181,16 @@ class GoogleProvider(BaseProvider):
         tools = kwargs.get("tools")
 
         msgs = _build_msgs(messages, system, image_bytes, image_mime)
+        thinking_level = str(kwargs.get("thinking_level") or "off").strip().lower()
+        reasoning_effort = _THINKING_TO_REASONING_EFFORT.get(thinking_level)
 
         try:
             create_kwargs: dict = {"model": model, "messages": msgs, "max_tokens": 8096, "stream": True}
             if tools:
                 create_kwargs["tools"] = tools
                 create_kwargs["tool_choice"] = "auto"
+            if reasoning_effort and reasoning_effort != "none":
+                create_kwargs["reasoning_effort"] = reasoning_effort
 
             stream = await client.chat.completions.create(**create_kwargs)
 

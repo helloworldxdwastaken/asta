@@ -2,6 +2,30 @@
 
 All notable changes to Asta are documented here.
 
+## [1.3.56] - 2026-03-04
+
+### Fixed
+
+- **Claude provider fully working** — Removed deprecated `betas` parameter from Anthropic SDK 0.79+ that silently broke ALL Claude requests (fell back to other providers). Native `thinking` parameter now works correctly.
+- **Native PDF pass-through for Claude** — When Claude is the active provider, raw PDFs are sent as Anthropic `document` content blocks instead of text extraction, enabling Claude to read complex PDFs (blueprints, scanned docs, Hebrew text) natively.
+- **Provider switching fix** — Frontend now sends the selected `provider` field in chat requests; previously always defaulted to DB setting regardless of UI selection.
+- **Vision preprocessor for Ollama** — Fixed `openrouter/free` meta-router failing (rate limits, routing to non-vision models). Now uses specific free vision models (`google/gemma-3-27b-it:free`, `nvidia/nemotron-nano-12b-v2-vl:free`) with `openrouter/auto` as paid fallback (~$0.000004/request).
+- **Claude key test** — Frontend sent `prov: "anthropic"` but backend expected `"claude"`; fixed provider name mapping.
+- **`<final>` tags leaking** — Added Claude, Google, OpenRouter to strict-final unsupported providers list so `<final>` tags no longer appear in responses.
+- **Thinking prompt injection removed for native providers** — Claude and Google have native thinking APIs; no longer inject `<think>` prompt instructions for these providers.
+- **Native vision bypass** — Fixed vision preprocessor blocking images for Claude/Google/OpenAI (native vision providers) when no preprocessor was available.
+
+### Added
+
+- **Gemini thinking support** — Google Gemini 2.5 Flash/Pro now support thinking levels via `reasoning_effort` parameter (low/medium/high).
+- **Google API key test** — Added key validation using Google's models list API endpoint.
+
+### Changed
+
+- **Vision preprocessor simplified** — Removed Google from vision fallback chain; only OpenRouter models used for preprocessing. Free vision model fallback chain: Gemma 3 27B → Nemotron Nano VL → Gemma 3 12B → openrouter/auto.
+
+---
+
 ## [1.3.54] - 2026-03-04
 
 ### Changed

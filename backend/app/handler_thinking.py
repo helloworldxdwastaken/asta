@@ -17,8 +17,12 @@ from app.thinking_capabilities import supports_xhigh_thinking
 _THINK_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh")
 _REASONING_MODES = ("off", "on", "stream")
 _FINAL_MODES = ("off", "strict")
-# OpenClaw-style: Ollama should not require strict <final> tags.
-_STRICT_FINAL_UNSUPPORTED_PROVIDERS = frozenset({"ollama"})
+# OpenClaw-style: providers that should not use strict <final> tags.
+# - Ollama: local models don't reliably follow tag instructions
+# - OpenRouter: uses native reasoning API (reasoning field), not prompt-injected tags
+# - Claude: uses native extended thinking API, no need for tag-based reasoning
+# - Google: uses native reasoning_effort API
+_STRICT_FINAL_UNSUPPORTED_PROVIDERS = frozenset({"ollama", "openrouter", "claude", "google"})
 
 _THINK_DIRECTIVE_PATTERN = re.compile(
     r"(?:^|\s)/(?:thinking|think|t)(?=$|\s|:)",

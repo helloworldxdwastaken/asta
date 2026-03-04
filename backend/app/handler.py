@@ -253,10 +253,76 @@ async def _pdf_vision_fallback(base64_data: str, filename: str) -> str | None:
     return combined
 
 
-async def _preprocess_document_tags_async(text: str) -> str:
+async def _pdf_vision_with_provider(base64_data: str, filename: str, provider_name: str) -> str | None:
+    """Render PDF pages as images and analyze using the active provider's native vision.
+    Used when Claude/Google/OpenAI is the active provider — better quality than free preprocessor models."""
+    page_images = _render_pdf_pages_as_images(base64_data, max_pages=3, dpi=150)
+    if not page_images:
+        return None
+
+    provider = get_provider(provider_name)
+    if not provider:
+        return None
+
+    vision_prompt = (
+        f"Analyze this PDF page of '{filename}'. "
+        "Extract ALL visible text, numbers, labels, and describe any diagrams, tables, or visual elements. "
+        "For non-English text, include the original text and a brief English summary."
+    )
+    vision_context = (
+        "You are analyzing a PDF page rendered as an image. Return concise factual notes.\n"
+        "Output plain text only (no code fences). Include:\n"
+        "- all visible text (OCR)\n- tables and data\n- diagrams/visual elements\n- layout description"
+    )
+
+    analyses: list[str] = []
+    max_total_chars = 8000
+
+    for jpeg_bytes, label in page_images:
+        if sum(len(a) for a in analyses) >= max_total_chars:
+            break
+        try:
+            resp = await asyncio.wait_for(
+                provider.chat(
+                    [{"role": "user", "content": f"{vision_prompt} ({label})"}],
+                    context=vision_context,
+                    image_bytes=jpeg_bytes,
+                    image_mime="image/jpeg",
+                    thinking_level="off",
+                    timeout=45,
+                ),
+                timeout=50,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("PDF vision via %s timed out on %s", provider_name, label)
+            if not analyses:
+                return None
+            break
+        except Exception as e:
+            logger.warning("PDF vision via %s failed on %s: %s", provider_name, label, e)
+            if not analyses:
+                return None
+            break
+        if resp.error or not (resp.content or "").strip():
+            if not analyses:
+                return None
+            break
+        analysis_text = (resp.content or "").strip()[:2500]
+        analyses.append(f"[Page {label}]\n{analysis_text}")
+        logger.info("PDF page %s analyzed via %s (%d chars)", label, provider_name, len(analysis_text))
+
+    if not analyses:
+        return None
+    combined = "\n\n".join(analyses)
+    if len(combined) > max_total_chars:
+        combined = combined[:max_total_chars] + "\n\n[...vision analysis truncated]"
+    return combined
+
+
+async def _preprocess_document_tags_async(text: str, *, provider_name: str = "") -> str:
     """Replace <document> tags with extracted content.
     For PDFs: try text first; if quality is poor, render pages as images
-    and run through vision preprocessor."""
+    and run through vision preprocessor (or the active provider if it has native vision)."""
     matches = list(_DOCUMENT_TAG_RE.finditer(text))
     if not matches:
         logger.info("No <document> regex matches found")
@@ -278,8 +344,12 @@ async def _preprocess_document_tags_async(text: str) -> str:
         if _assess_pdf_text_quality(extracted, num_pages):
             replacement = f'<document name="{name}" type="pdf-extracted">\n{extracted}\n</document>'
         else:
-            logger.info("PDF '%s' text quality is poor (%d pages), trying vision fallback", name, num_pages)
-            vision_text = await _pdf_vision_fallback(content, name)
+            logger.info("PDF '%s' text quality is poor (%d pages), trying vision fallback (active_provider=%s)", name, num_pages, provider_name)
+            if provider_name in _NATIVE_VISION_PROVIDERS:
+                # Active provider has native vision — use it directly for PDF analysis
+                vision_text = await _pdf_vision_with_provider(content, name, provider_name)
+            else:
+                vision_text = await _pdf_vision_fallback(content, name)
             if vision_text:
                 replacement = f'<document name="{name}" type="pdf-vision">\n{vision_text}\n</document>'
             else:
@@ -290,6 +360,30 @@ async def _preprocess_document_tags_async(text: str) -> str:
         result = result[:m.start()] + replacement + result[m.end():]
 
     return result
+
+
+def _extract_native_pdf_documents(text: str) -> tuple[str, list[dict]]:
+    """Extract raw PDF base64 data from <document> tags for native provider pass-through.
+    Returns (text_with_pdfs_replaced, list_of_pdf_dicts).
+    Non-PDF documents are left in the text untouched."""
+    matches = list(_DOCUMENT_TAG_RE.finditer(text))
+    if not matches:
+        return text, []
+    result = text
+    pdfs: list[dict] = []
+    for m in reversed(matches):
+        name = m.group(1)
+        content = m.group(2).strip()
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        if ext != "pdf":
+            continue
+        # Strip data-URL prefix if present
+        b64 = content.split(",", 1)[-1] if content.startswith("data:") else content
+        pdfs.insert(0, {"name": name, "base64": b64})
+        # Replace the PDF document tag with a short reference
+        replacement = f'[Attached PDF: {name}]'
+        result = result[:m.start()] + replacement + result[m.end():]
+    return result, pdfs
 
 
 def _preprocess_document_tags(text: str) -> str:
@@ -391,16 +485,18 @@ _IMAGE_GEN_REQUEST_OBJECTS = (
 # Providers that can participate in tool/fallback guardrails.
 # Ollama is included because Asta uses text tool-call protocols with it.
 _TOOL_CAPABLE_PROVIDERS = frozenset({"openai", "groq", "openrouter", "claude", "google", "ollama"})
-_VISION_PREPROCESSOR_PROVIDERS = frozenset({"openrouter", "google"})
+_VISION_PREPROCESSOR_PROVIDERS = frozenset({"openrouter"})
+# Providers that can handle images natively (no need for vision preprocessor)
+_NATIVE_VISION_PROVIDERS = frozenset({"claude", "google", "openai"})
 _VISION_PROVIDER_KEY = {
     "openrouter": "openrouter_api_key",
-    "google": "gemini_api_key",
 }
-_VISION_PROVIDER_ORDER_DEFAULT = ("openrouter", "google")
-_VISION_OPENROUTER_MODEL_DEFAULT = "google/gemma-3-27b-it:free,mistralai/mistral-small-3.1-24b-instruct:free,nvidia/nemotron-nano-12b-v2-vl:free"
+_VISION_PROVIDER_ORDER_DEFAULT = ("openrouter",)
+_VISION_OPENROUTER_MODEL_DEFAULT = "google/gemma-3-27b-it:free,nvidia/nemotron-nano-12b-v2-vl:free,google/gemma-3-12b-it:free,openrouter/auto"
 _VISION_PREPROCESSOR_UNAVAILABLE_MESSAGE = (
     "Image received, but the dedicated vision preprocessor is unavailable. "
-    "Asta tries OpenRouter (Gemma 3 27B, Mistral Small 3.1, Nemotron VL) then Google Gemini as fallback."
+    "Asta uses free vision models on OpenRouter for image analysis. "
+    "Please make sure your OpenRouter API key is set in Settings."
 )
 _GIF_COOLDOWN_SECONDS = 30 * 60
 _SILENT_REPLY_TOKEN = "NO_REPLY"
@@ -833,16 +929,13 @@ async def _run_vision_preprocessor(
         "- uncertainty notes if relevant"
     )
 
+    # Build a flat list of (provider_name, model, provider_obj) attempts.
+    # For OpenRouter: try each comma-separated model individually (avoids chained timeouts).
+    attempts: list[tuple[str, str, object]] = []
     for candidate in provider_order:
         provider = get_provider(candidate)
         if not provider:
             continue
-        chat_kwargs: dict = {
-            "context": vision_context,
-            "image_bytes": image_bytes,
-            "image_mime": image_mime or "image/jpeg",
-            "thinking_level": "off",
-        }
         if candidate == "openrouter":
             key_name = _VISION_PROVIDER_KEY.get(candidate)
             if not key_name:
@@ -850,23 +943,22 @@ async def _run_vision_preprocessor(
             api_key = await get_api_key(key_name)
             if not api_key:
                 continue
-            if openrouter_model:
-                # Use only the first model — don't chain through all fallbacks
-                # (each fallback adds a full timeout cycle)
-                chat_kwargs["model"] = openrouter_model.split(",")[0].strip()
+            # openrouter/free auto-routes to best available free vision model
+            models = [m.strip() for m in openrouter_model.split(",") if m.strip()] if openrouter_model else []
+            for model in models:
+                attempts.append((candidate, model, provider))
+
+    for candidate, model, provider in attempts:
+        chat_kwargs: dict = {
+            "context": vision_context,
+            "image_bytes": image_bytes,
+            "image_mime": image_mime or "image/jpeg",
+            "thinking_level": "off",
+            "model": model,
+            "timeout": 45,
+        }
+        if candidate == "openrouter":
             chat_kwargs["skip_model_policy"] = True
-        elif candidate == "google":
-            key_name = _VISION_PROVIDER_KEY.get(candidate)
-            if not key_name:
-                continue
-            api_key = await get_api_key(key_name)
-            if not api_key:
-                # Also try google_ai_key alias
-                api_key = await get_api_key("google_ai_key")
-            if not api_key:
-                continue
-            chat_kwargs["model"] = "gemini-2.0-flash"
-        chat_kwargs["timeout"] = 45
         try:
             resp = await asyncio.wait_for(
                 provider.chat(
@@ -876,23 +968,19 @@ async def _run_vision_preprocessor(
                 timeout=50,
             )
         except asyncio.TimeoutError:
-            logger.warning("Vision preprocessor provider=%s timed out after 50s", candidate)
+            logger.warning("Vision preprocessor %s/%s timed out after 50s", candidate, model)
             continue
         except Exception as e:
-            logger.warning("Vision preprocessor provider=%s failed: %s", candidate, e)
+            logger.warning("Vision preprocessor %s/%s failed: %s", candidate, model, e)
             continue
         if resp.error:
-            logger.warning(
-                "Vision preprocessor provider=%s returned error=%s",
-                candidate,
-                (resp.error_message or str(resp.error)),
-            )
+            logger.warning("Vision preprocessor %s/%s error: %s", candidate, model, resp.error_message or resp.error)
             continue
         analysis = (resp.content or "").strip()
         if not analysis:
             continue
-        model_used = str(chat_kwargs.get("model") or "").strip() or None
-        return analysis[:5000], candidate, model_used
+        logger.info("Vision preprocess complete using %s/%s", candidate, model)
+        return analysis[:5000], candidate, model
     return None
 
 
@@ -3029,7 +3117,10 @@ async def handle_message(
             "Reply with ONE short phrase only (e.g. 'Got it!', 'Anytime!', 'Take care!'). "
             "Do not add extra sentences like 'Let me know if you need anything.'"
         )
-    context += _thinking_instruction(thinking_level)
+    # Providers with native thinking APIs don't need prompt-injected <think> instructions
+    _NATIVE_THINKING_PROVIDERS = frozenset({"claude", "google"})
+    if provider_name not in _NATIVE_THINKING_PROVIDERS:
+        context += _thinking_instruction(thinking_level)
     if provider_name in ("openrouter", "ollama"):
         context += _reasoning_instruction(reasoning_mode)
     context += _final_tag_instruction("strict" if strict_final_mode_enabled else "off")
@@ -3047,46 +3138,71 @@ async def handle_message(
         )
 
     effective_user_text = text
+    pdf_documents: list[dict] | None = None  # Native PDF pass-through for Claude
     # Extract text from any embedded PDF documents before sending to provider
     if "<document " in effective_user_text:
         logger.info("Found <document> tag in text, running async preprocessing (text len=%d)", len(effective_user_text))
-        effective_user_text = await _preprocess_document_tags_async(effective_user_text)
+        if provider_name == "claude":
+            # Claude handles PDFs natively via document content blocks — skip preprocessing
+            effective_user_text, pdf_documents = _extract_native_pdf_documents(effective_user_text)
+            pdf_documents = pdf_documents or None
+            if pdf_documents:
+                logger.info("Extracted %d PDF(s) for native Claude pass-through", len(pdf_documents))
+            # Still preprocess any remaining non-PDF <document> tags
+            if "<document " in effective_user_text:
+                effective_user_text = await _preprocess_document_tags_async(effective_user_text, provider_name=provider_name)
+        else:
+            effective_user_text = await _preprocess_document_tags_async(effective_user_text, provider_name=provider_name)
         logger.info("Document preprocessing complete (result len=%d)", len(effective_user_text))
         # Guide: answer about the document directly, don't over-process with tools
-        context += (
-            "\n\n[DOCUMENT ATTACHED]\n"
-            "The user attached a file. The extracted text is in the message. "
-            "Answer their question about the document directly — do NOT use tools or workspace skills to re-process it. "
-            "Do NOT read any SKILL.md files unless the user explicitly asks to use a specific service (e.g. 'save to notes'). "
-            "If asked to summarize, extract info, or answer questions about it, use the extracted text inline."
-        )
+        if pdf_documents:
+            context += (
+                "\n\n[DOCUMENT ATTACHED]\n"
+                "The user attached a PDF file. The raw PDF is passed directly to you as a document content block. "
+                "Answer their question about the document directly — do NOT use tools or workspace skills to re-process it. "
+                "Do NOT read any SKILL.md files unless the user explicitly asks to use a specific service (e.g. 'save to notes'). "
+                "If asked to summarize, extract info, or answer questions about it, analyze the PDF directly."
+            )
+        else:
+            context += (
+                "\n\n[DOCUMENT ATTACHED]\n"
+                "The user attached a file. The extracted text is in the message. "
+                "Answer their question about the document directly — do NOT use tools or workspace skills to re-process it. "
+                "Do NOT read any SKILL.md files unless the user explicitly asks to use a specific service (e.g. 'save to notes'). "
+                "If asked to summarize, extract info, or answer questions about it, use the extracted text inline."
+            )
 
     if image_bytes:
-        vision_result = await _run_vision_preprocessor(
-            text=text,
-            image_bytes=image_bytes,
-            image_mime=image_mime,
-        )
-        if vision_result:
-            analysis, vision_provider, vision_model = vision_result
-            source = vision_provider + (f"/{vision_model}" if vision_model else "")
-            context += (
-                "\n\n[VISION PREPROCESSOR]\n"
-                "The user shared an image. A separate vision model already analyzed it. "
-                "Use the vision analysis block from the user message as the image observation source."
-            )
-            effective_user_text = (
-                f"{text}\n\n"
-                f"[VISION_ANALYSIS source={source}]\n"
-                f"{analysis}\n"
-                f"[/VISION_ANALYSIS]"
-            )
-            image_bytes = None
-            image_mime = None
-            logger.info("Vision preprocess complete using %s", source)
+        if provider_name in _NATIVE_VISION_PROVIDERS:
+            # Provider supports native vision — pass image directly, skip preprocessor
+            logger.info("Provider %s supports native vision; passing image directly", provider_name)
         else:
-            await db.add_message(cid, "assistant", _VISION_PREPROCESSOR_UNAVAILABLE_MESSAGE, "script")
-            return _VISION_PREPROCESSOR_UNAVAILABLE_MESSAGE
+            # Use vision preprocessor for providers without native vision
+            vision_result = await _run_vision_preprocessor(
+                text=text,
+                image_bytes=image_bytes,
+                image_mime=image_mime,
+            )
+            if vision_result:
+                analysis, vision_provider, vision_model = vision_result
+                source = vision_provider + (f"/{vision_model}" if vision_model else "")
+                context += (
+                    "\n\n[VISION PREPROCESSOR]\n"
+                    "The user shared an image. A separate vision model already analyzed it. "
+                    "Use the vision analysis block from the user message as the image observation source."
+                )
+                effective_user_text = (
+                    f"{text}\n\n"
+                    f"[VISION_ANALYSIS source={source}]\n"
+                    f"{analysis}\n"
+                    f"[/VISION_ANALYSIS]"
+                )
+                image_bytes = None
+                image_mime = None
+                logger.info("Vision preprocess complete using %s", source)
+            else:
+                await db.add_message(cid, "assistant", _VISION_PREPROCESSOR_UNAVAILABLE_MESSAGE, "script")
+                return _VISION_PREPROCESSOR_UNAVAILABLE_MESSAGE
 
     # Load recent messages; skip old assistant error messages so the model doesn't repeat "check your API key"
     recent = await db.get_recent_messages(cid, limit=20)
@@ -3149,7 +3265,8 @@ async def handle_message(
     provider = get_provider(provider_name)
     if not provider:
         return f"No AI provider found for '{provider_name}'. Check your provider settings."
-    if image_bytes:
+    if image_bytes and provider_name not in _NATIVE_VISION_PROVIDERS:
+        # Image wasn't preprocessed and provider doesn't support native vision — block
         await db.add_message(cid, "assistant", _VISION_PREPROCESSOR_UNAVAILABLE_MESSAGE, "script")
         return _VISION_PREPROCESSOR_UNAVAILABLE_MESSAGE
     user_model = await db.get_user_provider_model(user_id, provider.name)
@@ -3268,6 +3385,7 @@ async def handle_message(
         image_mime=image_mime,
         thinking_level=thinking_level,
         reasoning_mode=reasoning_mode,
+        pdf_documents=pdf_documents,
     )
     if tools:
         chat_kwargs["tools"] = tools

@@ -30,14 +30,16 @@ class ClaudeProvider(BaseProvider):
         *,
         image_b64: str | None = None,
         image_mime: str = "image/jpeg",
+        pdf_documents: list[dict] | None = None,
     ) -> list[dict]:
         out: list[dict] = []
-        image_idx = -1
-        if image_b64:
+        # Find the last user message index for attaching media
+        last_user_idx = -1
+        if image_b64 or pdf_documents:
             for i in range(len(messages) - 1, -1, -1):
                 role = (messages[i].get("role") or "").strip().lower()
                 if role == "user":
-                    image_idx = i
+                    last_user_idx = i
                     break
         for idx, m in enumerate(messages):
             role = (m.get("role") or "").strip().lower()
@@ -83,24 +85,33 @@ class ClaudeProvider(BaseProvider):
                     }
                 )
                 continue
-            if role != "assistant" and image_b64 and image_idx == idx:
-                text_content = str(content or "").strip() or "Please analyze this image."
-                out.append(
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": text_content},
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": image_mime or "image/jpeg",
-                                    "data": image_b64,
-                                },
+            # Attach media (image + PDFs) to the last user message
+            has_media = (role != "assistant") and (last_user_idx == idx) and (image_b64 or pdf_documents)
+            if has_media:
+                text_content = str(content or "").strip() or "Please analyze the attached document."
+                content_blocks: list[dict] = [{"type": "text", "text": text_content}]
+                # Add PDF document blocks (native Anthropic document content)
+                if pdf_documents:
+                    for pdf in pdf_documents:
+                        content_blocks.append({
+                            "type": "document",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "application/pdf",
+                                "data": pdf["base64"],
                             },
-                        ],
-                    }
-                )
+                        })
+                # Add image block
+                if image_b64:
+                    content_blocks.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": image_mime or "image/jpeg",
+                            "data": image_b64,
+                        },
+                    })
+                out.append({"role": "user", "content": content_blocks})
                 continue
             out.append({"role": "assistant" if role == "assistant" else "user", "content": str(content)})
         return out
@@ -140,7 +151,8 @@ class ClaudeProvider(BaseProvider):
         image_b64: str | None = None
         if image_bytes:
             image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-        msgs = self._to_anthropic_messages(messages, image_b64=image_b64, image_mime=image_mime)
+        pdf_documents: list[dict] | None = kwargs.get("pdf_documents")
+        msgs = self._to_anthropic_messages(messages, image_b64=image_b64, image_mime=image_mime, pdf_documents=pdf_documents)
         model = kwargs.get("model") or "claude-3-5-sonnet-20241022"
         tools = self._to_anthropic_tools(kwargs.get("tools"))
         thinking_level = str(kwargs.get("thinking_level") or "off").strip().lower()
@@ -157,7 +169,6 @@ class ClaudeProvider(BaseProvider):
                 create_kwargs["tools"] = tools
             if budget:
                 create_kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
-                create_kwargs["betas"] = ["interleaved-thinking-2025-05-14"]
             r = await client.messages.create(**create_kwargs)
             # Capture token usage
             _usage = getattr(r, "usage", None)
@@ -245,7 +256,8 @@ class ClaudeProvider(BaseProvider):
         image_bytes: bytes | None = kwargs.get("image_bytes")
         image_mime: str = (kwargs.get("image_mime") or "image/jpeg").strip() or "image/jpeg"
         image_b64 = base64.b64encode(image_bytes).decode() if image_bytes else None
-        msgs = self._to_anthropic_messages(messages, image_b64=image_b64, image_mime=image_mime)
+        pdf_documents: list[dict] | None = kwargs.get("pdf_documents")
+        msgs = self._to_anthropic_messages(messages, image_b64=image_b64, image_mime=image_mime, pdf_documents=pdf_documents)
         model = kwargs.get("model") or "claude-3-5-sonnet-20241022"
         tools = self._to_anthropic_tools(kwargs.get("tools"))
         thinking_level = str(kwargs.get("thinking_level") or "off").strip().lower()
@@ -265,7 +277,6 @@ class ClaudeProvider(BaseProvider):
             create_kwargs["tools"] = tools
         if budget:
             create_kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
-            create_kwargs["betas"] = ["interleaved-thinking-2025-05-14"]
 
         await emit_stream_event(on_stream_event, {"type": "message_start"})
         content_parts: list[str] = []

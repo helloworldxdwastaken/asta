@@ -58,10 +58,11 @@ _XHIGH_MODEL_REFS: tuple[str, ...] = (
     "minimax-m2.5",
     "minimax-m2",
     "minimax",
-    # Trinity models (via OpenRouter)
-    "trinity",
-    "trinity-large-preview",
-    "arcee-ai/trinity",
+    # Google Gemini models with thinking support (2.5+)
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-3-flash-preview",
+    "gemini-3-pro-preview",
 )
 
 _XHIGH_MODEL_SET: set[str] = {ref.lower() for ref in _XHIGH_MODEL_REFS}
@@ -140,11 +141,12 @@ def supports_xhigh_thinking(provider: str | None, model: str | None) -> bool:
     # MiniMax models with thinking/reasoning capabilities
     if "minimax" in model_key:
         return True
-    
-    # Trinity models with thinking/reasoning capabilities  
-    if "trinity" in model_key:
-        return True
-    
+
+    # Google Gemini: 2.5+ and 3+ models support thinking
+    if provider_key == "google" or "gemini" in model_key:
+        if any(x in model_key for x in ("gemini-2.5", "gemini-3")):
+            return True
+
     return False
 
 

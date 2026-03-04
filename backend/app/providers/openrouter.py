@@ -106,7 +106,8 @@ def _normalize_requested_models(raw: str | None, *, skip_model_policy: bool) -> 
             model = item.strip()
             if not model:
                 continue
-            if model.lower().startswith("openrouter/"):
+            # Keep openrouter/free as-is (it's a meta-router, not a provider prefix)
+            if model.lower().startswith("openrouter/") and model.lower() != "openrouter/free":
                 model = model.split("/", 1)[1].strip()
             if model:
                 models.append(model)
@@ -129,7 +130,10 @@ def _normalize_requested_models(raw: str | None, *, skip_model_policy: bool) -> 
 
 
 def _reasoning_effort_from_level(level: str | None) -> str | None:
+    """Map Asta thinking levels to OpenRouter reasoning effort values."""
     lv = (level or "").strip().lower()
+    if lv in ("off", "0", "false", ""):
+        return None
     if lv == "minimal":
         return "low"
     if lv == "xhigh":
@@ -139,9 +143,50 @@ def _reasoning_effort_from_level(level: str | None) -> str | None:
     return None
 
 
+def _build_reasoning_param(level: str | None) -> dict | None:
+    """Build OpenRouter reasoning object: { effort, enabled }."""
+    effort = _reasoning_effort_from_level(level)
+    if not effort:
+        return None
+    return {"effort": effort, "enabled": True}
+
+
 def _is_reasoning_param_unsupported_error(msg: str) -> bool:
     low = (msg or "").lower()
-    return ("reasoning_effort" in low) or ("unknown parameter" in low) or ("unrecognized request argument" in low)
+    return ("reasoning_effort" in low) or ("reasoning" in low and "unknown" in low) or ("unknown parameter" in low) or ("unrecognized request argument" in low)
+
+
+def _extract_reasoning_text(reasoning_details: list | None) -> str:
+    """Extract plain text from reasoning_details array."""
+    if not reasoning_details:
+        return ""
+    parts = []
+    for item in reasoning_details:
+        if isinstance(item, dict):
+            # reasoning.text, reasoning.summary types
+            text = item.get("text") or item.get("summary") or ""
+            if text:
+                parts.append(str(text))
+        elif isinstance(item, str):
+            parts.append(item)
+        else:
+            # Object with attributes
+            text = getattr(item, "text", None) or getattr(item, "summary", None) or ""
+            if text:
+                parts.append(str(text))
+    return "".join(parts)
+
+
+_THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+
+
+def _split_thinking_from_content(text: str) -> tuple[str, str]:
+    """Split <think>...</think> blocks from content. Returns (reasoning, clean_content)."""
+    reasoning_parts = []
+    for m in _THINK_RE.finditer(text):
+        reasoning_parts.append(m.group(1).strip())
+    clean = _THINK_RE.sub("", text).strip()
+    return "\n".join(reasoning_parts), clean
 
 
 class OpenRouterProvider(BaseProvider):
@@ -182,15 +227,6 @@ class OpenRouterProvider(BaseProvider):
                 if n:
                     allowed_tool_names.add(n)
         
-        # Inject detailed thinking prompt for models that need it (Trinity)
-        thinking_level = kwargs.get("thinking_level")
-        model_name_lower = str(kwargs.get("model") or "").lower()
-        if thinking_level and str(thinking_level).lower() not in ("off", "0", "false"):
-            if "trinity" in model_name_lower:
-                instr = "You are a deep thinking AI. Always output your step-by-step reasoning process enclosed in <think> tags before your final response."
-                if instr not in system:
-                    system = f"{system}\n\n{instr}".strip()
-
         if system:
             # OpenRouter fallback protocol: if a specific model fails structured tool_calls,
             # it may still emit this tag; handler will parse it.
@@ -222,7 +258,13 @@ class OpenRouterProvider(BaseProvider):
                     ]
                 })
             else:
-                msg = {"role": role, "content": content}
+                msg: dict = {"role": role, "content": content}
+                # Preserve reasoning for assistant messages (multi-turn continuity)
+                if role == "assistant" and "<think>" in content:
+                    reasoning, clean = _split_thinking_from_content(content)
+                    if reasoning:
+                        msg["content"] = clean
+                        msg["reasoning"] = reasoning
                 if "tool_calls" in m:
                     msg["tool_calls"] = m["tool_calls"]
                 if "tool_call_id" in m:
@@ -238,29 +280,31 @@ class OpenRouterProvider(BaseProvider):
         last_error = ""
         for i, model in enumerate(models):
             try:
-                create_kwargs = {"model": model, "messages": msgs, "max_tokens": 4096}
+                create_kwargs: dict = {"model": model, "messages": msgs, "max_tokens": 4096}
                 if tools:
                     create_kwargs["tools"] = tools
                     create_kwargs["tool_choice"] = "auto"
-                effort = _reasoning_effort_from_level(kwargs.get("thinking_level"))
-                if effort:
-                    create_kwargs["reasoning_effort"] = effort
-                    # For non-OpenAI models (Kimi, Trinity), we also need include_reasoning: true
-                    # to ensure the reasoning trace is returned in the response fields.
+                reasoning_param = _build_reasoning_param(kwargs.get("thinking_level"))
+                if reasoning_param:
                     if "extra_body" not in create_kwargs:
                         create_kwargs["extra_body"] = {}
-                    create_kwargs["extra_body"]["include_reasoning"] = True
+                    create_kwargs["extra_body"]["reasoning"] = reasoning_param
+                    logger.info("OpenRouter chat model=%s reasoning=%s", model, reasoning_param)
                 try:
                     r = await client.chat.completions.create(**create_kwargs)
                 except Exception as first_err:
-                    if effort and _is_reasoning_param_unsupported_error(str(first_err)):
-                        create_kwargs.pop("reasoning_effort", None)
+                    if reasoning_param and _is_reasoning_param_unsupported_error(str(first_err)):
+                        create_kwargs.get("extra_body", {}).pop("reasoning", None)
                         r = await client.chat.completions.create(**create_kwargs)
                     else:
                         raise
                 msg = r.choices[0].message
                 content_parts = []
-                reasoning = getattr(msg, "reasoning", None)
+                # Extract reasoning from both fields (string or structured array)
+                reasoning = getattr(msg, "reasoning", None) or ""
+                reasoning_details = getattr(msg, "reasoning_details", None)
+                if reasoning_details:
+                    reasoning = _extract_reasoning_text(reasoning_details) or reasoning
                 if reasoning:
                     content_parts.append(f"<think>{reasoning}</think>")
                 if msg.content:
@@ -348,15 +392,6 @@ class OpenRouterProvider(BaseProvider):
                 if n:
                     allowed_tool_names.add(n)
         
-        # Inject detailed thinking prompt for models that need it (Trinity)
-        thinking_level = kwargs.get("thinking_level")
-        model_name_lower = str(kwargs.get("model") or "").lower()
-        if thinking_level and str(thinking_level).lower() not in ("off", "0", "false"):
-            if "trinity" in model_name_lower:
-                instr = "You are a deep thinking AI. Always output your step-by-step reasoning process enclosed in <think> tags before your final response."
-                if instr not in system:
-                    system = f"{system}\n\n{instr}".strip()
-
         if system:
             if tools:
                 system = (
@@ -385,7 +420,13 @@ class OpenRouterProvider(BaseProvider):
                     ]
                 })
             else:
-                msg = {"role": role, "content": content}
+                msg: dict = {"role": role, "content": content}
+                # Preserve reasoning for assistant messages (multi-turn continuity)
+                if role == "assistant" and "<think>" in content:
+                    reasoning, clean = _split_thinking_from_content(content)
+                    if reasoning:
+                        msg["content"] = clean
+                        msg["reasoning"] = reasoning
                 if "tool_calls" in m:
                     msg["tool_calls"] = m["tool_calls"]
                 if "tool_call_id" in m:
@@ -400,26 +441,22 @@ class OpenRouterProvider(BaseProvider):
         last_error = ""
         for i, model in enumerate(models):
             try:
-                create_kwargs = {"model": model, "messages": msgs, "max_tokens": 4096, "stream": True}
+                create_kwargs: dict = {"model": model, "messages": msgs, "max_tokens": 4096, "stream": True}
                 if tools:
                     create_kwargs["tools"] = tools
                     create_kwargs["tool_choice"] = "auto"
-                effort = _reasoning_effort_from_level(kwargs.get("thinking_level"))
-                # For non-OpenAI models (Kimi, Trinity), we also need include_reasoning: true
-                if effort:
-                    create_kwargs["reasoning_effort"] = effort
+                reasoning_param = _build_reasoning_param(kwargs.get("thinking_level"))
+                if reasoning_param:
                     if "extra_body" not in create_kwargs:
                         create_kwargs["extra_body"] = {}
-                    create_kwargs["extra_body"]["include_reasoning"] = True
+                    create_kwargs["extra_body"]["reasoning"] = reasoning_param
+                    logger.info("OpenRouter stream model=%s reasoning=%s", model, reasoning_param)
 
                 try:
                     stream = await client.chat.completions.create(**create_kwargs)
                 except Exception as first_err:
-                    if effort and _is_reasoning_param_unsupported_error(str(first_err)):
-                        create_kwargs.pop("reasoning_effort", None)
-                        # Also remove include_reasoning if it was the cause (though usually it's reasoning_effort)
-                        # But keep it if possible? Let's try removing just effort first.
-                        # If that fails, the outer loop will catch it.
+                    if reasoning_param and _is_reasoning_param_unsupported_error(str(first_err)):
+                        create_kwargs.get("extra_body", {}).pop("reasoning", None)
                         stream = await client.chat.completions.create(**create_kwargs)
                     else:
                         raise
@@ -438,18 +475,20 @@ class OpenRouterProvider(BaseProvider):
                     if not delta:
                         continue
                         
-                    # Handle separate reasoning field (OpenRouter standard for some models)
+                    # Handle reasoning — check both string field and structured array
                     reasoning_delta = getattr(delta, "reasoning", None)
+                    reasoning_details_delta = getattr(delta, "reasoning_details", None)
+                    if reasoning_details_delta:
+                        reasoning_delta = _extract_reasoning_text(reasoning_details_delta) or reasoning_delta
                     if reasoning_delta:
                         if not is_reasoning:
-                            # Start thinking block
                             await emit_text_delta(on_text_delta, "<think>")
                             content_parts.append("<think>")
                             is_reasoning = True
-                        
+
                         await emit_text_delta(on_text_delta, reasoning_delta)
                         content_parts.append(reasoning_delta)
-                        continue # reasoning usually exclusive with content in a single chunk
+                        continue
                     
                     # Handle content
                     delta_content = getattr(delta, "content", None)

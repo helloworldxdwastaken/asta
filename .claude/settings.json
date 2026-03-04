@@ -1,22 +1,18 @@
 {
   "permissions": {
     "allow": [
-      "Bash(xcodebuild:*)",
-      "Bash(bash build-release.sh 1.3.22)",
       "Bash(curl:*)",
       "Bash(bash asta.sh restart)",
       "Bash(launchctl list:*)",
       "Read(//Library/LaunchDaemons/**)",
       "Read(//Users/tokyo/Library/LaunchAgents/**)",
       "Bash(kill:*)",
-      "Bash(bash build-release.sh 1.3.23)",
       "Bash(pgrep:*)",
       "Bash(while read p)",
       "Bash(do kill \"$p\")",
       "Bash(echo:*)",
       "Bash(done)",
       "Bash(bash /Users/tokyo/asta/asta.sh restart)",
-      "Bash(swift build:*)",
       "Bash(sqlite3 /Users/tokyo/asta/backend/asta.db \"SELECT role, substr\\(content, 1, 300\\), created_at FROM messages WHERE conversation_id=''default:web:82808c9a'' ORDER BY created_at DESC LIMIT 20;\")",
       "Bash(sqlite3 /Users/tokyo/asta/backend/asta.db \"SELECT id, title, created_at FROM conversations WHERE id LIKE ''default:telegram%'' ORDER BY created_at DESC LIMIT 5;\")",
       "Bash(sqlite3 /Users/tokyo/asta/backend/asta.db \"SELECT role, substr\\(content, 1, 400\\), created_at FROM messages WHERE conversation_id=''default:telegram'' ORDER BY created_at DESC LIMIT 15;\")",

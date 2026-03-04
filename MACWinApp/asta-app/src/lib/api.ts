@@ -146,6 +146,7 @@ export const assignConversationFolder = (id: string, folderId: string | null) =>
 // ── Chat ──────────────────────────────────────────────────────────────────────
 export interface SendMessageOpts {
   text: string;
+  provider?: string;
   conversation_id?: string;
   agent_id?: string;
   web_enabled?: boolean;

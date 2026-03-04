@@ -31,6 +31,13 @@ const FALLBACK_SUGGESTIONS = [
   "Search the web for latest news",
 ];
 
+const THINKING_WORDS = [
+  "thinking", "pondering", "analyzing", "fabricating", "curiosating",
+  "brainstorming", "computing", "imagining", "processing", "conjuring",
+  "contemplating", "synthesizing", "decoding", "inventing", "wondering",
+  "crunching", "assembling", "dreaming", "crafting", "brewing",
+];
+
 interface Message {
   id: string; role: "user" | "assistant"; content: string;
   thinking?: string; provider?: string;
@@ -74,6 +81,25 @@ function CodeBlock({ className, children }: { className?: string; children?: Rea
         <code className={className}>{code}</code>
       </pre>
     </div>
+  );
+}
+
+function ThinkingWords() {
+  const [idx, setIdx] = useState(() => Math.floor(Math.random() * THINKING_WORDS.length));
+  useEffect(() => {
+    const t = setInterval(() => setIdx(i => (i + 1) % THINKING_WORDS.length), 2000);
+    return () => clearInterval(t);
+  }, []);
+  return (
+    <span className="inline-flex items-center gap-2 text-13 text-label-tertiary italic animate-fade-in">
+      <span className="inline-flex gap-1">
+        {[0, 1, 2].map(i => (
+          <span key={i} className="w-1.5 h-1.5 bg-accent/50 rounded-full animate-bounce-dot"
+            style={{ animationDelay: `${i * 150}ms` }} />
+        ))}
+      </span>
+      <span key={idx} className="animate-fade-in">{THINKING_WORDS[idx]}</span>
+    </span>
   );
 }
 
@@ -193,6 +219,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
         text: selectedAgent ? `@${selectedAgent.name}: ${text}` : text,
         conversation_id: convId,
         web_enabled: webEnabled,
+        provider,
       },
       (chunk: StreamChunk) => {
         if (chunk.conversation_id && !convId) {
@@ -775,15 +802,12 @@ export default function ChatView({ conversationId, onConversationCreated, agents
           </div>
         )}
 
-        {/* Bounce dots */}
+        {/* Thinking words */}
         {streaming && !streamContent && !streamThinking && activeTools.length === 0 && !streamStatus && (
           <div className="flex justify-start gap-2.5 animate-fade-in">
-            <img src="/appicon-512.png" alt="" className="w-7 h-7 rounded-[8px] shrink-0" />
-            <div className="flex items-center gap-1.5 px-2 py-3">
-              {[0, 1, 2].map(i => (
-                <span key={i} className="w-1.5 h-1.5 bg-accent/50 rounded-full animate-bounce-dot"
-                  style={{ animationDelay: `${i * 150}ms` }} />
-              ))}
+            <img src="/appicon-512.png" alt="" className="w-7 h-7 rounded-[8px] shrink-0 mt-0.5" />
+            <div className="px-2 py-3">
+              <ThinkingWords />
             </div>
           </div>
         )}

@@ -6,7 +6,7 @@ import ProviderLogo from "../../ProviderLogo";
 // statusKey = field name returned by GET /api/settings/keys (backend uses _api_key suffix)
 // key = field name matching backend ApiKeysIn model (PUT /api/settings/keys)
 const FIELDS = [
-  { key: "anthropic_api_key", label: "Anthropic (Claude)", ph: "sk-ant-...", prov: "anthropic", icon: "anthropic", url: "https://console.anthropic.com/settings/keys" },
+  { key: "anthropic_api_key", label: "Anthropic (Claude)", ph: "sk-ant-...", prov: "claude", icon: "anthropic", url: "https://console.anthropic.com/settings/keys" },
   { key: "openai_api_key", label: "OpenAI", ph: "sk-...", prov: "openai", icon: "openai", url: "https://platform.openai.com/api-keys" },
   { key: "openrouter_api_key", label: "OpenRouter", ph: "sk-or-...", prov: "openrouter", icon: "openrouter", url: "https://openrouter.ai/keys" },
   { key: "gemini_api_key", label: "Google / Gemini", ph: "AIza...", prov: "google", icon: "google", url: "https://aistudio.google.com/app/apikey" },

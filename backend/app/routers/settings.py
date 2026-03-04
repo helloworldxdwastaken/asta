@@ -782,24 +782,18 @@ async def test_api_key(provider: str = "groq", user_id: str = "default"):
         if not key:
             return {"ok": False, "error": "No Anthropic API key set. Add one in Settings and save first."}
         try:
-            from anthropic import AsyncAnthropic
-
-            client = AsyncAnthropic(api_key=key)
-            r = await client.messages.create(
-                model="claude-3-5-haiku-20241022",
-                max_tokens=12,
-                messages=[{"role": "user", "content": "Reply with OK"}],
-            )
-            text = ""
-            for block in (getattr(r, "content", None) or []):
-                if getattr(block, "type", "") == "text":
-                    text = (getattr(block, "text", "") or "").strip()
-                    if text:
-                        break
-            if text:
+            import httpx
+            async with httpx.AsyncClient(timeout=15) as hc:
+                r = await hc.get(
+                    "https://api.anthropic.com/v1/models",
+                    headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
+                )
+            if r.status_code == 200:
                 await db.clear_provider_auto_disabled(user_id, "claude")
                 return {"ok": True, "message": "Claude key works."}
-            return {"ok": True}
+            if r.status_code in (401, 403):
+                return {"ok": False, "error": f"Anthropic API key invalid ({r.status_code})."}
+            return {"ok": False, "error": f"Anthropic API check failed ({r.status_code})."}
         except Exception as e:
             msg = str(e).strip() or repr(e)
             return {"ok": False, "error": msg[:500]}
@@ -811,7 +805,27 @@ async def test_api_key(provider: str = "groq", user_id: str = "default"):
         await db.clear_provider_auto_disabled(user_id, "ollama")
         return {"ok": True, "message": "Ollama is reachable."}
 
-    return {"ok": False, "error": f"Test not implemented for {provider}. Use claude, huggingface, ollama, groq, openai, openrouter, or spotify."}
+    if provider == "google":
+        key = await get_api_key("gemini_api_key") or await get_api_key("google_ai_key")
+        if not key:
+            return {"ok": False, "error": "No Google/Gemini API key set. Add one in Settings and save first."}
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=15) as hc:
+                r = await hc.get(
+                    f"https://generativelanguage.googleapis.com/v1beta/models?key={key}",
+                )
+            if r.status_code == 200:
+                await db.clear_provider_auto_disabled(user_id, "google")
+                return {"ok": True, "message": "Google/Gemini key works."}
+            if r.status_code in (400, 401, 403):
+                return {"ok": False, "error": f"Google API key invalid ({r.status_code})."}
+            return {"ok": False, "error": f"Google API check failed ({r.status_code})."}
+        except Exception as e:
+            msg = str(e).strip() or repr(e)
+            return {"ok": False, "error": msg[:500]}
+
+    return {"ok": False, "error": f"Test not implemented for {provider}. Use claude, google, huggingface, ollama, groq, openai, openrouter, or spotify."}
 
 
 class SkillToggleIn(BaseModel):

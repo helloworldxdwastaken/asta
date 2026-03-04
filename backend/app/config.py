@@ -230,8 +230,8 @@ class Settings(BaseSettings):
     # - preprocess=True: run a low-cost vision model first, then pass analysis to the main agent model.
     # - provider order: first configured provider in this list is used.
     asta_vision_preprocess: bool = True
-    asta_vision_provider_order: str = "openrouter,ollama"
-    asta_vision_openrouter_model: str = "nvidia/nemotron-nano-12b-v2-vl:free"
+    asta_vision_provider_order: str = "openrouter,google"
+    asta_vision_openrouter_model: str = "google/gemma-3-27b-it:free,mistralai/mistral-small-3.1-24b-instruct:free,nvidia/nemotron-nano-12b-v2-vl:free"
 
     @property
     def tool_trace_channels(self) -> set[str]:
