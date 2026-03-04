@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { getHealth, checkUpdate, triggerUpdate, getServerStatus, getUsage } from "../../../lib/api";
+import { getHealth, checkUpdate, getServerStatus, getUsage } from "../../../lib/api";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { IconCpu, IconMemory, IconClock } from "../../../lib/icons";
@@ -18,7 +18,6 @@ export default function TabAbout() {
   const [serverStatus, setServerStatus] = useState<any>(null);
   const [usage, setUsage] = useState<any>(null);
   const [updateAvail, setUpdateAvail] = useState(false);
-  const [updating, setUpdating] = useState(false);
   const [checking, setChecking] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [checkDone, setCheckDone] = useState(false);
@@ -30,12 +29,6 @@ export default function TabAbout() {
     getUsage(7).then(setUsage).catch(()=>{});
     checkUpdate().then(r => setUpdateAvail(r.available ?? r.update_available ?? false)).catch(()=>{});
   }, []);
-
-  async function doUpdate() {
-    setUpdating(true);
-    await triggerUpdate().catch(()=>{});
-    setUpdating(false);
-  }
 
   async function manualCheck() {
     setChecking(true);

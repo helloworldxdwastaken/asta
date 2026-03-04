@@ -9,7 +9,12 @@ export default function TabSkills() {
   const [skills, setSkills] = useState<Skill[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { getSkills().then(r => setSkills(r.skills ?? [])).catch(()=>{}); }, []);
+  useEffect(() => {
+    const load = () => getSkills().then(r => setSkills(r.skills ?? [])).catch(() => {});
+    load();
+    const interval = setInterval(load, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   async function toggle(id: string) {
     const skill = skills.find(s => s.id === id);

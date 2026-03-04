@@ -22,6 +22,58 @@ export function setBackendUrl(url: string): void {
   localStorage.setItem("backendURL", _backendUrl);
 }
 
+/** Probe a URL for /api/health (fast timeout). */
+async function _probe(url: string): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2500);
+    const res = await _fetch(`${url}/api/health`, { signal: controller.signal });
+    clearTimeout(timer);
+    return res.ok;
+  } catch { return false; }
+}
+
+/**
+ * Auto-resolve the backend URL on startup.
+ * 1. Try the stored URL.
+ * 2. If stored URL is not localhost, also try http://localhost:8010 as fallback.
+ * 3. If Tailscale is connected and serving, try the HTTPS tunnel URL.
+ * Returns true if a working backend was found.
+ */
+export async function autoResolveBackend(): Promise<boolean> {
+  const stored = _backendUrl;
+
+  // 1. Try stored URL
+  if (await _probe(stored)) return true;
+
+  // 2. Try localhost:8010 if stored URL was different
+  const local = "http://localhost:8010";
+  if (stored !== local) {
+    if (await _probe(local)) {
+      setBackendUrl(local);
+      return true;
+    }
+  }
+
+  // 3. Try Tailscale HTTPS URL if available
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const ts = await invoke<any>("tailscale_status");
+    if (ts?.status === "connected" && ts?.dns_name) {
+      const serve = await invoke<any>("tailscale_serve_status").catch(() => null);
+      if (serve?.enabled) {
+        const tsUrl = `https://${ts.dns_name}`;
+        if (await _probe(tsUrl)) {
+          setBackendUrl(tsUrl);
+          return true;
+        }
+      }
+    }
+  } catch { /* not in Tauri or tailscale not available */ }
+
+  return false;
+}
+
 async function req<T>(method: string, path: string, body?: unknown, query?: Record<string, string>): Promise<T> {
   let url = `${_backendUrl}${path}`;
   if (query) {

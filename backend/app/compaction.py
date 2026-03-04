@@ -32,7 +32,91 @@ def estimate_tokens(text: str) -> int:
 
 def estimate_messages_tokens(messages: list[Message]) -> int:
     """Total estimated tokens across all messages."""
-    return sum(estimate_tokens(m["content"]) + 4 for m in messages)  # +4 for role/formatting overhead
+    return sum(estimate_tokens(m.get("content") or "") + 4 for m in messages)  # +4 for role/formatting overhead
+
+
+def compact_tool_rounds(
+    messages: list[dict],
+    keep_recent_rounds: int = 8,
+) -> tuple[list[dict], bool]:
+    """Compact old tool-call/result rounds to reduce context size in the tool loop.
+
+    Keeps the preamble (system + user messages before any tool rounds) and the
+    last ``keep_recent_rounds`` assistant+tool_calls rounds intact. Older rounds
+    are replaced with a concise inline summary appended to the last user message.
+
+    No LLM call is made — this is a pure, fast, structural compaction.
+
+    Returns:
+        (compacted_messages, did_compact)
+    """
+    import json as _json
+
+    # Find indices of all assistant messages that started a tool round
+    tool_round_starts = [
+        i for i, m in enumerate(messages)
+        if m.get("role") == "assistant" and m.get("tool_calls")
+    ]
+
+    if len(tool_round_starts) <= keep_recent_rounds:
+        return messages, False
+
+    cutoff_idx = tool_round_starts[-keep_recent_rounds]
+    first_tool_idx = tool_round_starts[0]
+
+    preamble = messages[:first_tool_idx]   # system + user turns before any tool use
+    to_compact = messages[first_tool_idx:cutoff_idx]  # old rounds → summarise
+    to_keep = messages[cutoff_idx:]                   # recent rounds → keep intact
+
+    # Build a concise text summary of the compacted rounds
+    summary_lines: list[str] = []
+    for msg in to_compact:
+        role = msg.get("role", "")
+        if role == "assistant" and msg.get("tool_calls"):
+            for tc in (msg.get("tool_calls") or []):
+                fn = tc.get("function") or {}
+                name = fn.get("name", "tool")
+                args_raw = fn.get("arguments") or "{}"
+                try:
+                    args = _json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+                    main_arg = (
+                        args.get("query") or args.get("url") or args.get("path") or
+                        args.get("command") or args.get("action") or ""
+                    )
+                    arg_hint = str(main_arg)[:80] if main_arg else ""
+                except Exception:
+                    arg_hint = ""
+                summary_lines.append(f"• {name}({arg_hint})")
+        elif role == "tool":
+            content = (msg.get("content") or "")[:150].replace("\n", " ")
+            if content:
+                summary_lines.append(f"  → {content}")
+
+    n_rounds = sum(
+        1 for m in to_compact if m.get("role") == "assistant" and m.get("tool_calls")
+    )
+    summary_text = (
+        f"\n\n[COMPACTED: {n_rounds} prior tool rounds]\n"
+        + "\n".join(summary_lines)
+        + "\n[END COMPACTED HISTORY]"
+    )
+
+    # Append summary to the last user message in preamble so we don't create
+    # consecutive user messages (which Anthropic rejects).
+    compacted_preamble = list(preamble)
+    for idx in range(len(compacted_preamble) - 1, -1, -1):
+        if compacted_preamble[idx].get("role") == "user":
+            original = compacted_preamble[idx].get("content") or ""
+            compacted_preamble[idx] = {
+                **compacted_preamble[idx],
+                "content": original + summary_text,
+            }
+            break
+    else:
+        # No user message in preamble — add one so to_keep (starting with assistant) is valid
+        compacted_preamble.append({"role": "user", "content": summary_text.strip()})
+
+    return compacted_preamble + list(to_keep), True
 
 
 def _compute_compaction_budget(

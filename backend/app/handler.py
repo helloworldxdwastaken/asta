@@ -64,6 +64,32 @@ from app.tool_call_parser import (
 logger = logging.getLogger(__name__)
 
 
+# ── Inline image extraction ───────────────────────────────────────────────────
+
+_INLINE_IMAGE_RE = re.compile(
+    r'!\[[^\]]*\]\((data:image/([^;]+);base64,([A-Za-z0-9+/=\s]+))\)'
+)
+
+
+def _extract_inline_image(text: str) -> tuple[str, bytes | None, str | None]:
+    """Extract the first inline markdown image from text.
+    Returns (cleaned_text, image_bytes, image_mime) or (text, None, None)."""
+    m = _INLINE_IMAGE_RE.search(text)
+    if not m:
+        return text, None, None
+    try:
+        import base64 as b64mod
+        mime_subtype = m.group(2)  # e.g. "png", "jpeg"
+        raw_b64 = m.group(3).replace("\n", "").replace(" ", "")
+        image_bytes = b64mod.b64decode(raw_b64)
+        image_mime = f"image/{mime_subtype}"
+        cleaned = text[:m.start()].rstrip() + text[m.end():].lstrip()
+        return cleaned.strip(), image_bytes, image_mime
+    except Exception as e:
+        logger.warning("Inline image extraction failed: %s", e)
+        return text, None, None
+
+
 # ── PDF / document preprocessing ──────────────────────────────────────────────
 
 _DOCUMENT_TAG_RE = re.compile(
@@ -71,9 +97,9 @@ _DOCUMENT_TAG_RE = re.compile(
 )
 
 
-def _extract_pdf_text(base64_data: str, max_pages: int = 8) -> str:
+def _extract_pdf_text(base64_data: str, max_pages: int = 8) -> tuple[str, int]:
     """Extract text from a base64-encoded PDF using PyMuPDF.
-    Returns extracted text or an error note."""
+    Returns (extracted_text, total_page_count)."""
     try:
         import fitz  # pymupdf
         import base64 as b64mod
@@ -84,23 +110,186 @@ def _extract_pdf_text(base64_data: str, max_pages: int = 8) -> str:
 
         pdf_bytes = b64mod.b64decode(base64_data)
         doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        num_pages = len(doc)
         pages = []
         for i, page in enumerate(doc):
             if i >= max_pages:
-                pages.append(f"[...truncated, {len(doc)} pages total]")
+                pages.append(f"[...truncated, {num_pages} pages total]")
                 break
             pages.append(page.get_text())
         doc.close()
         text = "\n\n".join(p.strip() for p in pages if p.strip())
         if not text:
-            return "[PDF contained no extractable text — may be a scanned image]"
+            return "[PDF contained no extractable text — may be a scanned image]", num_pages
         # Cap extracted text to avoid bloating context
         if len(text) > 12000:
             text = text[:12000] + "\n\n[...text truncated at 12000 chars]"
-        return text
+        return text, num_pages
     except Exception as e:
         logger.warning("PDF extraction failed: %s", e)
-        return f"[PDF text extraction failed: {e}]"
+        return f"[PDF text extraction failed: {e}]", 0
+
+
+def _assess_pdf_text_quality(text: str, num_pages: int) -> bool:
+    """Return True if extracted PDF text is usable; False if vision fallback should be tried."""
+    if not text or text.startswith("["):
+        return False
+    clean = re.sub(r'\[\.\.\..*?\]', '', text).strip()
+    if not clean:
+        return False
+    # Average characters per page
+    if len(clean) / max(num_pages, 1) < 100:
+        return False
+    # Ratio of alphabetic characters to total non-whitespace
+    non_ws = re.sub(r'\s+', '', clean)
+    if non_ws:
+        alpha_ratio = sum(c.isalpha() for c in non_ws) / len(non_ws)
+        if alpha_ratio < 0.35:
+            return False
+    # Average word length and real-word ratio
+    words = clean.split()
+    if words:
+        avg_word_len = sum(len(w) for w in words) / len(words)
+        if avg_word_len < 2.0 or avg_word_len > 25.0:
+            return False
+        real_words = sum(1 for w in words if len(w) >= 3 and any(c.isalpha() for c in w))
+        if real_words / len(words) < 0.3:
+            return False
+    # Sentence density: real documents have lines with 5+ words (sentences).
+    # Blueprints/CAD drawings have mostly short labels scattered on the page.
+    lines = [ln.strip() for ln in clean.split("\n") if ln.strip()]
+    if lines:
+        sentence_lines = sum(1 for ln in lines if len(ln.split()) >= 5)
+        sentence_ratio = sentence_lines / len(lines)
+        if sentence_ratio < 0.10:
+            logger.info("PDF quality: sentence_ratio=%.3f (too low, likely blueprint/drawing)", sentence_ratio)
+            return False
+    return True
+
+
+def _render_pdf_pages_as_images(
+    base64_data: str, max_pages: int = 4, dpi: int = 150,
+) -> list[tuple[bytes, str]]:
+    """Render PDF pages as JPEG images. Returns list of (jpeg_bytes, page_label)."""
+    try:
+        import fitz
+        import base64 as b64mod
+
+        if base64_data.startswith("data:"):
+            base64_data = base64_data.split(",", 1)[-1]
+
+        pdf_bytes = b64mod.b64decode(base64_data)
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        results: list[tuple[bytes, str]] = []
+        total = len(doc)
+        for i, page in enumerate(doc):
+            if i >= max_pages:
+                break
+            pixmap = page.get_pixmap(dpi=dpi)
+            png_bytes = pixmap.tobytes("png")
+            img = Image.open(io.BytesIO(png_bytes))
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            max_dim = 1600
+            if img.width > max_dim or img.height > max_dim:
+                img.thumbnail((max_dim, max_dim))
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=75, optimize=True)
+            results.append((buf.getvalue(), f"page {i + 1}/{total}"))
+        doc.close()
+        return results
+    except Exception as e:
+        logger.warning("PDF page rendering failed: %s", e)
+        return []
+
+
+async def _pdf_vision_fallback(base64_data: str, filename: str) -> str | None:
+    """Render PDF pages as images and analyze via vision preprocessor.
+    Returns combined analysis text, or None if vision is unavailable."""
+    page_images = _render_pdf_pages_as_images(base64_data, max_pages=3, dpi=150)
+    if not page_images:
+        return None
+
+    # Try first page — if vision fails on page 1, don't waste time on the rest
+    first_jpeg, first_label = page_images[0]
+    first_result = await _run_vision_preprocessor(
+        text=(
+            f"Analyze this PDF page ({first_label} of '{filename}'). "
+            "Extract ALL visible text, numbers, labels, and describe any diagrams, tables, or visual elements. "
+            "For non-English text, include the original text and a brief English summary."
+        ),
+        image_bytes=first_jpeg, image_mime="image/jpeg",
+    )
+    if not first_result:
+        logger.warning("PDF vision fallback: first page failed, aborting remaining pages")
+        return None
+
+    analyses: list[str] = []
+    first_text = first_result[0][:2500]
+    analyses.append(f"[Page {first_label}]\n{first_text}")
+    total_chars = len(first_text)
+    max_total_chars = 8000
+
+    # Process remaining pages
+    for jpeg_bytes, label in page_images[1:]:
+        if total_chars >= max_total_chars:
+            break
+        result = await _run_vision_preprocessor(
+            text=(
+                f"Analyze this PDF page ({label} of '{filename}'). "
+                "Extract ALL visible text, numbers, labels, and describe any diagrams, tables, or visual elements. "
+                "For non-English text, include the original text and a brief English summary."
+            ),
+            image_bytes=jpeg_bytes, image_mime="image/jpeg",
+        )
+        if result:
+            analysis_text = result[0][:2500]
+            analyses.append(f"[Page {label}]\n{analysis_text}")
+            total_chars += len(analysis_text)
+
+    combined = "\n\n".join(analyses)
+    if len(combined) > max_total_chars:
+        combined = combined[:max_total_chars] + "\n\n[...vision analysis truncated]"
+    return combined
+
+
+async def _preprocess_document_tags_async(text: str) -> str:
+    """Replace <document> tags with extracted content.
+    For PDFs: try text first; if quality is poor, render pages as images
+    and run through vision preprocessor."""
+    matches = list(_DOCUMENT_TAG_RE.finditer(text))
+    if not matches:
+        logger.info("No <document> regex matches found")
+        return text
+
+    logger.info("Found %d document tag(s) in text", len(matches))
+    result = text
+    for m in reversed(matches):
+        name = m.group(1)
+        content = m.group(2).strip()
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        logger.info("Processing document: name=%s, ext=%s, content_len=%d", name, ext, len(content))
+
+        if ext != "pdf":
+            continue
+
+        extracted, num_pages = _extract_pdf_text(content)
+
+        if _assess_pdf_text_quality(extracted, num_pages):
+            replacement = f'<document name="{name}" type="pdf-extracted">\n{extracted}\n</document>'
+        else:
+            logger.info("PDF '%s' text quality is poor (%d pages), trying vision fallback", name, num_pages)
+            vision_text = await _pdf_vision_fallback(content, name)
+            if vision_text:
+                replacement = f'<document name="{name}" type="pdf-vision">\n{vision_text}\n</document>'
+            else:
+                logger.warning("PDF '%s' vision fallback failed, using raw text extraction", name)
+                fallback_note = "[Note: This PDF appears to be visual/scanned. Text extraction may be incomplete.]\n\n"
+                replacement = f'<document name="{name}" type="pdf-extracted">\n{fallback_note}{extracted}\n</document>'
+
+        result = result[:m.start()] + replacement + result[m.end():]
+
+    return result
 
 
 def _preprocess_document_tags(text: str) -> str:
@@ -113,7 +302,7 @@ def _preprocess_document_tags(text: str) -> str:
         ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
 
         if ext == "pdf":
-            extracted = _extract_pdf_text(content)
+            extracted, _ = _extract_pdf_text(content)
             return f'<document name="{name}" type="pdf-extracted">\n{extracted}\n</document>'
         # Non-PDF documents (text, code, etc.) — keep as-is
         return m.group(0)
@@ -202,16 +391,16 @@ _IMAGE_GEN_REQUEST_OBJECTS = (
 # Providers that can participate in tool/fallback guardrails.
 # Ollama is included because Asta uses text tool-call protocols with it.
 _TOOL_CAPABLE_PROVIDERS = frozenset({"openai", "groq", "openrouter", "claude", "google", "ollama"})
-_VISION_PREPROCESSOR_PROVIDERS = frozenset({"openrouter", "ollama"})
+_VISION_PREPROCESSOR_PROVIDERS = frozenset({"openrouter", "google"})
 _VISION_PROVIDER_KEY = {
     "openrouter": "openrouter_api_key",
+    "google": "gemini_api_key",
 }
-_VISION_PROVIDER_ORDER_DEFAULT = ("openrouter", "ollama")  # Nemotron first, Minimax fallback
-_VISION_OPENROUTER_MODEL_DEFAULT = "nvidia/nemotron-nano-12b-v2-vl:free"
-_VISION_OLLAMA_MODEL_DEFAULT = "minimax-m2.5:cloud"
+_VISION_PROVIDER_ORDER_DEFAULT = ("openrouter", "google")
+_VISION_OPENROUTER_MODEL_DEFAULT = "google/gemma-3-27b-it:free,mistralai/mistral-small-3.1-24b-instruct:free,nvidia/nemotron-nano-12b-v2-vl:free"
 _VISION_PREPROCESSOR_UNAVAILABLE_MESSAGE = (
     "Image received, but the dedicated vision preprocessor is unavailable. "
-    "Asta expects OpenRouter Nemotron first and Ollama Minimax as fallback."
+    "Asta tries OpenRouter (Gemma 3 27B, Mistral Small 3.1, Nemotron VL) then Google Gemini as fallback."
 )
 _GIF_COOLDOWN_SECONDS = 30 * 60
 _SILENT_REPLY_TOKEN = "NO_REPLY"
@@ -662,15 +851,33 @@ async def _run_vision_preprocessor(
             if not api_key:
                 continue
             if openrouter_model:
-                chat_kwargs["model"] = openrouter_model
+                # Use only the first model — don't chain through all fallbacks
+                # (each fallback adds a full timeout cycle)
+                chat_kwargs["model"] = openrouter_model.split(",")[0].strip()
             chat_kwargs["skip_model_policy"] = True
-        elif candidate == "ollama":
-            chat_kwargs["model"] = _VISION_OLLAMA_MODEL_DEFAULT
+        elif candidate == "google":
+            key_name = _VISION_PROVIDER_KEY.get(candidate)
+            if not key_name:
+                continue
+            api_key = await get_api_key(key_name)
+            if not api_key:
+                # Also try google_ai_key alias
+                api_key = await get_api_key("google_ai_key")
+            if not api_key:
+                continue
+            chat_kwargs["model"] = "gemini-2.0-flash"
+        chat_kwargs["timeout"] = 45
         try:
-            resp = await provider.chat(
-                [{"role": "user", "content": image_prompt}],
-                **chat_kwargs,
+            resp = await asyncio.wait_for(
+                provider.chat(
+                    [{"role": "user", "content": image_prompt}],
+                    **chat_kwargs,
+                ),
+                timeout=50,
             )
+        except asyncio.TimeoutError:
+            logger.warning("Vision preprocessor provider=%s timed out after 50s", candidate)
+            continue
         except Exception as e:
             logger.warning("Vision preprocessor provider=%s failed: %s", candidate, e)
             continue
@@ -2394,6 +2601,28 @@ async def handle_message(
         except Exception as e:
             logger.warning("Image compression failed: %s", e)
 
+    # Extract inline image early — before any text processing touches the huge base64 blob
+    if not image_bytes:
+        text, inline_img, inline_mime = _extract_inline_image(text)
+        if inline_img:
+            image_bytes = inline_img
+            image_mime = inline_mime
+            logger.info("Extracted inline image from text (%d bytes, %s)", len(inline_img), inline_mime)
+            try:
+                img = Image.open(io.BytesIO(image_bytes))
+                max_size = 1024
+                if img.width > max_size or img.height > max_size:
+                    img.thumbnail((max_size, max_size))
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                out_buf = io.BytesIO()
+                img.save(out_buf, format="JPEG", quality=70, optimize=True)
+                image_bytes = out_buf.getvalue()
+                image_mime = "image/jpeg"
+                logger.info("Inline image compressed: %d bytes", len(image_bytes))
+            except Exception as e:
+                logger.warning("Inline image compression failed: %s", e)
+
     raw_user_text = text
     cid = conversation_id or await db.get_or_create_conversation(user_id, channel)
     # Persist user message early so Telegram (and web) thread shows it even if handler or provider fails later
@@ -2689,9 +2918,12 @@ async def handle_message(
     # --- END SERVICE CALLS ---
 
     # Intent-based skill selection: only run and show skills relevant to this message (saves tokens)
+    # Strip inline images and document tags so base64 blobs don't trigger false skill matches
+    _skill_text = re.sub(r'!\[[^\]]*\]\(data:[^)]+\)', '', text)
+    _skill_text = re.sub(r'<document\s+[^>]*>[\s\S]*?</document>', '', _skill_text).strip()
     from app.skill_router import get_skills_to_use, SKILL_STATUS_LABELS
-    
-    skills_to_use = get_skills_to_use(text, enabled)
+
+    skills_to_use = get_skills_to_use(_skill_text or text, enabled)
     
     # When user says "yeah do that" / "yes" after AI offered to save to a file, include files skill
     if "files" in enabled and "files" not in skills_to_use:
@@ -2817,12 +3049,15 @@ async def handle_message(
     effective_user_text = text
     # Extract text from any embedded PDF documents before sending to provider
     if "<document " in effective_user_text:
-        effective_user_text = _preprocess_document_tags(effective_user_text)
+        logger.info("Found <document> tag in text, running async preprocessing (text len=%d)", len(effective_user_text))
+        effective_user_text = await _preprocess_document_tags_async(effective_user_text)
+        logger.info("Document preprocessing complete (result len=%d)", len(effective_user_text))
         # Guide: answer about the document directly, don't over-process with tools
         context += (
             "\n\n[DOCUMENT ATTACHED]\n"
             "The user attached a file. The extracted text is in the message. "
-            "Answer their question about the document directly — do NOT use tools to re-process it. "
+            "Answer their question about the document directly — do NOT use tools or workspace skills to re-process it. "
+            "Do NOT read any SKILL.md files unless the user explicitly asks to use a specific service (e.g. 'save to notes'). "
             "If asked to summarize, extract info, or answer questions about it, use the extracted text inline."
         )
 
@@ -3140,7 +3375,8 @@ async def handle_message(
         logger.info("Provider %s returned tool_calls=%s (count=%s)", provider_used.name, has_tc, len(response.tool_calls or []))
 
     # Tool-call loop: if model requested exec (or other tools), run and re-call same provider until done
-    MAX_TOOL_ROUNDS = 30
+    MAX_TOOL_ROUNDS = 100
+    COMPACT_EVERY_N_ROUNDS = 15
     current_messages = list(messages)
     
     # Initialize tool loop detector for this conversation
@@ -3214,7 +3450,7 @@ async def handle_message(
         last_tool_error_mutating = False
         last_tool_error_fingerprint = ""
 
-    for _ in range(MAX_TOOL_ROUNDS):
+    for _round in range(MAX_TOOL_ROUNDS):
         if tools and not response.tool_calls:
             parsed_calls, cleaned = _extract_textual_tool_calls(response.content or "", allowed_tool_names)
             if parsed_calls:
@@ -3755,6 +3991,15 @@ async def handle_message(
             })
             logger.info("Script nudge injected after %d exec calls", exec_tool_call_count)
 
+        # Compact old tool rounds every N rounds (OpenClaw-style context compaction).
+        # Replaces old tool call/result pairs with a concise inline summary so long
+        # agentic tasks don't overflow the context window.
+        if _round > 0 and _round % COMPACT_EVERY_N_ROUNDS == 0:
+            from app.compaction import compact_tool_rounds
+            current_messages, _did_compact = compact_tool_rounds(current_messages)
+            if _did_compact:
+                logger.info("Tool history compacted at round %d (%d messages remaining)", _round, len(current_messages))
+
         # Re-call same provider with updated messages (no fallback switch); use that provider's model
         tool_kwargs = {**chat_kwargs}
         if provider_used.name == provider.name:
@@ -3807,8 +4052,7 @@ async def handle_message(
     if _tool_rounds_exhausted and not response.error:
         exhausted_note = (
             f"\n\n_(I hit my action limit ({MAX_TOOL_ROUNDS} steps) mid-task and couldn't finish. "
-            "For large bulk tasks like this, ask me to write a single script that does everything "
-            "in one go — I can handle hundreds of operations in one step that way.)_"
+            "Try breaking the task into smaller parts or ask me to write a script to handle it in one go.)_"
         )
         raw_reply = (raw_reply + exhausted_note).strip()
         logger.info("Tool rounds exhausted (%d/%d) — appending user-facing note", MAX_TOOL_ROUNDS, MAX_TOOL_ROUNDS)

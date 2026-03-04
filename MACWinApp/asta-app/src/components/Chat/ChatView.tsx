@@ -125,7 +125,9 @@ export default function ChatView({ conversationId, onConversationCreated, agents
   }, [fetchSettings]);
 
   useEffect(() => {
-    if (!conversationId) { setMessages([]); return; }
+    setSelectedAgent(null);
+    setMessages([]);
+    if (!conversationId) return;
     setLoading(true);
     loadMessages(conversationId)
       .then(r => setMessages((r.messages ?? []).map(normalizeMsg)))
@@ -287,12 +289,17 @@ export default function ChatView({ conversationId, onConversationCreated, agents
 
   async function submitEdit() {
     if (!editingId || !conversationId) return;
+    if (!editText.trim()) { cancelEdit(); return; }  // don't truncate for empty text
+    if (streaming) return;                            // don't truncate during active stream
     const msgIndex = messages.findIndex(m => m.id === editingId);
     if (msgIndex < 0) return;
+    const captured = editText;
+    // Clear edit state before async work so UI doesn't flash between states
+    setEditingId(null);
+    setEditText("");
     await truncateConversation(conversationId, msgIndex).catch(() => {});
     setMessages(prev => prev.slice(0, msgIndex));
-    setEditingId(null);
-    send(editText);
+    send(captured);
   }
 
   function cancelEdit() {
@@ -601,6 +608,10 @@ export default function ChatView({ conversationId, onConversationCreated, agents
                 <div key={msg.id} className="flex justify-end animate-fade-in">
                   <div className="max-w-[75%] space-y-2">
                     <textarea value={editText} onChange={e => setEditText(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submitEdit(); }
+                        if (e.key === "Escape") { e.preventDefault(); cancelEdit(); }
+                      }}
                       className="w-full bg-white/[.05] border border-accent/30 rounded-bubble px-4 py-3 text-14 text-label outline-none resize-none focus:border-accent/60 transition-colors"
                       rows={3} autoFocus />
                     <div className="flex justify-end gap-2">
@@ -617,9 +628,11 @@ export default function ChatView({ conversationId, onConversationCreated, agents
                 <div className="relative max-w-[75%] flex items-start gap-2">
                   {/* Actions — left of bubble */}
                   <div className="flex gap-0.5 pt-2 shrink-0 opacity-0 group-hover:opacity-100 transition-all duration-200">
-                    <button onClick={() => startEdit(msg)} className="text-label-tertiary hover:text-label-secondary p-1.5 rounded-mac hover:bg-white/[.06] transition-colors" title="Edit">
-                      <IconEdit size={12} />
-                    </button>
+                    {!streaming && (
+                      <button onClick={() => startEdit(msg)} className="text-label-tertiary hover:text-label-secondary p-1.5 rounded-mac hover:bg-white/[.06] transition-colors" title="Edit">
+                        <IconEdit size={12} />
+                      </button>
+                    )}
                     <button onClick={() => copyToClipboard(msg.content, msg.id)} className="text-label-tertiary hover:text-label-secondary p-1.5 rounded-mac hover:bg-white/[.06] transition-colors" title="Copy">
                       {copiedId === msg.id ? <IconCheck size={12} className="text-success" /> : <IconCopy size={12} />}
                     </button>

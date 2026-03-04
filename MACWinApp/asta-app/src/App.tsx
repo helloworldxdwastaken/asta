@@ -6,7 +6,7 @@ import SettingsSheet from "./components/Settings/SettingsSheet";
 import UpdateToast from "./components/UpdateToast";
 import AgentsSheet from "./components/Agents/AgentsSheet";
 import { getSetupDone } from "./lib/store";
-import { checkHealth, getDefaultAI, listAgents } from "./lib/api";
+import { checkHealth, getDefaultAI, listAgents, autoResolveBackend } from "./lib/api";
 
 interface Agent {
   id: string; name: string; description?: string; icon?: string;
@@ -29,15 +29,24 @@ export default function App() {
   const [isOnline, setIsOnline] = useState(false);
   const [providerKey, setProviderKey] = useState("claude");
 
-  // Poll health + fetch provider
+  // On mount: auto-resolve backend URL, then poll health + fetch data
   useEffect(() => {
+    const fetchProvider = () => getDefaultAI().then(r => setProviderKey(r.provider ?? r.default_ai_provider ?? "claude")).catch(() => {});
+
+    // Auto-resolve first, then start normal polling
+    autoResolveBackend().then(ok => {
+      setIsOnline(ok);
+      if (ok) {
+        fetchProvider();
+        listAgents().then(r => setAgents(r.agents ?? [])).catch(() => {});
+      }
+    });
+
     const check = async () => {
       const ok = await checkHealth().catch(() => false);
       setIsOnline(ok);
     };
-    check();
     const interval = setInterval(check, 15000);
-    const fetchProvider = () => getDefaultAI().then(r => setProviderKey(r.provider ?? r.default_ai_provider ?? "claude")).catch(() => {});
     fetchProvider();
     listAgents().then(r => setAgents(r.agents ?? [])).catch(() => {});
     window.addEventListener("settings-changed", fetchProvider);
