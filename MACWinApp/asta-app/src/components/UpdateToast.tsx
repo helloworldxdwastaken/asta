@@ -58,15 +58,14 @@ export default function UpdateToast() {
     if (update) localStorage.setItem("dismissedAppUpdate", update.latest_version);
   }
 
-  function openDownload() {
-    const url = update?.download_url || update?.release_url;
-    if (url) window.open(url, "_blank");
+  function openRelease() {
+    if (update?.release_url) window.open(update.release_url, "_blank");
   }
 
   if (!update || dismissed) return null;
 
   return (
-    <div className="fixed bottom-5 right-5 z-[9999] max-w-xs animate-slide-up">
+    <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[9999] max-w-xs animate-slide-up">
       <div className="bg-surface-raised border border-separator rounded-2xl shadow-2xl p-4 space-y-2">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-2">
@@ -88,9 +87,9 @@ export default function UpdateToast() {
             </svg>
           </button>
         </div>
-        <button onClick={openDownload}
+        <button onClick={openRelease}
           className="w-full text-12 font-medium bg-accent hover:bg-accent-hover text-white py-2 rounded-xl transition-colors">
-          Download update
+          View release
         </button>
       </div>
     </div>

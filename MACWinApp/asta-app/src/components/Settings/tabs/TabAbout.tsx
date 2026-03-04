@@ -1,7 +1,16 @@
 import { useState, useEffect } from "react";
 import { getHealth, checkUpdate, triggerUpdate, getServerStatus, getUsage } from "../../../lib/api";
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
 import { IconCpu, IconMemory, IconClock } from "../../../lib/icons";
+
+interface UpdateInfo {
+  has_update: boolean;
+  latest_version: string;
+  current_version: string;
+  release_url: string;
+  download_url?: string;
+}
 
 export default function TabAbout() {
   const [appVersion, setAppVersion] = useState("–");
@@ -10,6 +19,9 @@ export default function TabAbout() {
   const [usage, setUsage] = useState<any>(null);
   const [updateAvail, setUpdateAvail] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+  const [checkDone, setCheckDone] = useState(false);
 
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => {});
@@ -23,6 +35,20 @@ export default function TabAbout() {
     setUpdating(true);
     await triggerUpdate().catch(()=>{});
     setUpdating(false);
+  }
+
+  async function manualCheck() {
+    setChecking(true);
+    setCheckDone(false);
+    setUpdateInfo(null);
+    try {
+      const ver = await getVersion();
+      const result = await invoke<UpdateInfo>("check_app_update", { currentVersion: ver });
+      setUpdateInfo(result);
+      if (result.has_update) setUpdateAvail(true);
+    } catch { /* ignore */ }
+    setChecking(false);
+    setCheckDone(true);
   }
 
   // Format server-status fields (backend returns cpu_percent, ram object, uptime_str)
@@ -90,11 +116,29 @@ export default function TabAbout() {
         </div>
       )}
 
-      {updateAvail && (
-        <button onClick={doUpdate} disabled={updating}
-          className="bg-accent hover:bg-accent-hover disabled:opacity-50 text-white text-13 rounded-mac px-5 py-2 transition-colors">
-          {updating ? "Updating…" : "Update Available — Install"}
+      <div className="flex items-center gap-3">
+        <button onClick={manualCheck} disabled={checking}
+          className="bg-white/[.06] hover:bg-white/[.10] disabled:opacity-50 text-label text-13 rounded-mac px-4 py-2 border border-separator transition-colors">
+          {checking ? "Checking…" : "Check for updates"}
         </button>
+        {checkDone && !updateInfo?.has_update && (
+          <span className="text-12 text-label-tertiary">You're on the latest version</span>
+        )}
+      </div>
+
+      {(updateAvail || updateInfo?.has_update) && (
+        <div className="bg-white/[.04] rounded-mac p-4 flex items-center justify-between">
+          <div>
+            <p className="text-13 font-semibold text-label">Update available</p>
+            <p className="text-11 text-label-tertiary">v{updateInfo?.latest_version ?? "new"}</p>
+          </div>
+          <button onClick={() => {
+            if (updateInfo?.release_url) window.open(updateInfo.release_url, "_blank");
+          }}
+            className="bg-accent hover:bg-accent-hover text-white text-13 rounded-mac px-5 py-2 transition-colors">
+            View release
+          </button>
+        </div>
       )}
     </div>
   );
