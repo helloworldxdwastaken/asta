@@ -26,8 +26,13 @@ export function setBackendUrl(url: string): void {
 async function _probe(url: string): Promise<boolean> {
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 2500);
-    const res = await _fetch(`${url}/api/health`, { signal: controller.signal });
+    const timer = setTimeout(() => controller.abort(), 5000);
+    const opts: any = { signal: controller.signal };
+    // Tauri HTTP plugin: accept Tailscale/self-signed certs on remote URLs
+    if (url.startsWith("https://")) {
+      opts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
+    }
+    const res = await _fetch(`${url}/api/health`, opts);
     clearTimeout(timer);
     return res.ok;
   } catch { return false; }
@@ -80,18 +85,29 @@ async function req<T>(method: string, path: string, body?: unknown, query?: Reco
     const params = new URLSearchParams(query);
     url += `?${params}`;
   }
-  const res = await _fetch(url, {
+  const opts: any = {
     method,
     headers: body ? { "Content-Type": "application/json" } : {},
     body: body ? JSON.stringify(body) : undefined,
-  });
+  };
+  // Tauri HTTP plugin: accept Tailscale/self-signed certs on remote HTTPS
+  if (_backendUrl.startsWith("https://")) {
+    opts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
+  }
+  const res = await _fetch(url, opts);
   if (!res.ok) throw new Error(`${method} ${path} → ${res.status}`);
   const text = await res.text();
   return text ? JSON.parse(text) : ({} as T);
 }
 
 // ── Health & Status ───────────────────────────────────────────────────────────
-export const checkHealth = () => _fetch(`${_backendUrl}/api/health`).then(r => r.ok).catch(() => false);
+export const checkHealth = () => {
+  const opts: any = {};
+  if (_backendUrl.startsWith("https://")) {
+    opts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
+  }
+  return _fetch(`${_backendUrl}/api/health`, opts).then(r => r.ok).catch(() => false);
+};
 export const getHealth = () => req<any>("GET", "/api/health");
 export const getStatus = () => req<any>("GET", "/api/status");
 export const getServerStatus = () => req<any>("GET", "/api/settings/server-status");
@@ -172,14 +188,18 @@ export function streamChat(
   let aborted = false;
   const controller = new AbortController();
 
-  _fetch(`${_backendUrl}/api/chat/stream`, {
+  const fetchOpts: any = {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       ...opts, channel: opts.channel ?? "web", user_id: opts.user_id ?? "default",
     }),
     signal: controller.signal,
-  }).then(async (res) => {
+  };
+  if (_backendUrl.startsWith("https://")) {
+    fetchOpts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
+  }
+  _fetch(`${_backendUrl}/api/chat/stream`, fetchOpts).then(async (res) => {
     if (!res.ok || !res.body) throw new Error(`Stream error: ${res.status}`);
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -335,7 +355,11 @@ export const toggleAgent = (id: string) => req("PUT", `/api/agents/${id}/enabled
 export async function uploadSkill(file: File): Promise<any> {
   const form = new FormData();
   form.append("file", file);
-  const res = await _fetch(`${_backendUrl}/api/skills/upload`, { method: "POST", body: form });
+  const uploadOpts: any = { method: "POST", body: form };
+  if (_backendUrl.startsWith("https://")) {
+    uploadOpts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
+  }
+  const res = await _fetch(`${_backendUrl}/api/skills/upload`, uploadOpts);
   if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
   return res.json();
 }
@@ -343,7 +367,11 @@ export async function uploadSkill(file: File): Promise<any> {
 // ── Downloads ─────────────────────────────────────────────────────────────────
 export async function downloadPdf(filename: string): Promise<void> {
   const url = `${_backendUrl}/api/files/download-pdf/${encodeURIComponent(filename)}`;
-  const res = await _fetch(url);
+  const dlOpts: any = {};
+  if (_backendUrl.startsWith("https://")) {
+    dlOpts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
+  }
+  const res = await _fetch(url, dlOpts);
   if (!res.ok) throw new Error(`Download failed: ${res.status}`);
   const blob = await res.blob();
   const blobUrl = URL.createObjectURL(blob);
