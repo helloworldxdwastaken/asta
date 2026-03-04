@@ -90,7 +90,7 @@ export default function TabKeys() {
         })}
       </div>
       <button onClick={save} disabled={saving}
-        className="bubble-gradient disabled:opacity-50 text-white text-13 rounded-mac px-6 py-2.5 shadow-glow-sm hover:shadow-glow transition-all duration-200 active:scale-[0.97]">
+        className="accent-gradient disabled:opacity-50 text-white text-13 rounded-mac px-6 py-2.5 shadow-glow-sm hover:shadow-glow transition-all duration-200 active:scale-[0.97]">
         {saved ? "Saved" : saving ? "Saving..." : "Save Keys"}
       </button>
     </div>

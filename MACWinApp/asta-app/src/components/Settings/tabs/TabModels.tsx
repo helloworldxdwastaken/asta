@@ -3,7 +3,7 @@ import { getModels, setModel, getAvailableModels, getUsage } from "../../../lib/
 import ProviderLogo from "../../ProviderLogo";
 
 const PROVIDERS = [
-  { key: "anthropic", name: "Claude", default: "claude-sonnet-4-6" },
+  { key: "claude", name: "Claude", default: "claude-sonnet-4-6" },
   { key: "openai", name: "OpenAI", default: "gpt-4o" },
   { key: "google", name: "Google Gemini", default: "gemini-2.0-flash" },
   { key: "groq", name: "Groq", default: "llama-3.3-70b-versatile" },
@@ -29,7 +29,10 @@ export default function TabModels() {
     setSaving(null);
   }
 
-  const providerUsage = usage?.by_provider ?? usage?.providers ?? {};
+  const providerUsage: Record<string, any> = {};
+  if (Array.isArray(usage?.usage)) {
+    for (const u of usage.usage) providerUsage[u.provider] = u;
+  }
 
   return (
     <div className="text-label space-y-7">
@@ -58,7 +61,7 @@ export default function TabModels() {
                       className="flex-1 bg-white/[.04] border border-separator hover:border-separator-bold rounded-mac px-3 py-2.5 text-13 font-mono text-label outline-none focus:border-accent/40 transition-colors" />
                   )}
                   <button onClick={() => save(p.key)} disabled={saving === p.key}
-                    className="text-12 bubble-gradient disabled:opacity-50 text-white px-4 py-2 rounded-mac transition-all duration-200 active:scale-[0.97] shadow-glow-sm shrink-0">
+                    className="text-12 accent-gradient disabled:opacity-50 text-white px-4 py-2 rounded-mac transition-all duration-200 active:scale-[0.97] shadow-glow-sm shrink-0">
                     {saving === p.key ? "..." : "Set"}
                   </button>
                 </div>

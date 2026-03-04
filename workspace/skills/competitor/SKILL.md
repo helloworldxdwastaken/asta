@@ -3,6 +3,7 @@ name: Competitor Intelligence
 description: Competitor intelligence and market analysis. Use for competitor mapping, offer/pricing comparisons, positioning analysis, win-loss insights, and strategic market reports.
 emoji: 🤖
 icon: doc.text.magnifyingglass
+category: Research
 thinking: high
 is_agent: true
 ---

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { getHealth, checkUpdate, triggerUpdate, getServerStatus, getUsage } from "../../../lib/api";
 import { getVersion } from "@tauri-apps/api/app";
+import { IconCpu, IconMemory, IconClock } from "../../../lib/icons";
 
 export default function TabAbout() {
   const [appVersion, setAppVersion] = useState("–");
@@ -40,10 +41,10 @@ export default function TabAbout() {
   // Usage: backend returns { usage: [...], days: 7 }
   const usageList = usage?.usage ?? [];
   const totalMessages = Array.isArray(usageList)
-    ? usageList.reduce((s: number, u: any) => s + (u.count ?? u.messages ?? 0), 0)
+    ? usageList.reduce((s: number, u: any) => s + (u.calls ?? u.count ?? 0), 0)
     : (usage?.messages ?? 0);
   const totalTokens = Array.isArray(usageList)
-    ? usageList.reduce((s: number, u: any) => s + (u.total_tokens ?? u.tokens ?? 0), 0)
+    ? usageList.reduce((s: number, u: any) => s + ((u.input_tokens ?? 0) + (u.output_tokens ?? 0)), 0)
     : (usage?.tokens ?? 0);
 
   return (
@@ -63,11 +64,16 @@ export default function TabAbout() {
       {serverStatus && (
         <div className="bg-white/[.04] rounded-mac p-4 space-y-2">
           <p className="text-11 font-semibold text-label-tertiary uppercase tracking-wider">Server</p>
-          <div className="grid grid-cols-3 gap-3 text-center">
-            {[["CPU", cpu], ["RAM", ram], ["Uptime", uptime]].map(([k, v]) => (
-              <div key={k}>
-                <p className="text-xl font-semibold tabular-nums">{v}</p>
-                <p className="text-11 text-label-tertiary">{k}</p>
+          <div className="grid grid-cols-3 gap-3">
+            {([
+              { icon: <IconCpu size={16} />, label: "CPU", value: cpu },
+              { icon: <IconMemory size={16} />, label: "RAM", value: ram },
+              { icon: <IconClock size={16} />, label: "Uptime", value: uptime },
+            ] as const).map(({ icon, label, value }) => (
+              <div key={label} className="flex flex-col items-center gap-1.5">
+                <span className="text-label-tertiary">{icon}</span>
+                <p className="text-xl font-semibold tabular-nums">{value}</p>
+                <p className="text-11 text-label-tertiary">{label}</p>
               </div>
             ))}
           </div>

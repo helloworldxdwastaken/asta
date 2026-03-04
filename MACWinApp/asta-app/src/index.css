@@ -28,9 +28,10 @@
   --table-border:    rgba(255,255,255,0.08);
   --table-header-bg: rgba(255,255,255,0.03);
   --inline-code-bg:  rgba(255,255,255,0.06);
-  --user-bubble:     #FF6B2C;
-  --user-bubble-end: #FF3D7F;
-  --user-bubble-text:#FFFFFF;
+  --user-bubble:     #2C2C30;
+  --user-bubble-text:#F0EDE8;
+  --accent:          #FF6B2C;
+  --accent-end:      #FF3D7F;
   --accent-glow:     rgba(255,107,44,0.15);
   --accent-dim:      rgba(255,107,44,0.08);
   --ring-color:      rgba(255,107,44,0.3);
@@ -61,9 +62,10 @@
   --table-border:    rgba(0,0,0,0.08);
   --table-header-bg: rgba(0,0,0,0.03);
   --inline-code-bg:  rgba(0,0,0,0.05);
-  --user-bubble:     #E8581A;
-  --user-bubble-end: #D4326A;
-  --user-bubble-text:#FFFFFF;
+  --user-bubble:     #E5E5EA;
+  --user-bubble-text:#1A1715;
+  --accent:          #E8581A;
+  --accent-end:      #D4326A;
   --accent-glow:     rgba(232,88,26,0.1);
   --accent-dim:      rgba(232,88,26,0.06);
   --ring-color:      rgba(232,88,26,0.25);
@@ -154,7 +156,7 @@ code {
 .prose p { margin: 0.5em 0; }
 .prose ul, .prose ol { margin: 0.4em 0; padding-left: 1.5em; }
 .prose li { margin: 0.15em 0; }
-.prose a { color: var(--user-bubble); text-decoration: none; }
+.prose a { color: var(--accent); text-decoration: none; }
 .prose a:hover { text-decoration: underline; }
 .prose strong { font-weight: 600; }
 .prose blockquote {
@@ -222,7 +224,13 @@ code {
 /* ── Gradient user bubble ────────────────────────────────────────────────── */
 
 .bubble-gradient {
-  background: linear-gradient(135deg, var(--user-bubble), var(--user-bubble-end));
+  background: var(--user-bubble);
+}
+
+/* ── Accent gradient (buttons, CTAs) ────────────────────────────────────── */
+
+.accent-gradient {
+  background: linear-gradient(135deg, var(--accent), var(--accent-end));
 }
 
 /* ── Glow effects ────────────────────────────────────────────────────────── */
@@ -249,7 +257,7 @@ code {
 /* ── Gradient text ───────────────────────────────────────────────────────── */
 
 .text-gradient {
-  background: linear-gradient(135deg, var(--user-bubble), var(--user-bubble-end));
+  background: linear-gradient(135deg, var(--accent), var(--accent-end));
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -310,11 +318,42 @@ code {
   image-rendering: pixelated;
 }
 
-/* ── Dot grid background for empty chat ────────────────────────────────── */
+/* ── Synthwave perspective grid for empty chat ─────────────────────────── */
 
-.dot-grid {
-  background-image: radial-gradient(circle, var(--separator-bold) 1px, transparent 1px);
-  background-size: 28px 28px;
-  mask-image: radial-gradient(ellipse 70% 60% at 50% 50%, black 30%, transparent 80%);
-  -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 50%, black 30%, transparent 80%);
+.synth-grid {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transition: opacity 0.5s ease;
+}
+.synth-grid-inner {
+  position: absolute;
+  left: -50%;
+  right: -50%;
+  bottom: -10%;
+  height: 70%;
+  background-image:
+    linear-gradient(to right, var(--separator) 1px, transparent 1px),
+    linear-gradient(to top,   var(--separator) 1px, transparent 1px);
+  background-size: 60px 40px;
+  transform: perspective(400px) rotateX(58deg);
+  transform-origin: center bottom;
+  mask-image: linear-gradient(to top, rgba(0,0,0,0.35) 0%, rgba(0,0,0,0.08) 50%, transparent 75%);
+  -webkit-mask-image: linear-gradient(to top, rgba(0,0,0,0.35) 0%, rgba(0,0,0,0.08) 50%, transparent 75%);
+  animation: grid-scroll 8s linear infinite;
+}
+@keyframes grid-scroll {
+  from { background-position: 0 0; }
+  to   { background-position: 0 40px; }
+}
+
+/* ── Hero entrance animation for empty chat elements ───────────────────── */
+
+.hero-enter {
+  animation: hero-rise 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+@keyframes hero-rise {
+  from { opacity: 0; transform: translateY(18px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
 }

@@ -215,26 +215,26 @@ export const setReasoning = (mode: string) =>
   req("PUT", "/api/settings/reasoning", { reasoning_mode: mode });
 export const setMoodSetting = (mood: string) =>
   req("PUT", "/api/settings/mood", { mood });
-export const setPersona = (file: string, content: string) =>
-  req("PUT", "/api/settings/persona", { file, content });
+export const setPersona = (data: { soul?: string; user?: string }) =>
+  req("PUT", "/api/settings/persona", data);
 export const setProviderEnabled = (provider: string, enabled: boolean) =>
   req("PUT", "/api/settings/provider-flow/provider-enabled", { provider, enabled });
 export const setFinalMode = (mode: string) =>
   req("PUT", "/api/settings/final-mode", { final_mode: mode });
-export const setVision = (enabled: boolean) =>
-  req("PUT", "/api/settings/vision", { vision_enabled: enabled });
+export const setVision = (preprocess: boolean, providerOrder = "openrouter,ollama", openrouterModel = "") =>
+  req("PUT", "/api/settings/vision", { preprocess, provider_order: providerOrder, openrouter_model: openrouterModel });
 export const setModel = (provider: string, model: string) =>
   req("PUT", "/api/settings/models", { provider, model });
 export const setKeys = (keys: Record<string, string>) =>
   req("PUT", "/api/settings/keys", keys);
-export const toggleSkill = (skillId: string) =>
-  req("PUT", "/api/settings/skills", { skill_id: skillId });
+export const toggleSkill = (skillId: string, enabled: boolean) =>
+  req("PUT", "/api/settings/skills", { skill_id: skillId, enabled });
 export const setTelegramUsername = (username: string) =>
   req("POST", "/api/settings/telegram/username", { username });
 export const setPingram = (data: any) =>
   req("POST", "/api/settings/pingram", data);
-export const testPingramCall = () =>
-  req("POST", "/api/settings/pingram/test-call");
+export const testPingramCall = (testNumber: string) =>
+  req("POST", "/api/settings/pingram/test-call", { test_number: testNumber });
 export const triggerUpdate = () =>
   req("POST", "/api/settings/update");
 
@@ -286,6 +286,22 @@ export async function uploadSkill(file: File): Promise<any> {
   const res = await _fetch(`${_backendUrl}/api/skills/upload`, { method: "POST", body: form });
   if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
   return res.json();
+}
+
+// ── Downloads ─────────────────────────────────────────────────────────────────
+export async function downloadPdf(filename: string): Promise<void> {
+  const url = `${_backendUrl}/api/files/download-pdf/${encodeURIComponent(filename)}`;
+  const res = await _fetch(url);
+  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+  const blob = await res.blob();
+  const blobUrl = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = blobUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(blobUrl);
 }
 
 // ── System ────────────────────────────────────────────────────────────────────

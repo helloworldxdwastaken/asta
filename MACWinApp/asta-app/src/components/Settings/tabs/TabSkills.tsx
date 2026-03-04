@@ -12,8 +12,11 @@ export default function TabSkills() {
   useEffect(() => { getSkills().then(r => setSkills(r.skills ?? [])).catch(()=>{}); }, []);
 
   async function toggle(id: string) {
-    await toggleSkill(id);
-    setSkills(prev => prev.map(s => s.id === id ? {...s, enabled: !s.enabled} : s));
+    const skill = skills.find(s => s.id === id);
+    if (!skill) return;
+    const newEnabled = !skill.enabled;
+    await toggleSkill(id, newEnabled);
+    setSkills(prev => prev.map(s => s.id === id ? {...s, enabled: newEnabled} : s));
   }
 
   async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -28,7 +31,7 @@ export default function TabSkills() {
       <div className="flex items-center justify-between">
         <h2 className="text-16 font-semibold">Skills</h2>
         <button onClick={() => fileRef.current?.click()}
-          className="text-12 bubble-gradient text-white px-4 py-2 rounded-mac flex items-center gap-1.5 shadow-glow-sm hover:shadow-glow transition-all duration-200 active:scale-[0.97]">
+          className="text-12 accent-gradient text-white px-4 py-2 rounded-mac flex items-center gap-1.5 shadow-glow-sm hover:shadow-glow transition-all duration-200 active:scale-[0.97]">
           <IconPuzzle size={12} /> Upload
         </button>
         <input ref={fileRef} type="file" accept=".zip" onChange={handleUpload} className="hidden" />

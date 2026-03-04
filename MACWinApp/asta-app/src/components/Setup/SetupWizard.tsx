@@ -274,16 +274,8 @@ export default function SetupWizard({ onComplete }: Props) {
               Asta lives in your menu bar. Use the global shortcut to show and hide it anytime.
             </p>
             <div className="bg-white/[.04] rounded-mac px-4 py-3 mb-6">
-              <div className="flex items-center justify-center gap-3">
-                <div>
-                  <p className="text-11 text-label-tertiary mb-1">macOS</p>
-                  <kbd className="bg-white/[.08] rounded px-2 py-1 font-mono text-12 text-label-secondary">Cmd + Alt + Space</kbd>
-                </div>
-                <div className="w-px h-8 bg-separator" />
-                <div>
-                  <p className="text-11 text-label-tertiary mb-1">Windows</p>
-                  <kbd className="bg-white/[.08] rounded px-2 py-1 font-mono text-12 text-label-secondary">Ctrl + Alt + Space</kbd>
-                </div>
+              <div className="flex items-center justify-center">
+                <kbd className="bg-white/[.08] rounded px-2 py-1 font-mono text-12 text-label-secondary">Alt + Space</kbd>
               </div>
             </div>
 

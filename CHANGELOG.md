@@ -2,6 +2,32 @@
 
 All notable changes to Asta are documented here.
 
+## [1.3.54] - 2026-03-04
+
+### Changed
+
+- **Unified chat input card** — Redesigned chat input as a single rounded card container with textarea on top and toolbar row (attach, agent, provider selector, send) below, matching modern chat UI patterns.
+- **Global shortcut simplified** — Changed from `Cmd+Alt+Space` to `Alt+Space` for faster app toggle. Fixed double-toggle bug where shortcut fired on both key-down and key-up events (now filters to `ShortcutState::Pressed` only).
+- **Default window size** — Increased default window from 960×680 to 1100×780 for more room.
+- **Category card overlay removed** — Category images (Office, Finance, Coding) now display without dark overlay for cleaner look.
+
+---
+
+## [1.3.53] - 2026-03-04
+
+### Changed
+
+- **Backend error fixes** — Fixed compaction import error (`is_error_reply` renamed/moved to `context_helpers`), PDF fitz `ModuleNotFoundError` (added guards + conditional tool registration), Notion skill collision spam (renamed `notion-operator`, added 30s TTL cache to `get_all_skills()`).
+- **PDF download** — PDF generation now returns downloadable files in chat via blob download pattern (replaced `<a target="_blank">` with Tauri-compatible blob download).
+- **Synthwave grid background** — Added perspective grid animation to empty chat state that fades when typing.
+- **Neutral UI** — New chat button and agents badge now use neutral colors instead of orange accent.
+- **Hero entrance animation** — Empty chat state title is larger (28px bold) with staggered rise animation on new chat.
+- **Agent cards** — Replaced suggestion chips with agent grid showing enabled agents with category-based colored SVG icons. Added `resolveAgentIcon()` system mapping agent categories to icons and colors.
+- **Category image cards** — Added Office, Finance, Coding image cards below agent grid.
+- **Icon system** — Created 6 new SVG icon components (Code, Pen, Chart, Target, Film, Note) with category-based color mapping for agents.
+
+---
+
 ## [1.3.48] - 2026-03-03
 
 ### Changed

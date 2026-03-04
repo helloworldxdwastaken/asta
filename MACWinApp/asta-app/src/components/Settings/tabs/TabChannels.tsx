@@ -28,8 +28,8 @@ export default function TabChannels() {
     getTelegramUsername().then(r => setTgUser(r.username ?? "")).catch(()=>{});
     getKeyStatus().then(r => setTgTokenSet(!!r.telegram_bot_token)).catch(()=>{});
     getPingram().then(r => {
-      setPgToken(r.token ?? r.api_key ?? "");
-      setPgPhone(r.phone ?? "");
+      setPgToken(r.api_key ?? "");
+      setPgPhone(r.phone_number ?? "");
       setPgClientId(r.client_id ?? "");
       setPgClientSecret(r.client_secret ?? "");
       setPgNotifId(r.notification_id ?? "");
@@ -47,11 +47,12 @@ export default function TabChannels() {
     setTimeout(() => setTgTokenSaved(false), 2000);
   }
   async function savePg() {
-    await setPingram({ token: pgToken, phone: pgPhone, client_id: pgClientId, client_secret: pgClientSecret, notification_id: pgNotifId });
+    await setPingram({ api_key: pgToken, phone_number: pgPhone, client_id: pgClientId, client_secret: pgClientSecret, notification_id: pgNotifId });
     setPgSaved(true); setTimeout(() => setPgSaved(false), 2000);
   }
   async function testPg() {
-    try { await testPingramCall(); setTestResult("ok"); } catch { setTestResult("fail"); }
+    if (!pgPhone.trim()) { setTestResult("fail"); setTimeout(() => setTestResult(null), 3000); return; }
+    try { const r: any = await testPingramCall(pgPhone.trim()); setTestResult(r.ok ? "ok" : "fail"); } catch { setTestResult("fail"); }
     setTimeout(() => setTestResult(null), 3000);
   }
 
@@ -70,7 +71,7 @@ export default function TabChannels() {
               <input type="password" value={tgToken} onChange={e => setTgToken(e.target.value)}
                 placeholder={tgTokenSet ? "Leave blank to keep existing" : "123456:ABC-DEF..."}
                 className="flex-1 bg-white/[.04] border border-separator hover:border-separator-bold rounded-mac px-3 py-2.5 text-13 font-mono text-label outline-none focus:border-accent/40 transition-colors" />
-              <button onClick={saveTgToken} className="text-12 bubble-gradient text-white px-4 py-2 rounded-mac shrink-0 shadow-glow-sm transition-all duration-200 active:scale-[0.97]">
+              <button onClick={saveTgToken} className="text-12 accent-gradient text-white px-4 py-2 rounded-mac shrink-0 shadow-glow-sm transition-all duration-200 active:scale-[0.97]">
                 {tgTokenSaved ? <IconCheck size={14} /> : "Save token"}
               </button>
             </div>
@@ -80,7 +81,7 @@ export default function TabChannels() {
             <div className="flex gap-2">
               <input type="text" value={tgUser} onChange={e => setTgUser(e.target.value)} placeholder="@YourBotUsername"
                 className="flex-1 bg-white/[.04] border border-separator hover:border-separator-bold rounded-mac px-3 py-2.5 text-13 font-mono text-label outline-none focus:border-accent/40 transition-colors" />
-              <button onClick={saveTgUsername} className="text-12 bubble-gradient text-white px-4 py-2 rounded-mac shrink-0 shadow-glow-sm transition-all duration-200 active:scale-[0.97]">
+              <button onClick={saveTgUsername} className="text-12 accent-gradient text-white px-4 py-2 rounded-mac shrink-0 shadow-glow-sm transition-all duration-200 active:scale-[0.97]">
                 {tgSaved ? <IconCheck size={14} /> : "Save"}
               </button>
             </div>
@@ -131,7 +132,7 @@ export default function TabChannels() {
               className="w-full bg-white/[.04] border border-separator hover:border-separator-bold rounded-mac px-3 py-2.5 text-13 font-mono text-label outline-none focus:border-accent/40 transition-colors" />
           </div>
           <div className="flex gap-2">
-            <button onClick={savePg} className="text-12 bubble-gradient text-white px-5 py-2 rounded-mac shadow-glow-sm transition-all duration-200 active:scale-[0.97]">
+            <button onClick={savePg} className="text-12 accent-gradient text-white px-5 py-2 rounded-mac shadow-glow-sm transition-all duration-200 active:scale-[0.97]">
               {pgSaved ? "Saved" : "Save"}
             </button>
             <button onClick={testPg} className={`text-12 px-4 py-2 rounded-mac transition-all duration-200 border ${

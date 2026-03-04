@@ -4,10 +4,10 @@ import { getThemeMode, setThemeMode, type ThemeMode } from "../../../lib/theme";
 import { IconSun, IconMoon, IconMonitor } from "../../../lib/icons";
 
 const PROVIDERS = [
-  { key: "anthropic", name: "Claude" }, { key: "openai", name: "GPT" },
-  { key: "google", name: "Gemini" }, { key: "groq", name: "Groq" },
+  { key: "claude", name: "Claude" }, { key: "google", name: "Gemini" },
   { key: "openrouter", name: "OpenRouter" }, { key: "ollama", name: "Local (Ollama)" },
 ];
+const notifySettingsChanged = () => window.dispatchEvent(new Event("settings-changed"));
 const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const MOODS = ["normal", "friendly", "serious"];
 
@@ -18,21 +18,21 @@ const THEME_MODES: { mode: ThemeMode; label: string; Icon: React.FC<{ size?: num
 ];
 
 export default function TabGeneral() {
-  const [provider, setProvider] = useState("anthropic");
+  const [provider, setProvider] = useState("claude");
   const [thinking, setThinkingState] = useState("off");
   const [reasoning, setReasoningState] = useState("off");
   const [mood, setMoodState] = useState("normal");
   const [finalMode, setFinalModeState] = useState("off");
-  const [vision, setVisionState] = useState(false);
+  const [vision, setVisionState] = useState(true);
   const [theme, setTheme] = useState<ThemeMode>(getThemeMode());
 
   useEffect(() => {
-    getDefaultAI().then(r => setProvider(r.provider ?? r.default_ai_provider ?? "anthropic")).catch(()=>{});
+    getDefaultAI().then(r => setProvider(r.provider ?? r.default_ai_provider ?? "claude")).catch(()=>{});
     getThinking().then(r => setThinkingState(r.thinking_level ?? "off")).catch(()=>{});
     getReasoning().then(r => setReasoningState(r.reasoning_mode ?? r.reasoning_budget ?? "off")).catch(()=>{});
     getMoodSetting().then(r => setMoodState(r.mood ?? "normal")).catch(()=>{});
     getFinalMode().then(r => setFinalModeState(r.final_mode ?? "off")).catch(()=>{});
-    getVision().then(r => setVisionState(r.vision_enabled ?? false)).catch(()=>{});
+    getVision().then(r => setVisionState(r.preprocess ?? true)).catch(()=>{});
   }, []);
 
   return (
@@ -45,7 +45,7 @@ export default function TabGeneral() {
             <button key={mode} onClick={() => { setTheme(mode); setThemeMode(mode); }}
               className={`flex items-center gap-2 px-4 py-2.5 rounded-mac text-13 font-medium transition-all duration-200 active:scale-[0.97] ${
                 theme === mode
-                  ? "bubble-gradient text-white shadow-glow-sm"
+                  ? "accent-gradient text-white shadow-glow-sm"
                   : "bg-white/[.05] text-label-secondary hover:bg-white/[.08] border border-separator"
               }`}>
               <Icon size={14} />
@@ -61,7 +61,7 @@ export default function TabGeneral() {
       <Section title="AI Provider">
         {PROVIDERS.map(p => (
           <Radio key={p.key} label={p.name} checked={provider === p.key}
-            onChange={async () => { setProvider(p.key); await setDefaultAI(p.key); }} />
+            onChange={async () => { setProvider(p.key); await setDefaultAI(p.key); notifySettingsChanged(); }} />
         ))}
       </Section>
 
@@ -69,7 +69,7 @@ export default function TabGeneral() {
         <div className="flex flex-wrap gap-2">
           {THINKING.map(l => (
             <Chip key={l} label={l} active={thinking === l}
-              onClick={async () => { setThinkingState(l); await setThinking(l); }} />
+              onClick={async () => { setThinkingState(l); await setThinking(l); notifySettingsChanged(); }} />
           ))}
         </div>
       </Section>
@@ -87,7 +87,7 @@ export default function TabGeneral() {
         <div className="flex gap-3">
           {MOODS.map(m => (
             <Radio key={m} label={m} checked={mood === m} capitalize
-              onChange={async () => { setMoodState(m); await setMoodSetting(m); }} />
+              onChange={async () => { setMoodState(m); await setMoodSetting(m); notifySettingsChanged(); }} />
           ))}
         </div>
         <p className="text-11 text-label-tertiary mt-1.5">Changes the tone of AI replies</p>
@@ -104,7 +104,7 @@ export default function TabGeneral() {
       </Section>
 
       <Section title="Vision">
-        <Toggle checked={vision} onChange={async v => { setVisionState(v); await setVision(v); }} label="Enable image understanding" />
+        <Toggle checked={vision} onChange={async v => { setVisionState(v); try { await setVision(v); } catch { setVisionState(!v); } }} label="Enable image understanding" />
       </Section>
     </div>
   );
@@ -132,7 +132,7 @@ function Radio({ label, checked, onChange, capitalize }: { label: string; checke
 function Chip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
   return (
     <button onClick={onClick}
-      className={`px-3.5 py-1.5 rounded-mac text-12 font-medium capitalize transition-all duration-200 active:scale-[0.96] ${active ? "bubble-gradient text-white shadow-glow-sm" : "bg-white/[.05] text-label-secondary hover:bg-white/[.08] border border-separator"}`}>
+      className={`px-3.5 py-1.5 rounded-mac text-12 font-medium capitalize transition-all duration-200 active:scale-[0.96] ${active ? "accent-gradient text-white shadow-glow-sm" : "bg-white/[.05] text-label-secondary hover:bg-white/[.08] border border-separator"}`}>
       {label}
     </button>
   );

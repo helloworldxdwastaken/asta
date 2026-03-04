@@ -9,7 +9,7 @@ export default function TabPermissions() {
     getSecurityAudit().then(setAudit).catch(()=>{});
   }, []);
 
-  const warnings = audit?.warnings ?? [];
+  const warnings = audit?.findings ?? [];
 
   return (
     <div className="text-label space-y-5">

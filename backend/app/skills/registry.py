@@ -1,4 +1,5 @@
 import logging
+import time
 
 from app.lib.skill import Skill
 from app.skills.server_status import ServerStatusSkill
@@ -22,6 +23,11 @@ from app.workspace import discover_workspace_skills_runtime
 
 logger = logging.getLogger(__name__)
 
+# Cache for get_all_skills() — avoids re-scanning filesystem on every request
+_skills_cache: list[Skill] | None = None
+_skills_cache_ts: float = 0.0
+_SKILLS_CACHE_TTL = 30.0  # seconds
+
 # Built-in skills (singletons)
 _BUILTIN_SKILLS: list[Skill] = [
     ServerStatusSkill(),
@@ -44,7 +50,13 @@ _BUILTIN_SKILLS: list[Skill] = [
 
 
 def get_all_skills() -> list[Skill]:
-    """All skills: built-in + OpenClaw-style workspace/skills/*/SKILL.md."""
+    """All skills: built-in + OpenClaw-style workspace/skills/*/SKILL.md.
+    Results are cached for _SKILLS_CACHE_TTL seconds to avoid repeated filesystem scans."""
+    global _skills_cache, _skills_cache_ts
+    now = time.monotonic()
+    if _skills_cache is not None and (now - _skills_cache_ts) < _SKILLS_CACHE_TTL:
+        return _skills_cache
+
     out: list[Skill] = []
     seen: set[str] = set()
     for skill in _BUILTIN_SKILLS:
@@ -68,6 +80,9 @@ def get_all_skills() -> list[Skill]:
             continue
         seen.add(sid)
         out.append(MarkdownSkill(r))
+
+    _skills_cache = out
+    _skills_cache_ts = now
     return out
 
 

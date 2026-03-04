@@ -319,17 +319,19 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // Register global shortcut CmdOrCtrl+Alt+Space
-            use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+            // Register global shortcut Alt+Space
+            use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
             let shortcut = Shortcut::new(
-                Some(Modifiers::ALT | Modifiers::SUPER),
+                Some(Modifiers::ALT),
                 Code::Space,
             );
             let app_handle = app.handle().clone();
             app.handle()
                 .global_shortcut()
-                .on_shortcut(shortcut, move |_app, _shortcut, _event| {
-                    toggle_window(&app_handle);
+                .on_shortcut(shortcut, move |_app, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        toggle_window(&app_handle);
+                    }
                 })?;
 
             // Close-to-tray: hide instead of quit when user closes the window

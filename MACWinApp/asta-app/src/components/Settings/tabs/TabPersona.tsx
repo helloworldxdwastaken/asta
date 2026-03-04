@@ -12,7 +12,7 @@ export default function TabPersona() {
 
   async function save() {
     setSaving(true);
-    await setPersona(active, active === "SOUL.md" ? soul : user);
+    await setPersona(active === "SOUL.md" ? { soul } : { user });
     setSaving(false); setSaved(true); setTimeout(() => setSaved(false), 2000);
   }
 
@@ -35,7 +35,7 @@ export default function TabPersona() {
         className="flex-1 min-h-[300px] bg-white/[.04] border border-separator hover:border-separator-bold rounded-mac px-4 py-3 text-13 font-mono text-label/90 placeholder-label-tertiary outline-none focus:border-accent/40 resize-none transition-colors"
         placeholder={`Edit ${active}…`} />
       <button onClick={save} disabled={saving}
-        className="bubble-gradient disabled:opacity-50 text-white text-13 rounded-mac px-6 py-2.5 w-fit shadow-glow-sm hover:shadow-glow transition-all duration-200 active:scale-[0.97]">
+        className="accent-gradient disabled:opacity-50 text-white text-13 rounded-mac px-6 py-2.5 w-fit shadow-glow-sm hover:shadow-glow transition-all duration-200 active:scale-[0.97]">
         {saved ? "Saved" : saving ? "Saving..." : "Save"}
       </button>
     </div>

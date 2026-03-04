@@ -361,3 +361,139 @@ export function IconMonitor(p: P) {
     </svg>
   );
 }
+
+// memorychip — RAM
+export function IconMemory(p: P) {
+  return (
+    <svg {...defaults(p)}>
+      <path d="M6 19v2M10 19v2M14 19v2M18 19v2" />
+      <rect x="3" y="7" width="18" height="12" rx="2" />
+      <rect x="7" y="10" width="3" height="6" rx="0.5" />
+      <rect x="14" y="10" width="3" height="6" rx="0.5" />
+    </svg>
+  );
+}
+
+// smartphone
+export function IconPhone(p: P) {
+  return (
+    <svg {...defaults(p)}>
+      <rect x="5" y="2" width="14" height="20" rx="2" ry="2" />
+      <line x1="12" y1="18" x2="12.01" y2="18" />
+    </svg>
+  );
+}
+
+// speaker — for Spotify speaker device
+export function IconSpeaker(p: P) {
+  return (
+    <svg {...defaults(p)}>
+      <rect x="4" y="2" width="16" height="20" rx="2" />
+      <circle cx="12" cy="14" r="4" />
+      <line x1="12" y1="6" x2="12.01" y2="6" />
+    </svg>
+  );
+}
+
+// code — Coding / Engineering
+export function IconCode(p: P) {
+  return (
+    <svg {...defaults(p)}>
+      <polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" />
+    </svg>
+  );
+}
+
+// pencil.line — Writing / Copywriting
+export function IconPen(p: P) {
+  return (
+    <svg {...defaults(p)}>
+      <path d="M17 3a2.828 2.828 0 114 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+    </svg>
+  );
+}
+
+// chart.bar — Data / Analytics
+export function IconChart(p: P) {
+  return (
+    <svg {...defaults(p)}>
+      <line x1="18" y1="20" x2="18" y2="10" /><line x1="12" y1="20" x2="12" y2="4" /><line x1="6" y1="20" x2="6" y2="14" />
+    </svg>
+  );
+}
+
+// target — Marketing / SEO
+export function IconTarget(p: P) {
+  return (
+    <svg {...defaults(p)}>
+      <circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="6" /><circle cx="12" cy="12" r="2" />
+    </svg>
+  );
+}
+
+// film — Video / After Effects
+export function IconFilm(p: P) {
+  return (
+    <svg {...defaults(p)}>
+      <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18" />
+      <line x1="7" y1="2" x2="7" y2="22" /><line x1="17" y1="2" x2="17" y2="22" />
+      <line x1="2" y1="12" x2="22" y2="12" /><line x1="2" y1="7" x2="7" y2="7" />
+      <line x1="2" y1="17" x2="7" y2="17" /><line x1="17" y1="17" x2="22" y2="17" /><line x1="17" y1="7" x2="22" y2="7" />
+    </svg>
+  );
+}
+
+// note.text — Notion / Notes
+export function IconNote(p: P) {
+  return (
+    <svg {...defaults(p)}>
+      <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+      <line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><line x1="10" y1="9" x2="8" y2="9" />
+    </svg>
+  );
+}
+
+// ── Agent icon resolver ───────────────────────────────────────────────────────
+// Maps agent category/name to an SVG icon component + color
+
+type AgentIconInfo = { Icon: React.FC<P>; color: string; bg: string };
+
+const AGENT_ICON_MAP: Record<string, AgentIconInfo> = {
+  research:    { Icon: IconSearch,  color: "#8B5CF6", bg: "rgba(139,92,246,.12)" },
+  engineering: { Icon: IconCode,    color: "#06B6D4", bg: "rgba(6,182,212,.12)" },
+  marketing:   { Icon: IconTarget,  color: "#F59E0B", bg: "rgba(245,158,11,.12)" },
+  data:        { Icon: IconChart,   color: "#10B981", bg: "rgba(16,185,129,.12)" },
+  design:      { Icon: IconFilm,    color: "#EC4899", bg: "rgba(236,72,153,.12)" },
+  operations:  { Icon: IconNote,    color: "#6366F1", bg: "rgba(99,102,241,.12)" },
+  writing:     { Icon: IconPen,     color: "#F97316", bg: "rgba(249,115,22,.12)" },
+};
+
+const AGENT_NAME_HINTS: Record<string, AgentIconInfo> = {
+  copywriter:  { Icon: IconPen,     color: "#F97316", bg: "rgba(249,115,22,.12)" },
+  librarian:   { Icon: IconBook,    color: "#8B5CF6", bg: "rgba(139,92,246,.12)" },
+  seo:         { Icon: IconGlobe,   color: "#F59E0B", bg: "rgba(245,158,11,.12)" },
+  notion:      { Icon: IconNote,    color: "#6366F1", bg: "rgba(99,102,241,.12)" },
+  competitor:  { Icon: IconSearch,   color: "#EF4444", bg: "rgba(239,68,68,.12)" },
+  knowledge:   { Icon: IconBrain,   color: "#A855F7", bg: "rgba(168,85,247,.12)" },
+  code:        { Icon: IconCode,    color: "#06B6D4", bg: "rgba(6,182,212,.12)" },
+  after:       { Icon: IconFilm,    color: "#EC4899", bg: "rgba(236,72,153,.12)" },
+  research:    { Icon: IconSearch,  color: "#8B5CF6", bg: "rgba(139,92,246,.12)" },
+  data:        { Icon: IconChart,   color: "#10B981", bg: "rgba(16,185,129,.12)" },
+  writing:     { Icon: IconPen,     color: "#F97316", bg: "rgba(249,115,22,.12)" },
+  editor:      { Icon: IconPen,     color: "#F97316", bg: "rgba(249,115,22,.12)" },
+};
+
+const DEFAULT_AGENT_ICON: AgentIconInfo = { Icon: IconAgents, color: "#94A3B8", bg: "rgba(148,163,184,.12)" };
+
+export function resolveAgentIcon(agent: { name?: string; category?: string }): AgentIconInfo {
+  // Try category first
+  const cat = (agent.category || "").trim().toLowerCase();
+  if (cat && AGENT_ICON_MAP[cat]) return AGENT_ICON_MAP[cat];
+  // Try name hints
+  const name = (agent.name || "").toLowerCase();
+  for (const [hint, info] of Object.entries(AGENT_NAME_HINTS)) {
+    if (name.includes(hint)) return info;
+  }
+  return DEFAULT_AGENT_ICON;
+}

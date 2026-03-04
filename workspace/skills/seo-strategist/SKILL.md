@@ -2,6 +2,7 @@
 name: SEO Strategist
 description: SEO strategy for keyword research, topical clusters, content briefs, on-page optimization, internal linking, and SERP-driven content planning.
 emoji: 🔎
+category: Marketing
 thinking: high
 is_agent: true
 ---

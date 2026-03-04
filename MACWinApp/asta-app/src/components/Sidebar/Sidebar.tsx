@@ -137,13 +137,13 @@ export default function Sidebar({
       <div className="px-3 pt-3 pb-1.5 space-y-1.5 titlebar-drag">
         <button
           onClick={onNewChat}
-          className="w-full flex items-center justify-between px-3 py-2.5 rounded-mac bubble-gradient hover:opacity-90 text-white text-13 font-medium transition-all duration-200 shadow-glow-sm active:scale-[0.98]"
+          className="w-full flex items-center justify-between px-3 py-2.5 rounded-mac bg-white/[.06] hover:bg-white/[.10] text-label text-13 font-medium transition-all duration-200 border border-separator active:scale-[0.98]"
         >
           <span className="flex items-center gap-2.5">
-            <IconNewChat size={14} />
+            <IconNewChat size={14} className="text-label-secondary" />
             <span>New chat</span>
           </span>
-          <span className="text-11 text-white/70 bg-white/[.15] px-2 py-0.5 rounded-full font-mono">
+          <span className="text-11 text-label-tertiary bg-white/[.08] px-2 py-0.5 rounded-full font-mono">
             {providerShortName}
           </span>
         </button>
@@ -156,7 +156,7 @@ export default function Sidebar({
             <span>Agents</span>
           </span>
           {enabledAgentCount > 0 && (
-            <span className="text-11 text-accent bg-accent/[.1] px-2 py-0.5 rounded-full tabular-nums font-semibold">
+            <span className="text-11 text-label-secondary bg-white/[.08] px-2 py-0.5 rounded-full tabular-nums font-semibold">
               {enabledAgentCount}
             </span>
           )}
@@ -273,7 +273,7 @@ export default function Sidebar({
             />
             <div className="flex gap-2 justify-end">
               <button onClick={() => setShowNewFolder(false)} className="px-4 py-2 text-13 text-label-secondary hover:text-label rounded-mac transition-colors">Cancel</button>
-              <button onClick={handleCreateFolder} disabled={!newFolderName.trim()} className="px-5 py-2 text-13 bubble-gradient disabled:opacity-40 text-white rounded-mac font-medium transition-all hover:opacity-90 active:scale-[0.97]">Create</button>
+              <button onClick={handleCreateFolder} disabled={!newFolderName.trim()} className="px-5 py-2 text-13 accent-gradient disabled:opacity-40 text-white rounded-mac font-medium transition-all hover:opacity-90 active:scale-[0.97]">Create</button>
             </div>
           </div>
         </div>

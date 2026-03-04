@@ -1,8 +1,9 @@
 ---
-name: Performance Copywriter
+name: Copywriter
 description: Performance-focused copywriting for ads, landing pages, emails, SMS, scripts, hooks, CTAs, and funnel messaging. Use for conversion optimization, A/B variants, and direct-response assets.
 emoji: 🤖
 icon: book.pages.fill
+category: Marketing
 thinking: high
 is_agent: true
 ---

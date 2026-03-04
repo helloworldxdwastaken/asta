@@ -1,5 +1,5 @@
 ---
-name: Notion Operator
+name: Notion
 description: Notion-first agent for searching, checking, and updating Notion pages and data sources. Use when the user asks to check Notion content, find project updates, review workspace notes, or manage Notion records.
 emoji: 🤖
 icon: note.text

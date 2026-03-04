@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { listAgents, createAgent, updateAgent, deleteAgent, toggleAgent, getSkills } from "../../lib/api";
-import { IconPlus, IconClose, IconSearch, IconEdit, IconTrash, IconCheck } from "../../lib/icons";
+import { IconPlus, IconClose, IconSearch, IconEdit, IconTrash, IconCheck, resolveAgentIcon } from "../../lib/icons";
 
 interface Agent {
   id: string; name: string; description?: string; system_prompt?: string;
@@ -337,13 +337,19 @@ export default function AgentsSheet({ onClose, onAgentsChange }: Props) {
                   className="bg-white/[.03] hover:bg-white/[.06] border border-separator hover:border-separator-bold rounded-2xl p-4 group transition-all duration-200">
                   <div className="flex items-start gap-3">
                     {/* Avatar */}
-                    <div className="w-10 h-10 rounded-xl bg-white/[.06] flex items-center justify-center text-lg shrink-0 overflow-hidden">
-                      {a.avatar ? (
-                        <img src={a.avatar} alt="" className="w-full h-full object-cover" />
-                      ) : (
-                        a.icon || a.name?.charAt(0)?.toUpperCase() || "A"
-                      )}
-                    </div>
+                    {(() => {
+                      const ai = resolveAgentIcon(a);
+                      return (
+                        <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 overflow-hidden"
+                          style={{ background: ai.bg, color: ai.color }}>
+                          {a.avatar ? (
+                            <img src={a.avatar} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            <ai.Icon size={20} />
+                          )}
+                        </div>
+                      );
+                    })()}
                     {/* Info */}
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">

@@ -28,7 +28,7 @@ export default function TabTailscale() {
       </div>
       <button
         onClick={save}
-        className="bubble-gradient hover:opacity-90 text-white text-13 font-medium rounded-mac px-5 py-2.5 shadow-glow-sm hover:shadow-glow transition-all duration-200 active:scale-[0.97]"
+        className="accent-gradient hover:opacity-90 text-white text-13 font-medium rounded-mac px-5 py-2.5 shadow-glow-sm hover:shadow-glow transition-all duration-200 active:scale-[0.97]"
       >
         {saved ? "Saved" : "Save"}
       </button>

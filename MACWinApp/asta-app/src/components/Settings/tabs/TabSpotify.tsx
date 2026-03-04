@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { spotifyStatus, spotifyDisconnect, spotifyConnectUrl, spotifyDevices } from "../../../lib/api";
-// IconMusic removed — using ProviderLogo instead
 import ProviderLogo from "../../ProviderLogo";
+import { IconMonitor, IconPhone, IconSpeaker } from "../../../lib/icons";
 
 export default function TabSpotify() {
   const [connected, setConnected] = useState(false);
@@ -98,14 +98,20 @@ export default function TabSpotify() {
               className="text-11 text-accent hover:underline transition-colors">Refresh</button>
           </div>
           <div className="space-y-1.5">
-            {devices.map((d: any, i: number) => (
-              <div key={i} className="bg-white/[.03] border border-separator rounded-mac px-4 py-3 flex items-center justify-between hover:bg-white/[.05] transition-colors">
-                <span className="text-13">{d.name}</span>
-                <span className={`text-11 px-2.5 py-0.5 rounded-full ${d.is_active ? "bg-success/[.12] text-success border border-success/20" : "bg-white/[.04] text-label-tertiary"}`}>
-                  {d.is_active ? "Active" : d.type ?? "Inactive"}
-                </span>
-              </div>
-            ))}
+            {devices.map((d: any, i: number) => {
+              const DeviceIcon = (d.type ?? "").toLowerCase().includes("smartphone") ? IconPhone
+                : (d.type ?? "").toLowerCase().includes("speaker") ? IconSpeaker
+                : IconMonitor;
+              return (
+                <div key={i} className="bg-white/[.03] border border-separator rounded-mac px-4 py-3 flex items-center gap-3 hover:bg-white/[.05] transition-colors">
+                  <DeviceIcon size={16} className="text-label-tertiary shrink-0" />
+                  <span className="text-13 flex-1 min-w-0 truncate">{d.name}</span>
+                  <span className={`text-11 px-2.5 py-0.5 rounded-full shrink-0 ${d.is_active ? "bg-success/[.12] text-success border border-success/20" : "bg-white/[.04] text-label-tertiary"}`}>
+                    {d.is_active ? "Active" : d.type ?? "Inactive"}
+                  </span>
+                </div>
+              );
+            })}
             {devices.length === 0 && <p className="text-label-tertiary text-13">No devices found. Open Spotify on a device.</p>}
           </div>
         </section>

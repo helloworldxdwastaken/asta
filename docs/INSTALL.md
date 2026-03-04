@@ -176,6 +176,40 @@ See **docs/ERRORS.md** for a full list of common errors and fixes. Quick checks:
 
 ---
 
+## Pre-built releases (recommended for end users)
+
+Download the latest release from [GitHub Releases](https://github.com/helloworldxdwastaken/asta/releases):
+
+- **macOS (Apple Silicon):** `Asta_<version>_aarch64.dmg`
+- **macOS (Intel):** `Asta_<version>_x64.dmg`
+- **Windows:** `Asta_<version>_x64-setup.msi`
+
+Open the DMG/MSI, install, then start the backend separately (`./asta.sh start` or manually via Python).
+
+---
+
+## Releasing a new version
+
+1. Bump the version number in three files:
+   - `VERSION`
+   - `MACWinApp/asta-app/src-tauri/Cargo.toml` (the `version` field)
+   - `MACWinApp/asta-app/src-tauri/tauri.conf.json` (the `version` field)
+2. Update `CHANGELOG.md` with the new version's changes.
+3. Commit, tag, and push:
+   ```bash
+   git add -A && git commit -m "chore: bump version to X.Y.Z"
+   git tag vX.Y.Z
+   git push origin main --tags
+   ```
+4. GitHub Actions (`.github/workflows/release.yml`) automatically:
+   - Builds macOS DMG (Apple Silicon + Intel) and Windows MSI
+   - Creates a GitHub Release with all artifacts attached
+   - Links to `CHANGELOG.md` in the release notes
+
+You can also trigger the workflow manually from the Actions tab (`workflow_dispatch`).
+
+---
+
 ## Easy install (planned)
 
 Planned: a single command (e.g. `curl ... | sh` or `install.sh`) that pulls from GitHub and installs dependencies (Python venv, pip, Node/npm, Rust) so you can run `./asta.sh start` with minimal steps. See SPEC.md when available.

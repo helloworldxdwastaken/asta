@@ -63,12 +63,20 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "Asta ${{ github.ref_name }}"
           releaseBody: |
-            Desktop app release for macOS and Windows.
+            ## Asta Desktop App
 
-            **macOS:** Download the `.dmg` file for your architecture (aarch64 = Apple Silicon, x86_64 = Intel).
+            **macOS:** Download the `.dmg` for your architecture:
+            - `aarch64` = Apple Silicon (M1/M2/M3/M4)
+            - `x86_64` = Intel
+
             **Windows:** Download the `.msi` installer.
 
-            See [CHANGELOG.md](https://github.com/helloworldxdwastaken/asta/blob/main/CHANGELOG.md) for details.
+            After installing the desktop app, start the backend separately:
+            ```bash
+            ./asta.sh start
+            ```
+
+            See [CHANGELOG.md](https://github.com/helloworldxdwastaken/asta/blob/main/CHANGELOG.md) for what's new.
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}

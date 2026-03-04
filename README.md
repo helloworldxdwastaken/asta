@@ -8,12 +8,13 @@ A personal AI workspace that runs on **desktop (macOS/Windows)**, **web**, and *
 
 ## Why Asta
 
-- **Cross-platform desktop app** — Tauri-based app (macOS + Windows) with sidebar conversation history, agent picker, and Tailscale remote access.
+- **Cross-platform desktop app** — Tauri-based app (macOS + Windows) with sidebar conversation history, agent picker, PDF generation, and Tailscale remote access. Global shortcut `Alt+Space` to toggle.
 - Multi-provider AI: Groq, Google Gemini, Claude, OpenAI, OpenRouter, and Ollama.
 - OpenClaw-style skill flow: model selects the best workspace skill and reads its `SKILL.md` on demand.
-- Built-in skills: time/weather, web search, Spotify, reminders, audio notes, background learning, and Google Workspace (Gmail, Calendar, Drive via gog CLI).
+- Built-in skills: time/weather, web search, Spotify, reminders, audio notes, PDF generation, background learning, and Google Workspace (Gmail, Calendar, Drive via gog CLI).
 - Clear split between **built-in Python skills** (core/reliable) and **workspace `SKILL.md` skills** (import/custom).
 - Unified memory: persistent chat history (per-session), allowed local files, learned knowledge (RAG), and channel history.
+- **Automated releases**: GitHub Actions builds macOS (DMG) and Windows (MSI) on version tags, published to GitHub Releases.
 - Native setup: no Docker required.
 
 ## Requirements
@@ -129,13 +130,23 @@ The cross-platform desktop app lives in `MACWinApp/asta-app/`. It's built with *
 
 **Features:**
 - Sidebar with persistent conversation history (click to reload any past chat)
-- Agent picker in chat (selection stays on the same chat until changed)
+- Agent picker in chat with category-based colored icons (selection stays on the same chat until changed)
 - Agents hub in sidebar (below **New chat**) to search/add/remove/create agents
 - Message actions in chat: copy under both sides, plus edit/re-run for past user turns
+- PDF generation: ask Asta to create PDFs (contracts, reports, invoices) — downloads directly in chat
 - Settings panel: API keys, providers, Tailscale remote access, Spotify
 - Remote access via Tailscale: "Enable HTTPS Tunnel" sets up `tailscale serve` for a proper `https://machine.ts.net` link to share with other devices
 - File drag-and-drop in chat
 - Provider icons in model dropdown and message badges
+- Global shortcut `Alt+Space` to show/hide the app from anywhere
+
+**Releasing:**
+```bash
+# Bump version in VERSION, Cargo.toml, and tauri.conf.json, then:
+git tag v1.3.54
+git push origin main --tags
+```
+GitHub Actions automatically builds macOS DMG (Apple Silicon + Intel) and Windows MSI, then publishes them to [GitHub Releases](https://github.com/helloworldxdwastaken/asta/releases).
 
 **Build:**
 ```bash

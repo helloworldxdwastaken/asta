@@ -143,9 +143,21 @@ em { font-style: italic; }
 """
 
 
+def is_fitz_available() -> bool:
+    """Check if PyMuPDF (fitz) is importable."""
+    try:
+        import fitz  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def generate_pdf(content: str, filename: str = "document.pdf", title: str | None = None) -> str:
     """Generate a PDF from markdown/text content. Returns the output file path."""
-    import fitz
+    try:
+        import fitz
+    except ImportError:
+        return "[Error: PyMuPDF (fitz) is not installed. Run: pip install pymupdf]"
 
     # Ensure output directory
     PDF_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

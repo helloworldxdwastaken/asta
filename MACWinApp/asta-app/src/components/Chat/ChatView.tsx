@@ -2,30 +2,29 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  IconSliders, IconBrain, IconBook,
+  IconSliders, IconBrain, IconBook, IconAgents,
   IconAttach, IconSend, IconStop, IconCopy, IconChevronDown, IconEdit, IconCheck,
+  resolveAgentIcon,
 } from "../../lib/icons";
 import {
   loadMessages, streamChat, setDefaultAI, setThinking, setMoodSetting,
   getDefaultAI, getThinking, getMoodSetting, truncateConversation,
 } from "../../lib/api";
 import type { StreamChunk } from "../../lib/api";
-import { getBackendUrl } from "../../lib/api";
+import { downloadPdf } from "../../lib/api";
 import ProviderLogo from "../ProviderLogo";
 
 const STATUS_PREFIX = "[[ASTA_STATUS]]";
 const PROVIDERS = [
-  { key: "anthropic", name: "Claude" },
-  { key: "openai",    name: "GPT" },
-  { key: "google",    name: "Gemini" },
-  { key: "groq",      name: "Groq" },
-  { key: "openrouter", name: "OR" },
-  { key: "ollama",    name: "Local" },
+  { key: "claude",      name: "Claude" },
+  { key: "google",      name: "Gemini" },
+  { key: "openrouter",  name: "OR" },
+  { key: "ollama",      name: "Local" },
 ];
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 const MOODS = ["normal", "friendly", "serious"];
 
-const SUGGESTIONS = [
+const FALLBACK_SUGGESTIONS = [
   "Summarize my recent notes",
   "What's on my schedule today?",
   "Write a quick email draft",
@@ -92,7 +91,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
   const [showThinking, setShowThinking] = useState(localStorage.getItem("showThinking") === "true");
   const [webEnabled] = useState(localStorage.getItem("webEnabled") === "true");
   const [learningMode, setLearningMode] = useState(false);
-  const [provider, setProvider] = useState("anthropic");
+  const [provider, setProvider] = useState("claude");
   const [thinkingLevel, setThinkingLevel] = useState("off");
   const [mood, setMood] = useState("normal");
   const [showProviderMenu, setShowProviderMenu] = useState(false);
@@ -113,12 +112,17 @@ export default function ChatView({ conversationId, onConversationCreated, agents
   // Use refs to track accumulated values during streaming (avoids stale closure)
   const providerRef = useRef("");
 
-  // Load settings from backend on mount
-  useEffect(() => {
-    getDefaultAI().then(r => setProvider(r.provider ?? r.default_ai_provider ?? "anthropic")).catch(() => {});
+  // Load settings from backend on mount + when changed in Settings
+  const fetchSettings = useCallback(() => {
+    getDefaultAI().then(r => setProvider(r.provider ?? r.default_ai_provider ?? "claude")).catch(() => {});
     getThinking().then(r => setThinkingLevel(r.thinking_level ?? "off")).catch(() => {});
     getMoodSetting().then(r => setMood(r.mood ?? "normal")).catch(() => {});
   }, []);
+  useEffect(() => {
+    fetchSettings();
+    window.addEventListener("settings-changed", fetchSettings);
+    return () => window.removeEventListener("settings-changed", fetchSettings);
+  }, [fetchSettings]);
 
   useEffect(() => {
     if (!conversationId) { setMessages([]); return; }
@@ -433,6 +437,13 @@ export default function ChatView({ conversationId, onConversationCreated, agents
       onClick={closeMenus}
       onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
 
+      {/* Synthwave grid behind entire view when chat is empty */}
+      {!loading && messages.length === 0 && !streaming && (
+        <div className="synth-grid z-0" style={{ opacity: input.trim() ? 0 : 1 }} aria-hidden>
+          <div className="synth-grid-inner" />
+        </div>
+      )}
+
       {/* Drag overlay */}
       {dragOver && (
         <div className="absolute inset-0 bg-accent/[.08] border-2 border-dashed border-accent/40 rounded-2xl z-50 flex items-center justify-center backdrop-blur-sm">
@@ -446,31 +457,6 @@ export default function ChatView({ conversationId, onConversationCreated, agents
 
       {/* Toolbar */}
       <div className="flex items-center justify-end gap-1.5 px-4 border-b border-separator shrink-0 titlebar-drag" style={{ height: 46 }}>
-        {/* Provider chip */}
-        <div className="relative">
-          <button
-            onClick={e => { e.stopPropagation(); setShowProviderMenu(!showProviderMenu); setShowThinkingMenu(false); }}
-            className="flex items-center gap-1.5 text-11 font-semibold text-label-secondary bg-white/[.05] hover:bg-white/[.08] rounded-mac px-2.5 py-1.5 transition-all duration-200 active:scale-[0.97]"
-          >
-            <ProviderLogo provider={provider} size={14} />
-            <span>{providerName}</span>
-            <IconChevronDown size={8} className="text-label-tertiary" />
-          </button>
-          {showProviderMenu && (
-            <div className="absolute right-0 top-full mt-1.5 bg-surface-raised border border-separator-bold rounded-mac shadow-modal py-1.5 z-50 w-52 animate-scale-in">
-              {PROVIDERS.map(p => (
-                <button key={p.key}
-                  className={`w-full text-left px-4 py-2.5 text-13 transition-all duration-150 flex items-center gap-3 ${provider === p.key ? "text-accent bg-accent/[.08]" : "text-label-secondary hover:bg-white/[.04]"}`}
-                  onClick={async () => { setProvider(p.key); setShowProviderMenu(false); await setDefaultAI(p.key); }}>
-                  <ProviderLogo provider={p.key} size={18} />
-                  {p.name}
-                  {provider === p.key && <IconCheck size={12} className="ml-auto text-accent" />}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
         {/* Thinking + Mood chip */}
         <div className="relative">
           <button
@@ -536,11 +522,9 @@ export default function ChatView({ conversationId, onConversationCreated, agents
 
         {/* Empty state */}
         {!loading && messages.length === 0 && !streaming && (
-          <div className="flex flex-col items-center justify-center h-full gap-4 relative overflow-hidden">
-            {/* Dot grid background */}
-            <div className="absolute inset-0 dot-grid pointer-events-none opacity-60" aria-hidden />
+          <div className="flex flex-col items-center justify-center h-full gap-4 relative overflow-hidden pt-8">
             {/* 8-bit floating pixel blocks */}
-            <div className="absolute inset-0 pointer-events-none" aria-hidden>
+            <div className="absolute inset-0 pointer-events-none transition-opacity duration-500" style={{ opacity: input.trim() ? 0 : 1 }} aria-hidden>
               {/* Left side blocks */}
               <div className="pixel-block absolute left-[8%] top-[15%] w-3 h-3 rounded-sm bg-accent/20" style={{ animationDelay: "0s", animationDuration: "6s" }} />
               <div className="pixel-block absolute left-[12%] top-[35%] w-2.5 h-2.5 rounded-sm bg-violet-400/15" style={{ animationDelay: "1.2s", animationDuration: "7s" }} />
@@ -558,23 +542,55 @@ export default function ChatView({ conversationId, onConversationCreated, agents
               <div className="pixel-block absolute right-[20%] top-[25%] w-1.5 h-1.5 rounded-sm bg-warning/10" style={{ animationDelay: "1.5s", animationDuration: "8.5s" }} />
             </div>
 
-            <div className="relative w-20 h-20 z-10">
-              <div className="absolute inset-0 rounded-full bg-gradient-to-br from-[var(--user-bubble)] to-[var(--user-bubble-end)] opacity-20 blur-xl animate-[orb-float_8s_ease-in-out_infinite]" />
+            <div className="relative w-20 h-20 z-10 hero-enter" style={{ animationDelay: "0s" }}>
+              <div className="absolute inset-0 rounded-full bg-[var(--user-bubble)] opacity-20 blur-xl animate-[orb-float_8s_ease-in-out_infinite]" />
               <img src="/appicon-512.png" alt="Asta" className="relative w-20 h-20 rounded-2xl" />
             </div>
-            <div className="text-center z-10">
-              <p className="text-label text-16 font-semibold">What can I help with?</p>
-              <p className="text-label-tertiary text-12 mt-1">Ask anything, or try a suggestion below</p>
+            <div className="text-center z-10 hero-enter" style={{ animationDelay: "0.12s" }}>
+              <p className="text-label text-[28px] font-bold tracking-tight leading-tight">What can I help with?</p>
+              <p className="text-label-tertiary text-13 mt-2 font-medium">Ask anything, or try a suggestion below</p>
             </div>
-            <div className="flex flex-wrap justify-center gap-2 max-w-md mt-2 z-10">
-              {SUGGESTIONS.map(s => (
-                <button key={s} onClick={() => { setInput(s); inputRef.current?.focus(); }}
-                  className="text-13 text-label-secondary bg-white/[.04] hover:bg-white/[.08] border border-separator hover:border-separator-bold rounded-full px-4 py-2 transition-all duration-200 active:scale-[0.97]">
-                  {s}
+            <div className="grid grid-cols-2 gap-2.5 max-w-sm w-full mt-2 z-10 hero-enter" style={{ animationDelay: "0.24s" }}>
+              {(agents.filter(a => a.enabled).slice(0, 4).length > 0
+                ? agents.filter(a => a.enabled).slice(0, 4).map(a => {
+                  const ai = resolveAgentIcon(a as any);
+                  return (
+                    <button key={a.id} onClick={() => { setSelectedAgent(a); inputRef.current?.focus(); }}
+                      className="flex items-center gap-2.5 bg-white/[.04] hover:bg-white/[.08] border border-separator hover:border-separator-bold rounded-xl px-3.5 py-3 transition-all duration-200 active:scale-[0.97] text-left">
+                      <span className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: ai.bg, color: ai.color }}>
+                        <ai.Icon size={15} />
+                      </span>
+                      <span className="text-13 text-label-secondary font-medium truncate">{a.name}</span>
+                    </button>
+                  );
+                })
+                : FALLBACK_SUGGESTIONS.map(s => (
+                  <button key={s} onClick={() => { setInput(s); inputRef.current?.focus(); }}
+                    className="flex items-center gap-2.5 bg-white/[.04] hover:bg-white/[.08] border border-separator hover:border-separator-bold rounded-xl px-3.5 py-3 transition-all duration-200 active:scale-[0.97] text-left">
+                    <span className="text-13 text-label-secondary truncate">{s}</span>
+                  </button>
+                ))
+              )}
+            </div>
+            {/* Category cards */}
+            <div className="flex gap-4 mt-4 z-10 hero-enter" style={{ animationDelay: "0.36s" }}>
+              {[
+                { img: "/cat-office.jpeg", label: "Office" },
+                { img: "/cat-finance.jpeg", label: "Finance" },
+                { img: "/cat-coding.jpeg", label: "Coding" },
+              ].map(cat => (
+                <button key={cat.label}
+                  className="group flex flex-col items-center gap-2 transition-all duration-300 hover:scale-[1.05] active:scale-[0.98] cursor-default">
+                  <div className="relative w-36 h-24 rounded-2xl overflow-hidden border border-white/[.08] group-hover:border-white/[.2] group-hover:shadow-lg transition-all duration-300">
+                    <img src={cat.img} alt={cat.label} className="absolute inset-0 w-full h-full object-cover" />
+                  </div>
+                  <span className="text-12 text-label-tertiary group-hover:text-label-secondary font-medium transition-colors">{cat.label}</span>
                 </button>
               ))}
             </div>
-            <p className="text-label-tertiary text-11 font-mono tracking-wide mt-3 opacity-50 z-10">Cmd+Alt+Space to toggle</p>
+            <p className="text-label-tertiary text-11 tracking-wide mt-4 opacity-40 z-10 hero-enter text-center" style={{ animationDelay: "0.48s" }}>
+              Enter to send · Shift+Enter for new line
+            </p>
           </div>
         )}
 
@@ -589,7 +605,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
                       rows={3} autoFocus />
                     <div className="flex justify-end gap-2">
                       <button onClick={cancelEdit} className="text-12 text-label-tertiary hover:text-label-secondary px-3 py-1.5 rounded-mac transition-colors">Cancel</button>
-                      <button onClick={submitEdit} className="text-12 bubble-gradient text-white px-4 py-1.5 rounded-mac shadow-glow-sm hover:shadow-glow transition-all duration-200 active:scale-[0.97]">Save & Send</button>
+                      <button onClick={submitEdit} className="text-12 accent-gradient text-white px-4 py-1.5 rounded-mac shadow-glow-sm hover:shadow-glow transition-all duration-200 active:scale-[0.97]">Save & Send</button>
                     </div>
                   </div>
                 </div>
@@ -608,11 +624,11 @@ export default function ChatView({ conversationId, onConversationCreated, agents
                       {copiedId === msg.id ? <IconCheck size={12} className="text-success" /> : <IconCopy size={12} />}
                     </button>
                   </div>
-                  <div className="bubble-gradient text-white rounded-bubble px-4 py-2.5 text-14 shadow-sm space-y-1.5">
+                  <div className="bubble-gradient rounded-bubble px-4 py-2.5 text-14 shadow-sm space-y-1.5" style={{ color: "var(--user-bubble-text)" }}>
                     {extractFiles(msg.content).length > 0 && (
                       <div className="flex flex-wrap gap-1.5">
                         {extractFiles(msg.content).map((f, i) => (
-                          <span key={i} className="inline-flex items-center gap-1.5 bg-white/[.15] rounded-lg px-2.5 py-1 text-12">
+                          <span key={i} className="inline-flex items-center gap-1.5 bg-black/[.08] dark:bg-white/[.15] rounded-lg px-2.5 py-1 text-12">
                             <span>{f.type === "pdf" ? "\u{1F4C4}" : f.type === "image" ? "\u{1F5BC}" : "\u{1F4CE}"}</span>
                             <span className="max-w-40 truncate">{f.name}</span>
                           </span>
@@ -660,16 +676,15 @@ export default function ChatView({ conversationId, onConversationCreated, agents
                 {extractPdfLinks(msg.content).length > 0 && (
                   <div className="flex flex-wrap gap-2 mb-2">
                     {extractPdfLinks(msg.content).map((pdf, i) => (
-                      <a key={i} href={`${getBackendUrl()}/api/files/download-pdf/${encodeURIComponent(pdf.name)}`}
-                        target="_blank" rel="noopener noreferrer"
-                        className="inline-flex items-center gap-2 bg-accent/10 hover:bg-accent/20 border border-accent/20 rounded-xl px-3 py-2 text-13 text-accent transition-colors no-underline">
+                      <button key={i} onClick={() => downloadPdf(pdf.name).catch(() => {})}
+                        className="inline-flex items-center gap-2 bg-accent/10 hover:bg-accent/20 border border-accent/20 rounded-xl px-3 py-2 text-13 text-accent transition-colors cursor-pointer">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-                          <polyline points="14 2 14 8 20 8" />
-                          <line x1="16" y1="13" x2="8" y2="13" /><line x1="16" y1="17" x2="8" y2="17" /><line x1="10" y1="9" x2="8" y2="9" />
+                          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                          <polyline points="7 10 12 15 17 10" />
+                          <line x1="12" y1="15" x2="12" y2="3" />
                         </svg>
                         {pdf.name}
-                      </a>
+                      </button>
                     ))}
                   </div>
                 )}
@@ -776,106 +791,128 @@ export default function ChatView({ conversationId, onConversationCreated, agents
       )}
 
       {/* Input area */}
-      <div className="border-t border-separator px-4 py-3">
-        {/* Pending file chips */}
-        {pendingFiles.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mb-2 px-1">
-            {pendingFiles.map((f, i) => (
-              <span key={i} className="inline-flex items-center gap-1.5 bg-white/[.06] border border-separator rounded-lg px-2.5 py-1 text-11 text-label-secondary animate-scale-in">
-                <span>{f.type === "image" ? "\uD83D\uDDBC" : f.type === "pdf" ? "\uD83D\uDCC4" : "\uD83D\uDCCE"}</span>
-                <span className="max-w-32 truncate">{f.name}</span>
-                <button onClick={() => removeFile(i)} className="text-label-tertiary hover:text-label ml-0.5 transition-colors">&times;</button>
-              </span>
-            ))}
-          </div>
-        )}
-
-        <div className="flex items-end gap-1.5">
-          {/* Attach button */}
-          <button onClick={() => fileInputRef.current?.click()}
-            className="w-9 h-9 flex items-center justify-center rounded-xl hover:bg-white/[.06] text-label-tertiary hover:text-label-secondary shrink-0 transition-colors" title="Attach file">
-            <IconAttach size={16} />
-          </button>
-          <input ref={fileInputRef} type="file" multiple accept="image/*,.pdf,.txt,.md,.csv,.json,.ts,.tsx,.js,.jsx,.py,.sh,.yaml,.yml,.toml,.xml,.html,.css" className="hidden"
-            onChange={e => { if (e.target.files) handleFiles(Array.from(e.target.files)); e.target.value = ""; }} />
-
-          {/* Agent dropdown */}
-          {enabledAgents.length > 0 && (
-            <div className="relative shrink-0">
-              <button
-                onClick={e => { e.stopPropagation(); setShowAgentMenu(!showAgentMenu); setShowProviderMenu(false); setShowThinkingMenu(false); }}
-                className={`flex items-center gap-1.5 text-11 rounded-xl h-9 px-2.5 transition-all duration-200 active:scale-[0.97] ${
-                  selectedAgent
-                    ? "bg-accent/[.12] text-accent font-semibold border border-accent/20"
-                    : "bg-white/[.04] text-label-tertiary hover:text-label-secondary hover:bg-white/[.06] border border-transparent"
-                }`}>
-                {selectedAgent ? (
-                  <>
-                    <span className="w-4 h-4 rounded-full bg-accent/30 text-[8px] font-bold flex items-center justify-center text-white shrink-0">{selectedAgent.name[0]}</span>
-                    <span className="max-w-16 truncate">{selectedAgent.name}</span>
-                  </>
-                ) : (
-                  <span>Agent</span>
-                )}
-                <IconChevronDown size={8} className="text-label-tertiary" />
-              </button>
-              {showAgentMenu && (
-                <div className="absolute left-0 bottom-full mb-1.5 bg-surface-raised border border-separator-bold rounded-xl shadow-modal py-1.5 z-50 w-56 max-h-64 overflow-y-auto scrollbar-thin animate-scale-in">
-                  <button
-                    className={`w-full text-left px-4 py-2.5 text-13 transition-all duration-150 ${!selectedAgent ? "text-accent bg-accent/[.08]" : "text-label-secondary hover:bg-white/[.04]"}`}
-                    onClick={() => { setSelectedAgent(null); setShowAgentMenu(false); }}>
-                    No agent (default)
-                  </button>
-                  <div className="border-t border-separator mx-3 my-1" />
-                  {enabledAgents.map(a => (
-                    <button key={a.id}
-                      className={`w-full text-left px-4 py-2.5 text-13 transition-all duration-150 flex items-center gap-2.5 ${
-                        selectedAgent?.id === a.id ? "text-accent bg-accent/[.08]" : "text-label-secondary hover:bg-white/[.04]"
-                      }`}
-                      onClick={() => { setSelectedAgent(a); setShowAgentMenu(false); }}>
-                      <span className={`w-5 h-5 rounded-full text-[10px] font-bold flex items-center justify-center shrink-0 ${
-                        selectedAgent?.id === a.id ? "bg-accent/20 text-accent" : "bg-white/[.08] text-label-tertiary"
-                      }`}>{a.name[0]}</span>
-                      <span className="truncate">{a.name}</span>
-                      {selectedAgent?.id === a.id && <IconCheck size={12} className="ml-auto text-accent shrink-0" />}
-                    </button>
-                  ))}
-                </div>
-              )}
+      <div className="px-4 py-3">
+        <div className="bg-white/[.04] border border-separator hover:border-separator-bold focus-within:border-accent/30 rounded-2xl transition-all duration-200">
+          {/* Pending file chips */}
+          {pendingFiles.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 px-4 pt-3 pb-0">
+              {pendingFiles.map((f, i) => (
+                <span key={i} className="inline-flex items-center gap-1.5 bg-white/[.06] border border-separator rounded-lg px-2.5 py-1 text-11 text-label-secondary animate-scale-in">
+                  <span>{f.type === "image" ? "\uD83D\uDDBC" : f.type === "pdf" ? "\uD83D\uDCC4" : "\uD83D\uDCCE"}</span>
+                  <span className="max-w-32 truncate">{f.name}</span>
+                  <button onClick={() => removeFile(i)} className="text-label-tertiary hover:text-label ml-0.5 transition-colors">&times;</button>
+                </span>
+              ))}
             </div>
           )}
 
-          {/* Text input */}
+          {/* Textarea */}
           <textarea
             ref={inputRef} rows={1} value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={selectedAgent ? `Message @${selectedAgent.name}...` : "Type a message..."}
-            className="flex-1 bg-white/[.04] border border-separator hover:border-separator-bold rounded-2xl px-4 py-2.5 text-14 text-label placeholder-label-tertiary outline-none focus:border-accent/30 focus:bg-white/[.06] resize-none transition-all duration-200"
-            style={{ minHeight: 42, maxHeight: 200, lineHeight: "20px" }}
+            placeholder={selectedAgent ? `Message @${selectedAgent.name}...` : "Ask anything..."}
+            className="w-full bg-transparent px-4 pt-3 pb-2 text-14 text-label placeholder-label-tertiary outline-none resize-none"
+            style={{ minHeight: 40, maxHeight: 200, lineHeight: "20px" }}
             onInput={e => { const el = e.currentTarget; el.style.height = "auto"; el.style.height = Math.min(el.scrollHeight, 200) + "px"; }}
           />
 
-          {/* Send / Stop */}
-          <button
-            onClick={streaming ? () => stopRef.current?.() : () => send()}
-            disabled={!streaming && !input.trim()}
-            className={`w-9 h-9 flex items-center justify-center rounded-xl shrink-0 transition-all duration-200 active:scale-[0.93] ${
-              streaming
-                ? "bg-danger/20 text-danger hover:bg-danger/30"
-                : input.trim()
-                  ? "bubble-gradient text-white shadow-glow-sm hover:shadow-glow"
-                  : "bg-white/[.04] text-label-tertiary"
-            }`}
-          >
-            {streaming ? <IconStop size={14} /> : <IconSend size={14} />}
-          </button>
-        </div>
-        {/* Keyboard hint */}
-        <div className="flex justify-end mt-1 pr-1">
-          <span className="text-10 text-label-tertiary/40 font-mono">
-            {streaming ? "Click stop to cancel" : "Enter · Shift+Enter for newline"}
-          </span>
+          {/* Bottom toolbar */}
+          <div className="flex items-center justify-between px-2 pb-2 pt-0.5">
+            {/* Left: attach + agent icon */}
+            <div className="flex items-center gap-0.5">
+              <button onClick={() => fileInputRef.current?.click()}
+                className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/[.06] text-label-tertiary hover:text-label-secondary shrink-0 transition-colors" title="Attach file">
+                <IconAttach size={16} />
+              </button>
+              <input ref={fileInputRef} type="file" multiple accept="image/*,.pdf,.txt,.md,.csv,.json,.ts,.tsx,.js,.jsx,.py,.sh,.yaml,.yml,.toml,.xml,.html,.css" className="hidden"
+                onChange={e => { if (e.target.files) handleFiles(Array.from(e.target.files)); e.target.value = ""; }} />
+
+              {enabledAgents.length > 0 && (
+                <div className="relative shrink-0">
+                  <button
+                    onClick={e => { e.stopPropagation(); setShowAgentMenu(!showAgentMenu); setShowProviderMenu(false); setShowThinkingMenu(false); }}
+                    className={`w-8 h-8 flex items-center justify-center rounded-lg transition-all duration-200 active:scale-[0.95] ${
+                      selectedAgent
+                        ? "text-accent bg-accent/[.12]"
+                        : "text-label-tertiary hover:text-label-secondary hover:bg-white/[.06]"
+                    }`}
+                    title={selectedAgent ? selectedAgent.name : "Select agent"}>
+                    <IconAgents size={16} />
+                  </button>
+                  {showAgentMenu && (
+                    <div className="absolute left-0 bottom-full mb-1.5 bg-surface-raised border border-separator-bold rounded-xl shadow-modal py-1.5 z-50 w-56 max-h-64 overflow-y-auto scrollbar-thin animate-scale-in">
+                      <button
+                        className={`w-full text-left px-4 py-2.5 text-13 transition-all duration-150 ${!selectedAgent ? "text-accent bg-accent/[.08]" : "text-label-secondary hover:bg-white/[.04]"}`}
+                        onClick={() => { setSelectedAgent(null); setShowAgentMenu(false); }}>
+                        No agent (default)
+                      </button>
+                      <div className="border-t border-separator mx-3 my-1" />
+                      {enabledAgents.map(a => {
+                        const ai = resolveAgentIcon(a as any);
+                        return (
+                          <button key={a.id}
+                            className={`w-full text-left px-4 py-2.5 text-13 transition-all duration-150 flex items-center gap-2.5 ${
+                              selectedAgent?.id === a.id ? "text-accent bg-accent/[.08]" : "text-label-secondary hover:bg-white/[.04]"
+                            }`}
+                            onClick={() => { setSelectedAgent(a); setShowAgentMenu(false); }}>
+                            <span className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: ai.bg, color: ai.color }}>
+                              <ai.Icon size={12} />
+                            </span>
+                            <span className="truncate">{a.name}</span>
+                            {selectedAgent?.id === a.id && <IconCheck size={12} className="ml-auto text-accent shrink-0" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Right: provider + send */}
+            <div className="flex items-center gap-1.5">
+              {/* Provider chip */}
+              <div className="relative">
+                <button
+                  onClick={e => { e.stopPropagation(); setShowProviderMenu(!showProviderMenu); setShowThinkingMenu(false); }}
+                  className="flex items-center gap-1.5 text-11 text-label-tertiary hover:text-label-secondary rounded-lg px-2 h-8 transition-all duration-200 active:scale-[0.97]"
+                >
+                  <ProviderLogo provider={provider} size={14} />
+                  <span>{providerName}</span>
+                  <IconChevronDown size={8} />
+                </button>
+                {showProviderMenu && (
+                  <div className="absolute right-0 bottom-full mb-1.5 bg-surface-raised border border-separator-bold rounded-mac shadow-modal py-1.5 z-50 w-52 animate-scale-in">
+                    {PROVIDERS.map(p => (
+                      <button key={p.key}
+                        className={`w-full text-left px-4 py-2.5 text-13 transition-all duration-150 flex items-center gap-3 ${provider === p.key ? "text-accent bg-accent/[.08]" : "text-label-secondary hover:bg-white/[.04]"}`}
+                        onClick={async () => { setProvider(p.key); setShowProviderMenu(false); await setDefaultAI(p.key); }}>
+                        <ProviderLogo provider={p.key} size={18} />
+                        {p.name}
+                        {provider === p.key && <IconCheck size={12} className="ml-auto text-accent" />}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Send / Stop */}
+              <button
+                onClick={streaming ? () => stopRef.current?.() : () => send()}
+                disabled={!streaming && !input.trim()}
+                className={`w-8 h-8 flex items-center justify-center rounded-[10px] shrink-0 transition-all duration-200 active:scale-[0.93] ${
+                  streaming
+                    ? "bg-danger/20 text-danger hover:bg-danger/30"
+                    : input.trim()
+                      ? "accent-gradient text-white shadow-glow-sm hover:shadow-glow"
+                      : "bg-white/[.06] text-label-tertiary"
+                }`}
+              >
+                {streaming ? <IconStop size={14} /> : <IconSend size={14} />}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

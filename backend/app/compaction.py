@@ -110,8 +110,8 @@ async def compact_history(
     try:
         summary = await provider.chat(summary_prompt, **kwargs)
         # Make sure we got a real summary, not an error
-        from app.providers.fallback import is_error_reply
-        if is_error_reply(summary):
+        from app.context_helpers import _is_error_reply
+        if _is_error_reply(summary):
             logger.warning("Compaction summary failed (error reply), keeping full history")
             return messages
         if not summary.strip():

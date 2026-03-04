@@ -6,7 +6,7 @@ import SettingsSheet from "./components/Settings/SettingsSheet";
 import UpdateToast from "./components/UpdateToast";
 import AgentsSheet from "./components/Agents/AgentsSheet";
 import { getSetupDone } from "./lib/store";
-import { checkHealth, getDefaultAI } from "./lib/api";
+import { checkHealth, getDefaultAI, listAgents } from "./lib/api";
 
 interface Agent {
   id: string; name: string; description?: string; icon?: string;
@@ -14,8 +14,8 @@ interface Agent {
 }
 
 const PROVIDER_NAMES: Record<string, string> = {
-  anthropic: "Claude", openai: "GPT", google: "Gemini",
-  groq: "Groq", openrouter: "OR", ollama: "Local",
+  claude: "Claude", google: "Gemini",
+  openrouter: "OR", ollama: "Local",
 };
 
 export default function App() {
@@ -27,7 +27,7 @@ export default function App() {
   const [sidebarRefresh, setSidebarRefresh] = useState(0);
   const [chatKey, setChatKey] = useState(0);
   const [isOnline, setIsOnline] = useState(false);
-  const [providerKey, setProviderKey] = useState("anthropic");
+  const [providerKey, setProviderKey] = useState("claude");
 
   // Poll health + fetch provider
   useEffect(() => {
@@ -37,8 +37,11 @@ export default function App() {
     };
     check();
     const interval = setInterval(check, 15000);
-    getDefaultAI().then(r => setProviderKey(r.provider ?? r.default_ai_provider ?? "anthropic")).catch(() => {});
-    return () => clearInterval(interval);
+    const fetchProvider = () => getDefaultAI().then(r => setProviderKey(r.provider ?? r.default_ai_provider ?? "claude")).catch(() => {});
+    fetchProvider();
+    listAgents().then(r => setAgents(r.agents ?? [])).catch(() => {});
+    window.addEventListener("settings-changed", fetchProvider);
+    return () => { clearInterval(interval); window.removeEventListener("settings-changed", fetchProvider); };
   }, []);
 
   function handleNewChat() { setConversationId(undefined); setChatKey(k => k + 1); }

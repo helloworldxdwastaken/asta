@@ -1,5 +1,5 @@
 ---
-name: After Effects Assistant
+name: After Effects
 description: Adobe After Effects specialist for expressions, ExtendScript automation, MOGRT workflows, animation setup, and troubleshooting. Use for After Effects code snippets, rigging, keyframe automation, and render/export workflow help.
 emoji: 🤖
 icon: film.stack.fill

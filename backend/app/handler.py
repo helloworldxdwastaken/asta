@@ -3002,9 +3002,10 @@ async def handle_message(
     if _gemini_key or _hf_key:
         from app.image_gen_tool import get_image_gen_tool_openai_def
         tools = tools + get_image_gen_tool_openai_def()
-    # PDF generation tool — always available (pymupdf has no API key requirement).
-    from app.pdf_tool import get_pdf_tool_openai_def
-    tools = tools + get_pdf_tool_openai_def()
+    # PDF generation tool — only if pymupdf is installed.
+    from app.pdf_tool import get_pdf_tool_openai_def, is_fitz_available
+    if is_fitz_available():
+        tools = tools + get_pdf_tool_openai_def()
     # Single-user OpenClaw-style subagent orchestration tools.
     if channel != "subagent":
         from app.subagent_orchestrator import get_subagent_tools_openai_def
