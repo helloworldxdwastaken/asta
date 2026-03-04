@@ -419,8 +419,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
   const mdComponents = {
     img: ({ src, alt, ...props }: any) => (
       <img src={src} alt={alt ?? ""} {...props}
-        className="max-w-full max-h-80 rounded-mac my-1"
-        style={{ display: "inline-block" }}
+        className="max-w-full max-h-80 rounded-mac my-2 block"
         loading="lazy" />
     ),
     code: ({ className, children, ...props }: any) => {
