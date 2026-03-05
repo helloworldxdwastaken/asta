@@ -214,6 +214,8 @@ class Settings(BaseSettings):
 
     # CORS: extra origins (comma-separated), e.g. http://192.168.1.113:5174 or Tailscale URL
     asta_cors_origins: str = ""
+    # API bearer token for remote access (Cloudflare Tunnel). Empty = no auth required.
+    asta_api_token: str = ""
     # Memory search mode: search (fast lexical-first) | hybrid (lexical + rag)
     asta_memory_search_mode: str = "search"
 

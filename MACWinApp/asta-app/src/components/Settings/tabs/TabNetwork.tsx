@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { getBackendUrl, setBackendUrl, checkHealth, getHealth } from "../../../lib/api";
+import { getBackendUrl, setBackendUrl, checkHealth, getHealth, getAuthToken, setAuthToken as setAuthTokenApi, getApiTokenStatus, setApiToken } from "../../../lib/api";
 import { IconCheck, IconWarning, IconAntenna } from "../../../lib/icons";
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 
@@ -27,11 +27,23 @@ export default function TabNetwork() {
   const [tsServeLoading, setTsServeLoading] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
 
+  // Auth token state
+  const [authToken, setAuthTokenState] = useState(getAuthToken());
+  const [tokenVisible, setTokenVisible] = useState(false);
+  const [tokenSaved, setTokenSaved] = useState(false);
+  const [tokenConfigured, setTokenConfigured] = useState(false);
+  const [generatingToken, setGeneratingToken] = useState(false);
+
   // Auto-detect backend on mount + poll every 10s
   useEffect(() => {
     testConnection(getBackendUrl(), true);
     pollRef.current = setInterval(() => testConnection(getBackendUrl(), true), 10000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, []);
+
+  // Check if API token is configured on backend
+  useEffect(() => {
+    getApiTokenStatus().then(r => setTokenConfigured(r.configured)).catch(() => {});
   }, []);
 
   // Load Tailscale status
@@ -72,6 +84,34 @@ export default function TabNetwork() {
     } catch {
       setTsStatus("not_installed");
     }
+  }
+
+  function saveToken() {
+    setAuthTokenApi(authToken);
+    setTokenSaved(true);
+    testConnection(url);
+    setTimeout(() => setTokenSaved(false), 2000);
+  }
+
+  async function generateToken() {
+    setGeneratingToken(true);
+    try {
+      const r = await setApiToken("generate");
+      if (r.token) {
+        setAuthTokenState(r.token);
+        setAuthTokenApi(r.token);
+        setTokenConfigured(true);
+        setTokenSaved(true);
+        setTimeout(() => setTokenSaved(false), 2000);
+      }
+    } catch {}
+    setGeneratingToken(false);
+  }
+
+  function clearToken() {
+    setAuthTokenState("");
+    setAuthTokenApi("");
+    setApiToken("clear").then(() => setTokenConfigured(false)).catch(() => {});
   }
 
   function save() {
@@ -227,6 +267,52 @@ export default function TabNetwork() {
 
           <p className="text-11 text-label-tertiary">
             Where the Asta backend is running. Default: http://localhost:8010
+          </p>
+        </div>
+      </Section>
+
+      {/* ── Auth Token ── */}
+      <Section title="Auth Token">
+        <div className="space-y-3">
+          <div>
+            <label className="text-11 text-label-tertiary block mb-1">Bearer Token</label>
+            <div className="flex gap-2">
+              <input type={tokenVisible ? "text" : "password"} value={authToken}
+                onChange={e => setAuthTokenState(e.target.value)}
+                className="flex-1 bg-white/[.04] border border-separator rounded-mac px-3 py-2.5 text-13 font-mono text-label outline-none focus:border-accent/50 transition-colors"
+                placeholder="Leave empty for local-only access" />
+              <button onClick={() => setTokenVisible(!tokenVisible)}
+                className="text-11 bg-white/[.05] rounded-mac px-3 hover:bg-white/[.08] transition-colors shrink-0 border border-separator">
+                {tokenVisible ? "Hide" : "Show"}
+              </button>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button onClick={saveToken}
+              className="text-12 bg-accent hover:bg-accent-hover text-white px-4 py-1.5 rounded-lg transition-colors">
+              {tokenSaved ? "Saved" : "Save"}
+            </button>
+            <button onClick={generateToken} disabled={generatingToken}
+              className="text-12 bg-white/[.08] hover:bg-white/[.12] disabled:opacity-50 px-3 py-1.5 rounded-lg transition-colors">
+              {generatingToken ? "..." : "Generate"}
+            </button>
+            <button onClick={clearToken}
+              className="text-12 bg-white/[.08] hover:bg-white/[.12] px-3 py-1.5 rounded-lg transition-colors">
+              Clear
+            </button>
+            <div className="flex-1" />
+            {tokenConfigured && (
+              <span className="text-11 text-success flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-success" />
+                Active on server
+              </span>
+            )}
+          </div>
+
+          <p className="text-11 text-label-tertiary">
+            Required for remote access via Cloudflare Tunnel. Not needed for localhost.
+            Click Generate to create a token on the server and save it here.
           </p>
         </div>
       </Section>

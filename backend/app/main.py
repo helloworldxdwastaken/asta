@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.auth_middleware import BearerTokenMiddleware
 from app.config import get_settings
 from app.db import get_db, DB_PATH, _is_sqlite_locked_error
 from app.routers import chat, files, drive, rag, providers, tasks, settings as settings_router, spotify as spotify_router, audio as audio_router, cron as cron_router, agents as agents_router
@@ -168,6 +169,8 @@ _default_origins = [
     "tauri://localhost", "https://tauri.localhost",      # Tauri production
 ]
 _extra_origins = [o.strip() for o in (settings.asta_cors_origins or "").split(",") if o.strip()]
+# Auth middleware (inner) — CORS wraps 401 responses with proper headers
+app.add_middleware(BearerTokenMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_default_origins + _extra_origins,

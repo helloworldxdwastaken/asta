@@ -15,6 +15,9 @@ BACKEND_DIR="$SCRIPT_DIR/backend"
 PID_FILE="$SCRIPT_DIR/.asta.pid"
 LOG_FILE="$SCRIPT_DIR/backend.log"
 BACKEND_PORT=8010
+TUNNEL_CONFIG="$SCRIPT_DIR/cloudflared.yml"
+TUNNEL_PID_FILE="$SCRIPT_DIR/.cloudflared.pid"
+TUNNEL_LOG_FILE="$SCRIPT_DIR/cloudflared.log"
 
 # Colors
 RED='\033[38;5;196m'
@@ -431,7 +434,41 @@ stop_backend() {
 }
 
 
+start_tunnel() {
+    if [ ! -f "$TUNNEL_CONFIG" ]; then
+        return 0
+    fi
+    if ! command -v cloudflared &>/dev/null; then
+        print_warning "cloudflared not installed — tunnel disabled"
+        return 0
+    fi
+    # Kill existing tunnel
+    if [ -f "$TUNNEL_PID_FILE" ]; then
+        local pid
+        pid=$(cat "$TUNNEL_PID_FILE")
+        kill "$pid" 2>/dev/null
+        rm -f "$TUNNEL_PID_FILE"
+    fi
+    nohup cloudflared tunnel --config "$TUNNEL_CONFIG" run >> "$TUNNEL_LOG_FILE" 2>&1 &
+    echo $! > "$TUNNEL_PID_FILE"
+    print_success "Cloudflare Tunnel active (PID: $!)"
+}
+
+stop_tunnel() {
+    if [ -f "$TUNNEL_PID_FILE" ]; then
+        local pid
+        pid=$(cat "$TUNNEL_PID_FILE")
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null
+            print_sub "Cloudflare Tunnel stopped"
+        fi
+        rm -f "$TUNNEL_PID_FILE"
+    fi
+    pkill -f "cloudflared.*$TUNNEL_CONFIG" 2>/dev/null || true
+}
+
 stop_all() {
+    stop_tunnel
     stop_backend
 }
 
@@ -503,6 +540,7 @@ start_backend() {
         sleep 1
         if lsof -Pi ":$BACKEND_PORT" -sTCP:LISTEN -t >/dev/null 2>&1; then
             print_success "Backend active (PID: $pid)"
+            start_tunnel
             return 0
         fi
     done

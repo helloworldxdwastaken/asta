@@ -72,5 +72,10 @@ MACWinApp/asta-app/src-tauri/target/
 MACWinApp/asta-app/dist/
 MACWinApp/asta-app/node_modules/
 
+# Cloudflare Tunnel (credentials contain secrets)
+cloudflared.yml
+.cloudflared.pid
+cloudflared.log
+
 # Claude worktrees
 MACWinApp/.claude/

@@ -2,6 +2,19 @@
 
 All notable changes to Asta are documented here.
 
+## [1.3.57] - 2026-03-05
+
+### Added
+
+- **Cloudflare Tunnel support** — Expose the Asta backend at `asta.noxamusic.com` via Cloudflare Tunnel. Access from any device without Tailscale multi-device issues.
+- **Bearer token auth middleware** — Protects all API endpoints when accessed remotely. Local requests from the desktop app pass without a token. Detects Cloudflare Tunnel via `Cf-Connecting-Ip` header.
+- **Auth Token UI** — New "Auth Token" section in Settings > Connection with Generate, Save, Show/Hide, and Clear. Shows "Active on server" indicator.
+- **Token API endpoints** — `GET /api/settings/api-token` (status), `POST /api/settings/api-token` (generate/set/clear).
+- **Tunnel auto-start** — `asta.sh start` automatically starts `cloudflared` if `cloudflared.yml` exists.
+- **Auth headers on all requests** — Frontend injects `Authorization: Bearer <token>` on all API calls (chat, stream, upload, download) when a token is configured.
+
+---
+
 ## [1.3.56] - 2026-03-04
 
 ### Fixed

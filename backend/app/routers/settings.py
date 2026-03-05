@@ -671,6 +671,33 @@ async def set_api_keys(body: ApiKeysIn):
 
 
 
+@router.get("/settings/api-token")
+async def get_api_token_status():
+    """Return whether an API token is configured (never returns the actual token)."""
+    s = get_settings()
+    token = (s.asta_api_token or "").strip()
+    return {"configured": bool(token), "length": len(token) if token else 0}
+
+
+@router.post("/settings/api-token")
+async def set_api_token(body: dict):
+    """Set, generate, or clear the API bearer token for remote access."""
+    import secrets
+    action = body.get("action", "set")
+
+    if action == "generate":
+        token = secrets.token_urlsafe(32)
+    elif action == "clear":
+        token = ""
+    else:
+        token = (body.get("token") or "").strip()
+        if not token:
+            raise HTTPException(400, "Token is required")
+
+    set_env_value("ASTA_API_TOKEN", token, allow_empty=True)
+    return {"token": token, "configured": bool(token)}
+
+
 @router.get("/settings/test-key")
 @router.get("/api/settings/test-key")
 async def test_api_key(provider: str = "groq", user_id: str = "default"):

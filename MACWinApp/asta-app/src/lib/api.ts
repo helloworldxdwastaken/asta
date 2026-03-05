@@ -15,6 +15,7 @@ const _fetch: typeof globalThis.fetch = (() => {
 })();
 
 let _backendUrl = localStorage.getItem("backendURL") ?? "http://localhost:8010";
+let _authToken = localStorage.getItem("authToken") ?? "";
 
 export function getBackendUrl(): string { return _backendUrl; }
 export function setBackendUrl(url: string): void {
@@ -22,12 +23,24 @@ export function setBackendUrl(url: string): void {
   localStorage.setItem("backendURL", _backendUrl);
 }
 
+export function getAuthToken(): string { return _authToken; }
+export function setAuthToken(token: string): void {
+  _authToken = token.trim();
+  if (_authToken) localStorage.setItem("authToken", _authToken);
+  else localStorage.removeItem("authToken");
+}
+
+/** Build auth headers (Bearer token if configured). */
+function _authHeaders(): Record<string, string> {
+  return _authToken ? { Authorization: `Bearer ${_authToken}` } : {};
+}
+
 /** Probe a URL for /api/health (fast timeout). */
 async function _probe(url: string): Promise<boolean> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 5000);
-    const opts: any = { signal: controller.signal };
+    const opts: any = { signal: controller.signal, headers: _authHeaders() };
     // Tauri HTTP plugin: accept Tailscale/self-signed certs on remote URLs
     if (url.startsWith("https://")) {
       opts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
@@ -85,9 +98,11 @@ async function req<T>(method: string, path: string, body?: unknown, query?: Reco
     const params = new URLSearchParams(query);
     url += `?${params}`;
   }
+  const headers: Record<string, string> = { ..._authHeaders() };
+  if (body) headers["Content-Type"] = "application/json";
   const opts: any = {
     method,
-    headers: body ? { "Content-Type": "application/json" } : {},
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   };
   // Tauri HTTP plugin: accept Tailscale/self-signed certs on remote HTTPS
@@ -102,7 +117,7 @@ async function req<T>(method: string, path: string, body?: unknown, query?: Reco
 
 // ── Health & Status ───────────────────────────────────────────────────────────
 export const checkHealth = () => {
-  const opts: any = {};
+  const opts: any = { headers: _authHeaders() };
   if (_backendUrl.startsWith("https://")) {
     opts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
   }
@@ -191,7 +206,7 @@ export function streamChat(
 
   const fetchOpts: any = {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ..._authHeaders() },
     body: JSON.stringify({
       ...opts, channel: opts.channel ?? "web", user_id: opts.user_id ?? "default",
     }),
@@ -278,6 +293,9 @@ export const getUsage = (days?: number) =>
   req<any>("GET", "/api/settings/usage", undefined, days ? { days: String(days) } : {});
 export const testKey = (provider: string) =>
   req<any>("GET", "/api/settings/test-key", undefined, { provider });
+export const getApiTokenStatus = () => req<any>("GET", "/api/settings/api-token");
+export const setApiToken = (action: "generate" | "set" | "clear", token?: string) =>
+  req<any>("POST", "/api/settings/api-token", { action, token });
 
 // ── Settings — PUT/POST ───────────────────────────────────────────────────────
 export const setDefaultAI = (provider: string) =>
@@ -356,7 +374,7 @@ export const toggleAgent = (id: string) => req("PUT", `/api/agents/${id}/enabled
 export async function uploadSkill(file: File): Promise<any> {
   const form = new FormData();
   form.append("file", file);
-  const uploadOpts: any = { method: "POST", body: form };
+  const uploadOpts: any = { method: "POST", body: form, headers: _authHeaders() };
   if (_backendUrl.startsWith("https://")) {
     uploadOpts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
   }
@@ -368,7 +386,7 @@ export async function uploadSkill(file: File): Promise<any> {
 // ── Downloads ─────────────────────────────────────────────────────────────────
 export async function downloadPdf(filename: string): Promise<void> {
   const url = `${_backendUrl}/api/files/download-pdf/${encodeURIComponent(filename)}`;
-  const dlOpts: any = {};
+  const dlOpts: any = { headers: _authHeaders() };
   if (_backendUrl.startsWith("https://")) {
     dlOpts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
   }
