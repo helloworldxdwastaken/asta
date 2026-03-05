@@ -2,7 +2,7 @@
 import asyncio
 import base64
 import json
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -10,6 +10,7 @@ from app.handler import handle_message
 from app.db import get_db
 from app.providers.registry import list_providers
 from app.message_queue import queue_key
+from app.auth_utils import get_current_user_id, get_current_user_role
 
 router = APIRouter()
 
@@ -17,11 +18,12 @@ router = APIRouter()
 
 @router.get("/chat/conversations")
 async def list_conversations(
-    user_id: str = Query("default"),
+    request: Request,
     channel: str = Query("web"),
     limit: int = Query(50, ge=1, le=100),
 ):
     """Return list of conversations for the sidebar."""
+    user_id = get_current_user_id(request)
     db = get_db()
     await db.connect()
     convs = await db.list_conversations(user_id, channel, limit)
@@ -30,9 +32,10 @@ async def list_conversations(
 
 @router.delete("/chat/conversations/{conversation_id}")
 async def delete_conversation(
+    request: Request,
     conversation_id: str,
-    user_id: str = Query("default"),
 ):
+    user_id = get_current_user_id(request)
     db = get_db()
     await db.connect()
     if not conversation_id.startswith(user_id + ":"):
@@ -47,10 +50,11 @@ class ConversationTruncateIn(BaseModel):
 
 @router.post("/chat/conversations/{conversation_id}/truncate")
 async def truncate_conversation(
+    request: Request,
     conversation_id: str,
     body: ConversationTruncateIn,
-    user_id: str = Query("default"),
 ):
+    user_id = get_current_user_id(request)
     db = get_db()
     await db.connect()
     if not conversation_id.startswith(user_id + ":"):
@@ -80,14 +84,16 @@ class FolderAssign(BaseModel):
 
 
 @router.get("/chat/folders")
-async def list_folders(user_id: str = Query("default"), channel: str = Query("web")):
+async def list_folders(request: Request, channel: str = Query("web")):
+    user_id = get_current_user_id(request)
     db = get_db(); await db.connect()
     return {"folders": await db.list_folders(user_id, channel)}
 
 
 @router.post("/chat/folders")
-async def create_folder(body: FolderIn, user_id: str = Query("default"), channel: str = Query("web")):
+async def create_folder(request: Request, body: FolderIn, channel: str = Query("web")):
     import uuid
+    user_id = get_current_user_id(request)
     db = get_db(); await db.connect()
     folder_id = str(uuid.uuid4())
     result = await db.create_folder(user_id, channel, folder_id, body.name.strip(), body.color)
@@ -95,14 +101,16 @@ async def create_folder(body: FolderIn, user_id: str = Query("default"), channel
 
 
 @router.patch("/chat/folders/{folder_id}")
-async def update_folder(folder_id: str, body: FolderPatch, user_id: str = Query("default")):
+async def update_folder(request: Request, folder_id: str, body: FolderPatch):
+    user_id = get_current_user_id(request)
     db = get_db(); await db.connect()
     await db.update_folder(folder_id, user_id, name=body.name, color=body.color)
     return {"ok": True}
 
 
 @router.delete("/chat/folders/{folder_id}")
-async def delete_folder(folder_id: str, user_id: str = Query("default")):
+async def delete_folder(request: Request, folder_id: str):
+    user_id = get_current_user_id(request)
     db = get_db(); await db.connect()
     await db.delete_folder(folder_id, user_id)
     return {"ok": True}
@@ -110,10 +118,11 @@ async def delete_folder(folder_id: str, user_id: str = Query("default")):
 
 @router.put("/chat/conversations/{conversation_id}/folder")
 async def set_conversation_folder(
+    request: Request,
     conversation_id: str,
     body: FolderAssign,
-    user_id: str = Query("default"),
 ):
+    user_id = get_current_user_id(request)
     db = get_db(); await db.connect()
     if not conversation_id.startswith(user_id + ":"):
         raise HTTPException(403, "Conversation does not belong to this user")
@@ -123,11 +132,12 @@ async def set_conversation_folder(
 
 @router.get("/chat/messages")
 async def get_chat_messages(
-    conversation_id: str = Query(..., description="Conversation ID, e.g. default:web or default:telegram"),
-    user_id: str = Query("default", description="User ID"),
+    request: Request,
+    conversation_id: str = Query(..., description="Conversation ID"),
     limit: int = Query(50, ge=1, le=100),
 ):
     """Return recent messages for a conversation so clients can render the thread history."""
+    user_id = get_current_user_id(request)
     if not conversation_id.startswith(user_id + ":"):
         raise HTTPException(403, "Conversation does not belong to this user")
     db = get_db()
@@ -139,7 +149,7 @@ async def get_chat_messages(
 class ChatIn(BaseModel):
     text: str
     provider: str = "default"
-    user_id: str = "default"
+    user_id: str = "default"  # kept for backward compat but overridden by JWT
     conversation_id: str | None = None
     mood: str | None = None  # serious | friendly | normal
     web: bool = False  # if true, prefer web_search/web_fetch tools
@@ -154,14 +164,16 @@ class ChatOut(BaseModel):
 
 
 @router.post("/chat", response_model=ChatOut)
-async def chat(body: ChatIn):
+async def chat(request: Request, body: ChatIn):
+    user_id = get_current_user_id(request)
+    user_role = get_current_user_role(request)
     try:
         db = get_db()
         await db.connect()
-        cid = body.conversation_id or await db.create_new_conversation(body.user_id, "web")
+        cid = body.conversation_id or await db.create_new_conversation(user_id, "web")
         provider = body.provider
         if provider == "default":
-            provider = await db.get_user_default_ai(body.user_id)
+            provider = await db.get_user_default_ai(user_id)
         image_bytes = None
         if body.image_base64:
             try:
@@ -171,7 +183,7 @@ async def chat(body: ChatIn):
         _out: dict = {}
         async with queue_key(f"web:{cid}"):
             reply = await handle_message(
-                body.user_id, "web", body.text,
+                user_id, "web", body.text,
                 provider_name=provider,
                 conversation_id=cid,
                 channel_target="web",
@@ -180,6 +192,7 @@ async def chat(body: ChatIn):
                 image_bytes=image_bytes,
                 image_mime=body.image_mime,
                 _out=_out,
+                user_role=user_role,
             )
         actual_provider = _out.get("provider", provider)
         return ChatOut(reply=reply, conversation_id=cid, provider=actual_provider)
@@ -187,18 +200,20 @@ async def chat(body: ChatIn):
         reply = str(e).strip() or "Unknown error"
         if not reply.startswith("Error:"):
             reply = f"Error: {reply[:300]}"
-        return ChatOut(reply=reply, conversation_id=body.conversation_id or "default:web", provider=body.provider)
+        return ChatOut(reply=reply, conversation_id=body.conversation_id or f"{user_id}:web", provider=body.provider)
 
 
 @router.post("/chat/stream")
-async def chat_stream(body: ChatIn):
+async def chat_stream(request: Request, body: ChatIn):
     """Streaming chat endpoint (SSE): emits assistant/reasoning/status/done events."""
+    user_id = get_current_user_id(request)
+    user_role = get_current_user_role(request)
     db = get_db()
     await db.connect()
-    cid = body.conversation_id or await db.create_new_conversation(body.user_id, "web")
+    cid = body.conversation_id or await db.create_new_conversation(user_id, "web")
     provider = body.provider
     if provider == "default":
-        provider = await db.get_user_default_ai(body.user_id)
+        provider = await db.get_user_default_ai(user_id)
 
     event_queue: asyncio.Queue[dict | None] = asyncio.Queue()
 
@@ -216,7 +231,7 @@ async def chat_stream(body: ChatIn):
             _out: dict = {}
             async with queue_key(f"web:{cid}"):
                 reply = await handle_message(
-                    body.user_id,
+                    user_id,
                     "web",
                     body.text,
                     provider_name=provider,
@@ -230,6 +245,7 @@ async def chat_stream(body: ChatIn):
                     image_bytes=image_bytes,
                     image_mime=body.image_mime,
                     _out=_out,
+                    user_role=user_role,
                 )
             actual_provider = _out.get("provider", provider)
             await event_queue.put(

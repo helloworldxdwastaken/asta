@@ -1,10 +1,11 @@
 """Cron jobs API (Claw-style): add, list, remove recurring jobs."""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app.db import get_db
 from app.cron_runner import add_cron_job_to_scheduler, reload_cron_jobs
 from app.tasks.scheduler import get_scheduler
+from app.auth_utils import get_current_user_id, require_admin
 
 router = APIRouter()
 
@@ -34,8 +35,10 @@ class CronUpdateIn(BaseModel):
 
 @router.get("/cron")
 @router.get("/api/cron")
-async def list_cron(user_id: str = "default"):
+async def list_cron(request: Request):
     """List cron jobs for the user."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     db = get_db()
     await db.connect()
     jobs = await db.get_cron_jobs(user_id)
@@ -44,8 +47,10 @@ async def list_cron(user_id: str = "default"):
 
 @router.post("/cron")
 @router.post("/api/cron")
-async def add_cron(body: CronAddIn, user_id: str = "default"):
+async def add_cron(request: Request, body: CronAddIn):
     """Add or update a cron job (Claw-style)."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     name = (body.name or "").strip()
     cron_expr = (body.cron_expr or "").strip()
     message = (body.message or "").strip()
@@ -76,14 +81,19 @@ async def add_cron(body: CronAddIn, user_id: str = "default"):
 
 @router.put("/cron/{job_id:int}")
 @router.put("/api/cron/{job_id:int}")
-async def update_cron(job_id: int, body: CronUpdateIn):
+async def update_cron(request: Request, job_id: int, body: CronUpdateIn):
     """Update a cron job (schedule, timezone, message) and reschedule it."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     from app.cron_runner import CRON_JOB_PREFIX
     db = get_db()
     await db.connect()
     job = await db.get_cron_job(job_id)
     if not job:
         raise HTTPException(404, "Cron job not found")
+    # Verify ownership
+    if job.get("user_id") != user_id:
+        raise HTTPException(403, "Cron job does not belong to this user")
     name = (body.name or "").strip() if body.name is not None else None
     cron_expr = (body.cron_expr or "").strip() or None
     tz = (body.tz or "").strip() if body.tz is not None else None
@@ -125,8 +135,9 @@ async def update_cron(job_id: int, body: CronUpdateIn):
 
 @router.delete("/cron/{job_id:int}")
 @router.delete("/api/cron/{job_id:int}")
-async def remove_cron(job_id: int):
+async def remove_cron(request: Request, job_id: int):
     """Remove a cron job and unschedule it."""
+    require_admin(request)
     from app.cron_runner import CRON_JOB_PREFIX
     db = get_db()
     await db.connect()

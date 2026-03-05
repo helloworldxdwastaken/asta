@@ -14,11 +14,11 @@ If the directory doesn’t exist, Asta creates it automatically.
 | File       | Purpose |
 |-----------|---------|
 | **AGENTS.md** | Workspace rules, memory, safety. “This folder is home.” |
-| **USER.md**   | **Who you are:** name, timezone, location, preferences. This is the single place for user context; put e.g. `**Location:** City, Country` for time/weather/reminders. Edited in the repo. |
+| **USER.md**   | **Who you are:** name, location, preferences. In multi-user mode, each user has their own file at `workspace/users/{user_id}/USER.md` (editable in Settings > Memories). In single-user mode, falls back to `workspace/USER.md`. |
 | **SOUL.md**   | Who Asta is: tone, boundaries, personality. |
 | **TOOLS.md**  | Your local notes: SSH hosts, device names, TTS preferences. Not executable tools. |
 
-Create these in the workspace root. Asta reads them at the start of each context build. **User context lives under workspace only** (`workspace/USER.md`); there is no separate data folder for “user” identity.
+Create these in the workspace root. Asta reads them at the start of each context build. In multi-user mode, each user's `USER.md` is stored per-user at `workspace/users/{user_id}/USER.md` and editable via **Settings > Memories** with structured fields (Name, Location, About me, Preferences, Notes).
 
 ## Skills from SKILL.md (workspace skills)
 
@@ -89,7 +89,7 @@ workspace/
 
 ## Self-awareness skill
 
-When the user asks about Asta (features, how to use it, documentation), the **self-awareness** skill runs. It injects Asta’s `README.md`, `CHANGELOG.md`, and `docs/*.md` into context so the model can answer from the real docs. User context (who you are) comes from **workspace/USER.md**; no separate data folder is used. Enable or disable the skill in **Settings → Skills**.
+When the user asks about Asta (features, how to use it, documentation), the **self-awareness** skill runs. It injects Asta’s `README.md`, `CHANGELOG.md`, and `docs/*.md` into context so the model can answer from the real docs. User context comes from per-user memory files. Enable or disable the skill in **Settings → Skills**.
 
 ## Path access (OpenClaw-style)
 
@@ -128,7 +128,7 @@ From Telegram chat, you can control core runtime behavior without opening the pa
 | Feature | Config | Location |
 |--------|--------|----------|
 | Workspace root | `ASTA_WORKSPACE_DIR` or `workspace/` | Context files + `skills/*/SKILL.md` (auto-created if missing) |
-| Context files | (none) | `AGENTS.md`, `USER.md`, `SOUL.md`, `TOOLS.md` (workspace root). **User** = workspace/USER.md only. |
+| Context files | (none) | `AGENTS.md`, `SOUL.md`, `TOOLS.md` (workspace root). `USER.md` per-user at `workspace/users/{id}/USER.md`. |
 | Workspace skills | (none) | `workspace/skills/<id>/SKILL.md` |
 | Agent knowledge | (none) | `workspace/agent-knowledge/<agent-id>/{sources,references,notes}` |
 | Skill-creator | (none) | `workspace/skills/skill-creator/SKILL.md` |

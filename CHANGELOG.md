@@ -2,6 +2,39 @@
 
 All notable changes to Asta are documented here.
 
+## [1.4.2] - 2026-03-05
+
+### Added
+
+- **Multi-user authentication** — JWT-based login system with username/password. Admin and user roles with role-based access control across all endpoints.
+- **Login page** — Redesigned login screen with Sign In / Register toggle, 8-bit pixel art sprites, glass morphism card, CRT scanlines, and ambient glow effects.
+- **Self-registration** — `POST /api/auth/register` allows new users to create accounts when multi-user mode is active.
+- **User management panel** — Admin can create, delete, and reset passwords for users in Settings > Users tab.
+- **Per-user memories** — Each user gets their own structured memory file (`workspace/users/{user_id}/USER.md`) with fields: Name, Location, About me, Preferences, Notes. New users start with empty fields.
+- **Role-based UI** — Non-admin users see only General (limited), Memories, and About tabs in Settings. Models, Skills, Keys, Network, Channels, Spotify, and Users tabs are admin-only.
+- **Role-based tool gating** — Non-admin users get safe tools only (web search, GIFs, weather, math, PDF, time). Admin-only tools: exec, files, reminders, cron, Spotify, subagents.
+- **Role-based skill filtering** — Admin-only skills hidden from non-admin AI context.
+- **Agent restrictions** — Non-admin users have no agents. Agent listing, detail, and toggle endpoints are admin-gated.
+- **Sidebar user info** — Shows username and role badge next to connection status.
+- **Force re-login on update** — App version change clears stored JWT, requiring fresh login.
+
+### Fixed
+
+- **Stop button reliability** — Fixed bug where clicking Stop left the UI stuck in streaming state. The abort handler now always calls `onDone` with a guard against double-firing.
+- **toggleAgent 422 error** — Frontend now sends `{ enabled: boolean }` body instead of empty request.
+- **Default role fallback** — Changed from `"admin"` to `"user"` (least privilege) when role attribute is missing.
+- **Admin guards on sensitive endpoints** — Added `require_admin` to: `/status`, `/settings/server-status`, `/settings/pingram` (GET), `/settings/skills` (GET), `/tasks/learn`, agent get/toggle endpoints.
+- **Learning mode hidden for non-admin** — Learning toggle in chat toolbar only visible to admin users.
+- **Unused import cleanup** — Removed dead `get_settings` import in register endpoint.
+
+### Changed
+
+- **Dark mode background** — Slightly brighter surface colors (`#0A0A0C` → `#111114`) for better readability while maintaining dark aesthetic.
+- **Empty chat state** — Replaced plain colored blocks with SVG pixel art sprites (crosses, diamonds, hearts, stars, arrows, blocks) matching the login page aesthetic. Added ambient glow orbs and CRT scanline overlay.
+- **Backward compatibility** — When no users exist in the database, legacy Bearer token auth still works (single-user/local mode).
+
+---
+
 ## [1.3.57] - 2026-03-05
 
 ### Added

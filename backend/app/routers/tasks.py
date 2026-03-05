@@ -1,7 +1,8 @@
 """Scheduled tasks and learning jobs."""
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import BaseModel
 
+from app.auth_utils import get_current_user_id, require_admin
 from app.db import get_db
 from app.tasks.scheduler import schedule_learning_job
 
@@ -12,16 +13,17 @@ class LearnJobIn(BaseModel):
     topic: str
     duration_minutes: int = 120
     sources: list[str] = []
-    user_id: str = "default"
     channel: str = "web"
     channel_target: str = ""
 
 
 @router.post("/tasks/learn")
-async def start_learning_job(body: LearnJobIn):
+async def start_learning_job(request: Request, body: LearnJobIn):
     """Start a 'learn topic for X minutes' job. Notifies on the given channel when done. Sources can be URLs or text snippets."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     job_id = schedule_learning_job(
-        body.user_id,
+        user_id,
         body.topic,
         body.duration_minutes,
         channel=body.channel,

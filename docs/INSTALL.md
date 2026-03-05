@@ -1,6 +1,6 @@
 # Asta — Installation (macOS, Linux, Windows)
 
-**Native install only** (no Docker). You need **Python 3.12 or 3.13** (3.14 not yet supported by pydantic/ChromaDB). The primary UI is the **desktop app** (`MACWinApp/asta-app/`) — a cross-platform Tauri app that runs on macOS and Windows.
+**Native install only** (no Docker). You need **Python 3.12 or 3.13** (3.14 not yet supported by pydantic/ChromaDB). The primary UI is the **desktop app** (`MACWinApp/asta-app/`) — a cross-platform Tauri app that runs on macOS and Windows. Supports multi-user authentication with admin/user roles.
 
 ---
 
@@ -56,7 +56,26 @@ npx tauri build
 
 Connect the app to `http://localhost:8010` in Settings → Connection.
 
-### 4. Optional
+### 4. Multi-user setup
+
+On first run with no users in the database, Asta operates in **single-user mode** (open access, no login required). To enable multi-user authentication:
+
+1. Create the first admin user via the API (while in single-user mode):
+   ```bash
+   curl -X POST http://localhost:8010/api/auth/users \
+     -H "Content-Type: application/json" \
+     -d '{"username": "admin", "password": "your-password", "role": "admin"}'
+   ```
+2. The desktop app will now show a **login screen**. Sign in with the admin credentials.
+3. Admin can create additional users from **Settings > Users** or users can self-register via the login page.
+
+**Roles:**
+- **Admin** — Full access: all settings, skills, tools, agents, and user management.
+- **User** — Chat access with safe tools (web search, weather, math, GIFs, PDF, time). No settings, no agents, no exec/files/reminders.
+
+**JWT secret:** Auto-generated on first login and stored in `backend/.env` as `ASTA_JWT_SECRET`. Tokens expire after 30 days.
+
+### 5. Optional
 
 In the desktop app: **Settings** → add API keys (Groq, Gemini, Claude, OpenAI, OpenRouter, Hugging Face, Telegram, Spotify), set default AI (main runtime chain is fixed to `Claude -> Google -> OpenRouter -> Ollama`), choose **Thinking level** (`off/minimal/low/medium/high/xhigh`), **Reasoning visibility** (`off/on/stream`), and **Final tag mode** (`off/strict`), adjust **Vision controls** (preprocess toggle with fixed Nemotron model), and toggle skills. Set your **location** in Chat (e.g. "Holon, Israel") for time and weather.
 
@@ -132,6 +151,7 @@ From the repo root, **`./asta.sh`** starts/stops the backend:
 | `ASTA_VISION_PREPROCESS` | Run hybrid vision flow: image analyzed by vision provider first, then main agent answers from analysis (default: `true`). |
 | `ASTA_VISION_PROVIDER_ORDER` | Advanced override for vision provider priority (default: `openrouter,claude,openai`). Settings UI keeps this fixed. |
 | `ASTA_VISION_OPENROUTER_MODEL` | Advanced override for vision preprocessor model (default: `nvidia/nemotron-nano-12b-v2-vl:free`). Settings UI keeps this fixed. |
+| `ASTA_JWT_SECRET` | JWT signing secret (auto-generated on first login if not set) |
 | `ASTA_CORS_ORIGINS` | Extra origins (e.g. LAN or Tailscale) |
 | `ASTA_OWNER_PHONE_NUMBER` | Default E.164 phone for Pingram reminder/job voice calls (e.g. `+15551234567`). |
 | `ASTA_PINGRAM_CLIENT_ID` / `ASTA_PINGRAM_CLIENT_SECRET` / `ASTA_PINGRAM_API_KEY` | Pingram credentials (client pair or API key). |

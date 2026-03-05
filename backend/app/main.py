@@ -12,10 +12,10 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.auth_middleware import BearerTokenMiddleware
+from app.auth_middleware import AuthMiddleware
 from app.config import get_settings
 from app.db import get_db, DB_PATH, _is_sqlite_locked_error
-from app.routers import chat, files, drive, rag, providers, tasks, settings as settings_router, spotify as spotify_router, audio as audio_router, cron as cron_router, agents as agents_router
+from app.routers import chat, files, drive, rag, providers, tasks, settings as settings_router, spotify as spotify_router, audio as audio_router, cron as cron_router, agents as agents_router, auth as auth_router
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +170,7 @@ _default_origins = [
 ]
 _extra_origins = [o.strip() for o in (settings.asta_cors_origins or "").split(",") if o.strip()]
 # Auth middleware (inner) — CORS wraps 401 responses with proper headers
-app.add_middleware(BearerTokenMiddleware)
+app.add_middleware(AuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_default_origins + _extra_origins,
@@ -191,6 +191,7 @@ app.include_router(spotify_router.router, prefix="/api", tags=["spotify"])
 app.include_router(audio_router.router, prefix="/api", tags=["audio"])
 app.include_router(cron_router.router, prefix="/api", tags=["cron"])
 app.include_router(agents_router.router, tags=["agents"])
+app.include_router(auth_router.router, prefix="/api", tags=["auth"])
 # Also mount at root so /settings/keys works if proxy strips /api
 app.include_router(settings_router.router, tags=["settings"])
 

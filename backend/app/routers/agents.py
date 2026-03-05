@@ -5,10 +5,16 @@ import json
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app.agent_knowledge import ensure_agent_knowledge_layout, get_agent_knowledge_path
+from app.auth_utils import get_current_user_id, get_current_user_role, require_admin
+
+# Agents that only admins can see and use
+_ADMIN_ONLY_AGENTS: frozenset[str] = frozenset({
+    "notion", "notion-operator", "knowledge-curator", "librarian",
+})
 from app.config import get_settings
 from app.db import get_db
 
@@ -104,9 +110,12 @@ def _read_agent(slug: str) -> dict | None:
     }
 
 
-async def resolve_agent_mention_in_text(text: str, user_id: str = "default") -> tuple[dict | None, str]:
+async def resolve_agent_mention_in_text(text: str, user_id: str = "default", user_role: str = "admin") -> tuple[dict | None, str]:
     """Parse @Agent Name: message prefixes and resolve to an enabled named agent."""
     raw = text or ""
+    # Non-admin users cannot use agents
+    if user_role != "admin":
+        return None, raw
     m = _AGENT_MENTION_RE.match(raw)
     if not m:
         return None, raw
@@ -256,12 +265,17 @@ class AgentEnabledIn(BaseModel):
 
 @router.get("")
 async def list_agents(
-    user_id: str = "default",
+    request: Request,
     q: str | None = None,
     active_only: bool = False,
     inactive_only: bool = False,
 ):
     """List named agents with search and active/inactive filtering."""
+    user_id = get_current_user_id(request)
+    user_role = get_current_user_role(request)
+    # Non-admin users have no agents
+    if user_role != "admin":
+        return {"agents": []}
     db = get_db()
     await db.connect()
     toggles = await db.get_all_skill_toggles(user_id)
@@ -285,8 +299,9 @@ async def list_agents(
 
 
 @router.post("", status_code=201)
-async def create_agent(body: AgentCreate):
+async def create_agent(request: Request, body: AgentCreate):
     """Create a new named agent."""
+    require_admin(request)
     if not body.name.strip():
         raise HTTPException(status_code=400, detail="name is required")
     slug = _slugify(body.name)
@@ -315,22 +330,26 @@ async def create_agent(body: AgentCreate):
 
 
 @router.get("/{agent_id}")
-async def get_agent(agent_id: str):
+async def get_agent(request: Request, agent_id: str):
     """Get a single agent by id (slug)."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     a = _read_agent(agent_id)
     if not a:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
     db = get_db()
     await db.connect()
-    a["enabled"] = await db.get_skill_enabled("default", agent_id)
+    a["enabled"] = await db.get_skill_enabled(user_id, agent_id)
     ensure_agent_knowledge_layout(agent_id)
     a["knowledge_path"] = str(get_agent_knowledge_path(agent_id) or "")
     return {"agent": a}
 
 
 @router.patch("/{agent_id}")
-async def update_agent(agent_id: str, body: AgentUpdate):
+async def update_agent(request: Request, agent_id: str, body: AgentUpdate):
     """Update an existing agent's fields."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     existing = _read_agent(agent_id)
     if not existing:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
@@ -364,15 +383,17 @@ async def update_agent(agent_id: str, body: AgentUpdate):
         raise HTTPException(status_code=500, detail=f"Agent '{agent_id}' could not be reloaded")
     db = get_db()
     await db.connect()
-    updated["enabled"] = await db.get_skill_enabled("default", agent_id)
+    updated["enabled"] = await db.get_skill_enabled(user_id, agent_id)
     ensure_agent_knowledge_layout(agent_id)
     updated["knowledge_path"] = str(get_agent_knowledge_path(agent_id) or "")
     return {"agent": updated}
 
 
 @router.put("/{agent_id}/enabled")
-async def set_agent_enabled(agent_id: str, body: AgentEnabledIn, user_id: str = "default"):
+async def set_agent_enabled(request: Request, agent_id: str, body: AgentEnabledIn):
     """Toggle whether an agent is active (marketplace add/remove behavior)."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     existing = _read_agent(agent_id)
     if not existing:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
@@ -386,8 +407,9 @@ async def set_agent_enabled(agent_id: str, body: AgentEnabledIn, user_id: str = 
 
 
 @router.post("/{agent_id}/knowledge/scaffold")
-async def scaffold_agent_knowledge(agent_id: str):
+async def scaffold_agent_knowledge(request: Request, agent_id: str):
     """Ensure local knowledge folders exist for the specified agent."""
+    require_admin(request)
     existing = _read_agent(agent_id)
     if not existing:
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
@@ -396,8 +418,9 @@ async def scaffold_agent_knowledge(agent_id: str):
 
 
 @router.delete("/{agent_id}", status_code=200)
-async def delete_agent(agent_id: str):
+async def delete_agent(request: Request, agent_id: str):
     """Delete an agent by id."""
+    require_admin(request)
     path = _skill_path(agent_id)
     if not path or not path.exists():
         raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")

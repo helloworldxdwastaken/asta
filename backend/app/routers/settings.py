@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request, UploadFile, File, HTTPException
 from pydantic import BaseModel, Field
 
+from app.auth_utils import get_current_user_id, get_current_user_role, require_admin
 from app.config import get_settings, set_env_value
 from app.db import get_db
 from app.exec_tool import get_effective_exec_bins, resolve_executable
@@ -150,7 +151,8 @@ class PingramTestCallIn(BaseModel):
 
 
 @router.get("/settings/default-ai")
-async def get_default_ai(user_id: str = "default"):
+async def get_default_ai(request: Request):
+    user_id = get_current_user_id(request)
     db = get_db()
     await db.connect()
     provider = normalize_main_provider(await db.get_user_default_ai(user_id))
@@ -158,7 +160,9 @@ async def get_default_ai(user_id: str = "default"):
 
 
 @router.put("/settings/default-ai")
-async def set_default_ai(body: DefaultAiIn, user_id: str = "default"):
+async def set_default_ai(request: Request, body: DefaultAiIn):
+    require_admin(request)
+    user_id = get_current_user_id(request)
     provider = normalize_main_provider(body.provider)
     if provider != (body.provider or "").strip().lower():
         return {"error": f"provider must be one of: {', '.join(MAIN_PROVIDER_CHAIN)}"}
@@ -171,7 +175,8 @@ async def set_default_ai(body: DefaultAiIn, user_id: str = "default"):
 
 @router.get("/settings/thinking")
 @router.get("/api/settings/thinking")
-async def get_thinking(user_id: str = "default"):
+async def get_thinking(request: Request):
+    user_id = get_current_user_id(request)
     db = get_db()
     await db.connect()
     level = await db.get_user_thinking_level(user_id)
@@ -189,7 +194,9 @@ async def get_thinking(user_id: str = "default"):
 
 @router.put("/settings/thinking")
 @router.put("/api/settings/thinking")
-async def set_thinking(body: ThinkingIn, user_id: str = "default"):
+async def set_thinking(request: Request, body: ThinkingIn):
+    require_admin(request)
+    user_id = get_current_user_id(request)
     level = (body.thinking_level or "").strip().lower()
     if level not in ("off", "minimal", "low", "medium", "high", "xhigh"):
         raise HTTPException(status_code=400, detail="thinking_level must be off, minimal, low, medium, high, or xhigh")
@@ -201,7 +208,8 @@ async def set_thinking(body: ThinkingIn, user_id: str = "default"):
 
 @router.get("/settings/reasoning")
 @router.get("/api/settings/reasoning")
-async def get_reasoning(user_id: str = "default"):
+async def get_reasoning(request: Request):
+    user_id = get_current_user_id(request)
     db = get_db()
     await db.connect()
     mode = await db.get_user_reasoning_mode(user_id)
@@ -210,7 +218,9 @@ async def get_reasoning(user_id: str = "default"):
 
 @router.put("/settings/reasoning")
 @router.put("/api/settings/reasoning")
-async def set_reasoning(body: ReasoningIn, user_id: str = "default"):
+async def set_reasoning(request: Request, body: ReasoningIn):
+    require_admin(request)
+    user_id = get_current_user_id(request)
     mode = (body.reasoning_mode or "").strip().lower()
     if mode not in ("off", "on", "stream"):
         raise HTTPException(status_code=400, detail="reasoning_mode must be off, on, or stream")
@@ -222,7 +232,8 @@ async def set_reasoning(body: ReasoningIn, user_id: str = "default"):
 
 @router.get("/settings/final-mode")
 @router.get("/api/settings/final-mode")
-async def get_final_mode(user_id: str = "default"):
+async def get_final_mode(request: Request):
+    user_id = get_current_user_id(request)
     db = get_db()
     await db.connect()
     mode = await db.get_user_final_mode(user_id)
@@ -231,7 +242,9 @@ async def get_final_mode(user_id: str = "default"):
 
 @router.put("/settings/final-mode")
 @router.put("/api/settings/final-mode")
-async def set_final_mode(body: FinalModeIn, user_id: str = "default"):
+async def set_final_mode(request: Request, body: FinalModeIn):
+    require_admin(request)
+    user_id = get_current_user_id(request)
     mode = (body.final_mode or "").strip().lower()
     if mode not in ("off", "strict"):
         raise HTTPException(status_code=400, detail="final_mode must be off or strict")
@@ -243,7 +256,7 @@ async def set_final_mode(body: FinalModeIn, user_id: str = "default"):
 
 @router.get("/settings/vision")
 @router.get("/api/settings/vision")
-async def get_vision_settings():
+async def get_vision_settings(request: Request):
     s = get_settings()
     return {
         "preprocess": bool(getattr(s, "asta_vision_preprocess", True)),
@@ -256,7 +269,8 @@ async def get_vision_settings():
 
 @router.put("/settings/vision")
 @router.put("/api/settings/vision")
-async def set_vision_settings(body: VisionSettingsIn):
+async def set_vision_settings(request: Request, body: VisionSettingsIn):
+    require_admin(request)
     order_raw = (body.provider_order or "").strip().lower()
     allowed = {"openrouter", "ollama"}
     parsed_order = [p.strip() for p in order_raw.split(",") if p.strip()]
@@ -288,8 +302,9 @@ class ProviderEnabledIn(BaseModel):
 
 @router.get("/settings/provider-flow")
 @router.get("/api/settings/provider-flow")
-async def get_provider_flow(user_id: str = "default"):
+async def get_provider_flow(request: Request):
     """Return fixed provider priority, connection status, and runtime enable/disable state."""
+    user_id = get_current_user_id(request)
     db = get_db()
     await db.connect()
     default_provider = normalize_main_provider(await db.get_user_default_ai(user_id))
@@ -330,7 +345,9 @@ async def get_provider_flow(user_id: str = "default"):
 
 @router.put("/settings/provider-flow/provider-enabled")
 @router.put("/api/settings/provider-flow/provider-enabled")
-async def set_provider_enabled(body: ProviderEnabledIn, user_id: str = "default"):
+async def set_provider_enabled(request: Request, body: ProviderEnabledIn):
+    require_admin(request)
+    user_id = get_current_user_id(request)
     provider = normalize_main_provider(body.provider)
     if provider != (body.provider or "").strip().lower():
         raise HTTPException(
@@ -356,8 +373,9 @@ class FallbackProvidersIn(BaseModel):
 
 @router.get("/settings/fallback")
 @router.get("/api/settings/fallback")
-async def get_fallback_providers(user_id: str = "default"):
+async def get_fallback_providers(request: Request):
     """Get fixed fallback order (primary removed from claude->ollama->openrouter chain)."""
+    user_id = get_current_user_id(request)
     db = get_db()
     await db.connect()
     primary = normalize_main_provider(await db.get_user_default_ai(user_id))
@@ -367,8 +385,10 @@ async def get_fallback_providers(user_id: str = "default"):
 
 @router.put("/settings/fallback")
 @router.put("/api/settings/fallback")
-async def set_fallback_providers(body: FallbackProvidersIn, user_id: str = "default"):
+async def set_fallback_providers(request: Request, body: FallbackProvidersIn):
     """Fallback order is fixed for now; this endpoint is retained for compatibility."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     primary = DEFAULT_MAIN_PROVIDER
     try:
         db = get_db()
@@ -397,8 +417,9 @@ DEFAULT_MODELS = {
 
 @router.get("/settings/models")
 @router.get("/api/settings/models")
-async def get_models(user_id: str = "default"):
+async def get_models(request: Request):
     """Get custom model name per provider (empty = use provider default)."""
+    user_id = get_current_user_id(request)
     db = get_db()
     await db.connect()
     custom = await db.get_all_provider_models(user_id)
@@ -413,7 +434,7 @@ async def get_models(user_id: str = "default"):
 
 @router.get("/settings/available-models")
 @router.get("/api/settings/available-models")
-async def get_available_models():
+async def get_available_models(request: Request):
     """List available tool-capable models per provider used by Settings/Dashboard pickers."""
     ollama_models = await _ollama_list_models()
     # For cloud providers (openai, anthropic, google, groq), we return empty list
@@ -442,8 +463,10 @@ class ModelIn(BaseModel):
 
 @router.put("/settings/models")
 @router.put("/api/settings/models")
-async def set_model(body: ModelIn, user_id: str = "default"):
+async def set_model(request: Request, body: ModelIn):
     """Set which model to use for a provider. Leave model empty to use provider default."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     if body.provider not in ("groq", "google", "claude", "ollama", "openai", "openrouter"):
         return {"error": "provider must be groq, google, claude, ollama, openai, or openrouter"}
     model_value = (body.model or "").strip()
@@ -503,7 +526,8 @@ async def set_model(body: ModelIn, user_id: str = "default"):
 
 
 @router.get("/settings/mood")
-async def get_mood(user_id: str = "default"):
+async def get_mood(request: Request):
+    user_id = get_current_user_id(request)
     db = get_db()
     await db.connect()
     mood = await db.get_user_mood(user_id)
@@ -511,7 +535,9 @@ async def get_mood(user_id: str = "default"):
 
 
 @router.put("/settings/mood")
-async def set_mood(body: MoodIn, user_id: str = "default"):
+async def set_mood(request: Request, body: MoodIn):
+    require_admin(request)
+    user_id = get_current_user_id(request)
     if body.mood not in ("serious", "friendly", "normal"):
         return {"error": "mood must be serious, friendly, or normal"}
     db = get_db()
@@ -522,8 +548,10 @@ async def set_mood(body: MoodIn, user_id: str = "default"):
 
 @router.get("/status")
 @router.get("/api/status")
-async def get_status(user_id: str = "default"):
+async def get_status(request: Request):
     """Full status: which APIs have keys, which integrations are configured, which skills are enabled and available."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     db = get_db()
     await db.connect()
     s = get_settings()
@@ -616,7 +644,8 @@ async def get_status(user_id: str = "default"):
 
 @router.get("/settings/memory-health")
 @router.get("/api/settings/memory-health")
-async def memory_health_endpoint(force: bool = False):
+async def memory_health_endpoint(request: Request, force: bool = False):
+    require_admin(request)
     """Doctor-style memory diagnostics (no model call)."""
     from app.memory_health import get_memory_health
 
@@ -625,8 +654,10 @@ async def memory_health_endpoint(force: bool = False):
 
 @router.get("/settings/security-audit")
 @router.get("/api/settings/security-audit")
-async def security_audit_endpoint(user_id: str = "default"):
+async def security_audit_endpoint(request: Request):
     """Return lightweight security findings for risky runtime configuration."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     from app.security_audit import collect_security_warnings
 
     db = get_db()
@@ -635,8 +666,9 @@ async def security_audit_endpoint(user_id: str = "default"):
 
 
 @router.get("/settings/keys")
-async def get_api_keys_status():
+async def get_api_keys_status(request: Request):
     """Which API keys are set (no values returned). Frontend uses this to show 'Set' / 'Not set'."""
+    require_admin(request)
     db = get_db()
     await db.connect()
     status = await db.get_api_keys_status()
@@ -659,8 +691,9 @@ class ApiKeysIn(BaseModel):
 
 
 @router.put("/settings/keys")
-async def set_api_keys(body: ApiKeysIn):
+async def set_api_keys(request: Request, body: ApiKeysIn):
     """Store API keys from the frontend. Stored in DB (backend/asta.db); never committed to git."""
+    require_admin(request)
     db = get_db()
     await db.connect()
     for name in ALLOWED_API_KEY_NAMES:
@@ -672,16 +705,18 @@ async def set_api_keys(body: ApiKeysIn):
 
 
 @router.get("/settings/api-token")
-async def get_api_token_status():
+async def get_api_token_status(request: Request):
     """Return whether an API token is configured (never returns the actual token)."""
+    require_admin(request)
     s = get_settings()
     token = (s.asta_api_token or "").strip()
     return {"configured": bool(token), "length": len(token) if token else 0}
 
 
 @router.post("/settings/api-token")
-async def set_api_token(body: dict):
+async def set_api_token(request: Request, body: dict):
     """Set, generate, or clear the API bearer token for remote access."""
+    require_admin(request)
     import secrets
     action = body.get("action", "set")
 
@@ -700,8 +735,9 @@ async def set_api_token(body: dict):
 
 @router.get("/settings/test-key")
 @router.get("/api/settings/test-key")
-async def test_api_key(provider: str = "groq", user_id: str = "default"):
+async def test_api_key(request: Request, provider: str = "groq"):
     """Test a provider's API key with a minimal request. Returns the real error if it fails."""
+    user_id = get_current_user_id(request)
     from app.keys import get_api_key
     db = get_db()
     await db.connect()
@@ -907,8 +943,10 @@ def _get_all_skill_defs():
 
 @router.get("/settings/skills")
 @router.get("/api/settings/skills")
-async def get_skills(user_id: str = "default"):
+async def get_skills(request: Request):
     """List skills with enabled state (and available from status). Includes install_cmd, install_label, required_bins for skills that need them."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     db = get_db()
     await db.connect()
     s = get_settings()
@@ -978,8 +1016,10 @@ async def get_skills(user_id: str = "default"):
 
 @router.put("/settings/skills")
 @router.put("/api/settings/skills")
-async def set_skill_toggle(body: SkillToggleIn, user_id: str = "default"):
+async def set_skill_toggle(request: Request, body: SkillToggleIn):
     """Enable or disable a skill for the AI (built-in or workspace)."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     all_defs = _get_all_skill_defs()
     valid_ids = {s["id"] for s in all_defs}
     if body.skill_id not in valid_ids:
@@ -1013,8 +1053,9 @@ async def set_skill_toggle(body: SkillToggleIn, user_id: str = "default"):
 
 @router.post("/settings/skills/upload")
 @router.post("/api/skills/upload")
-async def upload_skill_zip(file: UploadFile = File(...)):
+async def upload_skill_zip(request: Request, file: UploadFile = File(...)):
     """Upload a zip file containing an OpenClaw-style skill (folder with SKILL.md). Extracts to workspace/skills/<skill_id>/."""
+    require_admin(request)
     from app.workspace import get_workspace_dir
     root = get_workspace_dir()
     if not root:
@@ -1093,8 +1134,9 @@ async def get_spotify_setup(request: Request):
 
 @router.get("/notifications")
 @router.get("/api/notifications")
-async def get_notifications(user_id: str = "default", limit: int = 50):
+async def get_notifications(request: Request, limit: int = 50):
     """List reminders/notifications for the user (for panel)."""
+    user_id = get_current_user_id(request)
     db = get_db()
     await db.connect()
     items = await db.get_notifications(user_id, limit=limit)
@@ -1103,8 +1145,9 @@ async def get_notifications(user_id: str = "default", limit: int = 50):
 
 @router.get("/settings/notes")
 @router.get("/api/settings/notes")
-async def get_workspace_notes(limit: int = 20):
+async def get_workspace_notes(request: Request, limit: int = 20):
     """List markdown notes from workspace/notes for Dashboard (local notes, not Apple Notes)."""
+    require_admin(request)
     lim = max(1, min(int(limit), 100))
     workspace = get_settings().workspace_path
     if not workspace:
@@ -1146,8 +1189,9 @@ async def get_workspace_notes(limit: int = 20):
 
 @router.delete("/notifications/{id}")
 @router.delete("/api/notifications/{id}")
-async def delete_notification(id: int, user_id: str = "default"):
+async def delete_notification(request: Request, id: int):
     """Delete a reminder/notification."""
+    user_id = get_current_user_id(request)
     from app.db import decode_one_shot_reminder_id
     db = get_db()
     await db.connect()
@@ -1169,16 +1213,18 @@ async def delete_notification(id: int, user_id: str = "default"):
 
 @router.get("/settings/server-status")
 @router.get("/api/settings/server-status")
-async def server_status_endpoint():
+async def server_status_endpoint(request: Request):
     """Get system metrics for the dashboard."""
+    require_admin(request)
     from app.server_status import get_server_status
     return get_server_status()
 
 
 @router.get("/api/settings/check-update")
 @router.get("/settings/check-update")
-async def check_update():
+async def check_update(request: Request):
     """Check if a new version is available on GitHub."""
+    require_admin(request)
     import subprocess
     from pathlib import Path
     
@@ -1208,8 +1254,9 @@ async def check_update():
 
 @router.post("/api/settings/update")
 @router.post("/settings/update")
-async def trigger_update():
+async def trigger_update(request: Request):
     """Run ./asta.sh update in the background."""
+    require_admin(request)
     import subprocess
     import threading
     import os
@@ -1238,8 +1285,10 @@ async def trigger_update():
 
 @router.get("/settings/pingram")
 @router.get("/api/settings/pingram")
-async def get_pingram_settings(user_id: str = "default"):
+async def get_pingram_settings(request: Request):
     """Return Pingram (NotificationAPI) settings."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     s = get_settings()
     cid = getattr(s, "asta_pingram_client_id", "") or ""
     # Mask client ID to comfort user about "leaking real key"
@@ -1260,8 +1309,10 @@ async def get_pingram_settings(user_id: str = "default"):
 
 @router.post("/settings/pingram")
 @router.post("/api/settings/pingram")
-async def set_pingram_settings(body: PingramSettingsIn, user_id: str = "default"):
+async def set_pingram_settings(request: Request, body: PingramSettingsIn):
     """Update Pingram (NotificationAPI) settings."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     from app.config import save_settings_to_env
     
     updates = {}
@@ -1303,8 +1354,9 @@ async def set_pingram_settings(body: PingramSettingsIn, user_id: str = "default"
 
 @router.post("/settings/pingram/test-call")
 @router.post("/api/settings/pingram/test-call")
-async def test_pingram_call(body: PingramTestCallIn):
+async def test_pingram_call(request: Request, body: PingramTestCallIn):
     """Trigger a test Pingram voice call. Uses the same code path as cron/reminders (trigger_pingram_voice_call)."""
+    require_admin(request)
     clean_number = (body.test_number or "").strip()
     if not clean_number:
         return {"ok": False, "error": "Test number is required."}
@@ -1322,16 +1374,18 @@ async def test_pingram_call(body: PingramTestCallIn):
 
 @router.get("/settings/telegram/username")
 @router.get("/api/settings/telegram/username")
-async def get_telegram_username():
+async def get_telegram_username(request: Request):
     """Return the configured Telegram username for voice calls."""
+    require_admin(request)
     s = get_settings()
     return {"username": getattr(s, "asta_telegram_username", None)}
 
 
 @router.post("/settings/telegram/username")
 @router.post("/api/settings/telegram/username")
-async def set_telegram_username(body: TelegramUsernameIn):
+async def set_telegram_username(request: Request, body: TelegramUsernameIn):
     """Update the Telegram username for voice calls."""
+    require_admin(request)
     username = (body.username or "").strip()
     if username and not username.startswith("@"):
         username = "@" + username
@@ -1354,36 +1408,55 @@ def _workspace_path() -> Path:
     return Path(__file__).resolve().parents[3] / "workspace"
 
 
+def _user_memories_path(user_id: str) -> Path:
+    """Per-user memories file: workspace/users/{user_id}/USER.md"""
+    ws = _workspace_path()
+    p = ws / "users" / user_id
+    p.mkdir(parents=True, exist_ok=True)
+    return p / "USER.md"
+
+
 @router.get("/settings/persona")
 @router.get("/api/settings/persona")
-async def get_persona():
-    """Return contents of workspace/SOUL.md and workspace/USER.md."""
+async def get_persona(request: Request):
+    """Return SOUL.md (admin only) and per-user memories."""
+    user_id = get_current_user_id(request)
+    user_role = get_current_user_role(request)
     ws = _workspace_path()
     soul_path = ws / "SOUL.md"
-    user_path = ws / "USER.md"
+    # Per-user memories — fall back to global USER.md for admin if no per-user file
+    user_path = _user_memories_path(user_id)
+    if not user_path.is_file() and user_role == "admin":
+        global_user = ws / "USER.md"
+        if global_user.is_file():
+            user_path = global_user
     return {
-        "soul": soul_path.read_text(encoding="utf-8") if soul_path.is_file() else "",
+        "soul": soul_path.read_text(encoding="utf-8") if soul_path.is_file() and user_role == "admin" else "",
         "user": user_path.read_text(encoding="utf-8") if user_path.is_file() else "",
     }
 
 
 @router.put("/settings/persona")
 @router.put("/api/settings/persona")
-async def set_persona(body: PersonaIn):
-    """Write workspace/SOUL.md and/or workspace/USER.md."""
+async def set_persona(request: Request, body: PersonaIn):
+    """Write SOUL.md (admin) and/or per-user memories."""
+    user_id = get_current_user_id(request)
+    user_role = get_current_user_role(request)
     ws = _workspace_path()
     ws.mkdir(parents=True, exist_ok=True)
     if body.soul is not None:
+        require_admin(request)
         (ws / "SOUL.md").write_text(body.soul, encoding="utf-8")
     if body.user is not None:
-        (ws / "USER.md").write_text(body.user, encoding="utf-8")
+        _user_memories_path(user_id).write_text(body.user, encoding="utf-8")
     return {"ok": True}
 
 
 @router.get("/settings/usage")
 @router.get("/api/settings/usage")
-async def get_usage_stats(user_id: str = "default", days: int = 30):
+async def get_usage_stats(request: Request, days: int = 30):
     """Return per-provider/model token usage totals."""
+    user_id = get_current_user_id(request)
     db = get_db()
     await db.connect()
     rows = await db.get_usage_stats(user_id=user_id, days=days)

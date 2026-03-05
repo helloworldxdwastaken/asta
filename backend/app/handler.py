@@ -2662,6 +2662,7 @@ async def handle_message(
     image_bytes: bytes | None = None,
     image_mime: str | None = None,
     _out: dict | None = None,
+    user_role: str = "admin",
 ) -> str:
     """Process one user message: context + AI + save. Schedules reminders when requested. Returns assistant reply.
     Asta is the agent; it uses whichever AI provider you set (Groq, Gemini, Claude, Ollama)."""
@@ -2725,7 +2726,7 @@ async def handle_message(
             retrieve_agent_knowledge_snippets,
         )
 
-        selected_agent, cleaned_text = await resolve_agent_mention_in_text(text, user_id=user_id)
+        selected_agent, cleaned_text = await resolve_agent_mention_in_text(text, user_id=user_id, user_role=user_role)
         if selected_agent:
             text = (cleaned_text or "").strip() or text
             aid = str(selected_agent.get("id") or "").strip()
@@ -3099,7 +3100,7 @@ async def handle_message(
 
     # 4. Build Context (Prompt Engineering)
     # Built-in skills are intent-routed; workspace skills are selected by the model via <available_skills> + read tool.
-    context = await build_context(db, user_id, cid, extra=extra, skills_in_use=skills_to_use)
+    context = await build_context(db, user_id, cid, extra=extra, skills_in_use=skills_to_use, user_role=user_role)
     context = _append_selected_agent_context(context, extra)
     
     # Silly GIF skill: Proactive instruction (not intent-based)
@@ -3282,7 +3283,10 @@ async def handle_message(
         thinking_level = "high"
         extra["thinking_level"] = thinking_level
 
-    # Exec tool (Claw-style): expose based on exec security policy.
+    # ── Role-based tool gating ──────────────────────────────────────────────
+    _is_admin = (user_role == "admin")
+
+    # Exec tool (Claw-style): expose based on exec security policy. Admin-only.
     from app.exec_tool import (
         get_effective_exec_bins,
         get_bash_tool_openai_def,
@@ -3294,72 +3298,70 @@ async def handle_message(
         OUTPUT_EVENT_TAIL_CHARS,
     )
     from app.config import get_settings
-    effective_bins = await get_effective_exec_bins(db, user_id)
-    # OpenClaw-style: expose exec based on security policy.
-    # - deny: hidden
-    # - allowlist: shown when allowlist has bins
-    # - full: always shown
-    exec_mode = get_settings().exec_security
-    offer_exec = exec_mode != "deny" and (exec_mode == "full" or bool(effective_bins))
-    tools = list(get_exec_tool_openai_def(effective_bins, security_mode=exec_mode)) if offer_exec else []
-    if offer_exec:
-        tools = tools + get_bash_tool_openai_def(effective_bins, security_mode=exec_mode)
-    if offer_exec:
-        logger.info("Exec allowlist: %s; passing tools to provider=%s", sorted(effective_bins), provider.name)
-    elif "notes" in text.lower() or "memo" in text.lower():
-        logger.warning("User asked for notes/memo but exec allowlist is empty (enable Apple Notes skill or set ASTA_EXEC_ALLOWED_BINS)")
-    # Process tool companion for long-running exec sessions (OpenClaw-style).
-    if offer_exec:
-        from app.process_tool import get_process_tool_openai_def
-        tools = tools + get_process_tool_openai_def()
+    tools: list = []
+    offer_exec = False
+    if _is_admin:
+        effective_bins = await get_effective_exec_bins(db, user_id)
+        exec_mode = get_settings().exec_security
+        offer_exec = exec_mode != "deny" and (exec_mode == "full" or bool(effective_bins))
+        if offer_exec:
+            tools = list(get_exec_tool_openai_def(effective_bins, security_mode=exec_mode))
+            tools = tools + get_bash_tool_openai_def(effective_bins, security_mode=exec_mode)
+            logger.info("Exec allowlist: %s; passing tools to provider=%s", sorted(effective_bins), provider.name)
+            # Process tool companion for long-running exec sessions
+            from app.process_tool import get_process_tool_openai_def
+            tools = tools + get_process_tool_openai_def()
+        elif "notes" in text.lower() or "memo" in text.lower():
+            logger.warning("User asked for notes/memo but exec allowlist is empty (enable Apple Notes skill or set ASTA_EXEC_ALLOWED_BINS)")
 
-    # Coding compatibility tools (OpenClaw-style): read/write/edit with alias normalization.
-    # Enabled for workspace skills and for files workflows.
+    # Coding compatibility tools: admin-only (read/write/edit with alias normalization).
     from app.workspace import discover_workspace_skills
     workspace_skill_names = {s.name for s in discover_workspace_skills()}
     has_enabled_workspace_skills = any(name in enabled for name in workspace_skill_names)
-    offer_coding_compat = has_enabled_workspace_skills or ("files" in enabled)
-    if offer_coding_compat:
-        from app.coding_compat_tool import get_coding_compat_tools_openai_def
-        from app.apply_patch_compat_tool import get_apply_patch_compat_tool_openai_def
-        tools = tools + get_coding_compat_tools_openai_def()
-        tools = tools + get_apply_patch_compat_tool_openai_def()
-    # High-value OpenClaw compat tools for imported skills.
-    # Also allow web tools on-demand (e.g. UI \"Web\" toggle) even without workspace skills.
+    if _is_admin:
+        offer_coding_compat = has_enabled_workspace_skills or ("files" in enabled)
+        if offer_coding_compat:
+            from app.coding_compat_tool import get_coding_compat_tools_openai_def
+            from app.apply_patch_compat_tool import get_apply_patch_compat_tool_openai_def
+            tools = tools + get_coding_compat_tools_openai_def()
+            tools = tools + get_apply_patch_compat_tool_openai_def()
+
+    # Web/memory tools: allowed for ALL users (web search, etc.)
     if has_enabled_workspace_skills or extra.get("force_web"):
         from app.openclaw_compat_tools import get_openclaw_web_memory_tools_openai_def
         from app.message_compat_tool import get_message_compat_tool_openai_def
         tools = tools + get_openclaw_web_memory_tools_openai_def()
         tools = tools + get_message_compat_tool_openai_def()
 
-    # Files tool: list_directory/read_file/write_file/allow_path/delete* for filesystem workflows.
-    if "files" in enabled:
+    # Files tool: admin-only
+    if _is_admin and "files" in enabled:
         from app.files_tool import get_files_tools_openai_def
         tools = tools + get_files_tools_openai_def()
-    # Reminders tool: status/list/add/remove (one-shot reminders)
-    if "reminders" in enabled:
+    # Reminders tool: admin-only
+    if _is_admin and "reminders" in enabled:
         from app.reminders_tool import get_reminders_tool_openai_def
         tools = tools + get_reminders_tool_openai_def()
-    # Cron tool: status/list/add/update/remove for recurring jobs
-    from app.cron_tool import get_cron_tool_openai_def
-    tools = tools + get_cron_tool_openai_def()
-    # Spotify tool: search/play/control/playlists — full LLM-driven integration.
-    if "spotify" in enabled:
+    # Cron tool: admin-only
+    if _is_admin:
+        from app.cron_tool import get_cron_tool_openai_def
+        tools = tools + get_cron_tool_openai_def()
+    # Spotify tool: admin-only
+    if _is_admin and "spotify" in enabled:
         from app.spotify_tool import get_spotify_tools_openai_def
         tools = tools + get_spotify_tools_openai_def()
-    # Image generation tool — Gemini primary, Hugging Face FLUX.1-dev fallback.
+    # Image generation tool — allowed for ALL users
     from app.keys import get_api_key as _get_api_key_img
     _gemini_key = await _get_api_key_img("gemini_api_key") or await _get_api_key_img("google_ai_key")
     _hf_key = await _get_api_key_img("huggingface_api_key")
     if _gemini_key or _hf_key:
         from app.image_gen_tool import get_image_gen_tool_openai_def
         tools = tools + get_image_gen_tool_openai_def()
-    # PDF generation tool — only if pymupdf is installed.
+    # PDF generation tool — allowed for ALL users
     from app.pdf_tool import get_pdf_tool_openai_def, is_fitz_available
     if is_fitz_available():
         tools = tools + get_pdf_tool_openai_def()
-    # Single-user OpenClaw-style subagent orchestration tools.
-    if channel != "subagent":
+    # Subagent orchestration: admin-only
+    if _is_admin and channel != "subagent":
         from app.subagent_orchestrator import get_subagent_tools_openai_def
         tools = tools + get_subagent_tools_openai_def()
     tools = tools if tools else None

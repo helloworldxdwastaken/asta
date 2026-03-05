@@ -238,8 +238,19 @@ async def init_schema(conn: "aiosqlite.Connection", logger: logging.Logger) -> N
             created_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_folders_user_channel ON conversation_folders(user_id, channel);
+
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user',
+            created_at TEXT NOT NULL
+        );
     """)
     await conn.commit()
+
+    # --- Migration: create admin from existing "default" data ---
+    await _migrate_default_to_admin(conn, logger)
 
     # --- Migrations: add columns to existing installs ---
 
@@ -339,3 +350,82 @@ async def init_schema(conn: "aiosqlite.Connection", logger: logging.Logger) -> N
                 logger.exception("Failed to add subagent_runs.%s column: %s", col, e)
     except Exception as e:
         logger.debug("subagent_runs table migration check skipped: %s", e)
+
+
+async def _migrate_default_to_admin(conn: "aiosqlite.Connection", logger: logging.Logger) -> None:
+    """One-time migration: if users table is empty and 'default' data exists, create admin and remap."""
+    import os
+    from uuid import uuid4
+    from datetime import datetime, timezone
+
+    cursor = await conn.execute("SELECT COUNT(*) FROM users")
+    count = (await cursor.fetchone())[0]
+    if count > 0:
+        return  # Already have users, skip
+
+    # Check if there's any existing data with user_id='default'
+    cursor = await conn.execute("SELECT COUNT(*) FROM conversations WHERE user_id = 'default'")
+    has_data = (await cursor.fetchone())[0] > 0
+
+    if not has_data:
+        # Fresh install — no migration needed, admin will be created on first login attempt
+        return
+
+    # Create admin user
+    username = os.environ.get("ASTA_ADMIN_USERNAME", "admin")
+    password = os.environ.get("ASTA_ADMIN_PASSWORD", "")
+    if not password:
+        import secrets
+        password = secrets.token_urlsafe(16)
+        logger.warning("=" * 60)
+        logger.warning("AUTO-GENERATED ADMIN PASSWORD: %s", password)
+        logger.warning("Username: %s", username)
+        logger.warning("Save this password — it won't be shown again!")
+        logger.warning("=" * 60)
+
+    try:
+        import bcrypt
+    except ImportError:
+        logger.error("bcrypt not installed — cannot create admin user. Run: pip install bcrypt")
+        return
+
+    admin_id = str(uuid4())
+    pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    now = datetime.now(timezone.utc).isoformat()
+
+    await conn.execute(
+        "INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?, ?, ?, 'admin', ?)",
+        (admin_id, username, pw_hash, now),
+    )
+
+    # Remap all tables with user_id='default' to admin UUID
+    _tables_with_user_id = [
+        "conversations", "tasks", "reminders", "user_settings", "skill_toggles",
+        "provider_models", "provider_runtime_state", "user_location",
+        "spotify_user_tokens", "pending_spotify_play", "spotify_retry_request",
+        "saved_audio_notes", "pending_learn_about", "exec_approvals",
+        "allowed_paths", "cron_jobs", "cron_job_runs", "subagent_runs",
+        "usage_stats", "conversation_folders",
+    ]
+    for table in _tables_with_user_id:
+        try:
+            await conn.execute(f"UPDATE {table} SET user_id = ? WHERE user_id = 'default'", (admin_id,))
+        except Exception as e:
+            logger.debug("Migration skip %s: %s", table, e)
+
+    # Update conversation IDs: default:web:xxx → admin_id:web:xxx
+    cursor = await conn.execute("SELECT id FROM conversations WHERE id LIKE 'default:%'")
+    rows = await cursor.fetchall()
+    for row in rows:
+        old_id = row[0]
+        new_id = admin_id + old_id[7:]  # len("default") = 7
+        await conn.execute("UPDATE conversations SET id = ? WHERE id = ?", (new_id, old_id))
+        await conn.execute("UPDATE messages SET conversation_id = ? WHERE conversation_id = ?", (new_id, old_id))
+        # Update folder references
+        try:
+            await conn.execute("UPDATE conversation_folders SET id = ? WHERE id = ?", (new_id, old_id))
+        except Exception:
+            pass
+
+    await conn.commit()
+    logger.info("✓ Migrated existing data from 'default' to admin user '%s' (id=%s)", username, admin_id)

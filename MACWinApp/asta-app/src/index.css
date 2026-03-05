@@ -6,16 +6,16 @@
 
 /* Dark mode (default) */
 :root, .dark {
-  --surface:         #0A0A0C;
-  --surface-raised:  #121215;
-  --surface-overlay: #1A1A1F;
-  --surface-glass:   rgba(18,18,21,0.78);
+  --surface:         #111114;
+  --surface-raised:  #19191D;
+  --surface-overlay: #212126;
+  --surface-glass:   rgba(25,25,29,0.78);
   --label:           #F0EDE8;
   --label-secondary: rgba(240,237,232,0.55);
   --label-tertiary:  rgba(240,237,232,0.28);
   --separator:       rgba(255,255,255,0.06);
   --separator-bold:  rgba(255,255,255,0.1);
-  --sidebar:         rgba(14,14,17,0.85);
+  --sidebar:         rgba(20,20,24,0.88);
   --sidebar-hover:   rgba(255,255,255,0.04);
   --code-bg:         rgba(255,255,255,0.03);
   --code-border:     rgba(255,255,255,0.06);

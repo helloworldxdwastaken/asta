@@ -337,14 +337,26 @@ def get_location_from_workspace_user_md() -> str | None:
     return None
 
 
-def get_workspace_context_section() -> str | None:
-    """Read AGENTS.md, USER.md, SOUL.md, TOOLS.md and return a single context block."""
+def _get_user_md_path(root, user_id: str | None = None):
+    """Resolve per-user USER.md, falling back to global."""
+    if user_id and user_id != "default":
+        per_user = root / "users" / user_id / "USER.md"
+        if per_user.is_file():
+            return per_user
+    return root / "USER.md"
+
+
+def get_workspace_context_section(user_id: str | None = None) -> str | None:
+    """Read AGENTS.md, USER.md (per-user), SOUL.md, TOOLS.md and return a single context block."""
     root = get_workspace_dir()
     if not root:
         return None
     parts: list[str] = []
     for filename in WORKSPACE_CONTEXT_FILES:
-        path = root / filename
+        if filename == "USER.md":
+            path = _get_user_md_path(root, user_id)
+        else:
+            path = root / filename
         if path.is_file():
             try:
                 content = path.read_text(encoding="utf-8", errors="replace").strip()

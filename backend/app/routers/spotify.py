@@ -7,6 +7,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
+from app.auth_utils import get_current_user_id, require_admin
 from app.db import get_db
 from app.keys import get_api_key
 from app.spotify_client import get_user_access_token, list_user_devices, start_playback
@@ -24,8 +25,10 @@ SCOPES = "user-read-playback-state user-modify-playback-state user-read-private 
 
 
 @router.get("/spotify/connect")
-async def spotify_connect(request: Request, user_id: str = "default"):
+async def spotify_connect(request: Request):
     """Redirect user to Spotify to authorize (for playback). After auth, Spotify redirects to callback."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     cid = (await get_api_key("spotify_client_id")) or ""
     cid = cid.strip()
     if not cid:
@@ -92,15 +95,19 @@ async def spotify_callback(request: Request, code: str | None = None, state: str
 
 
 @router.get("/spotify/devices")
-async def spotify_devices(user_id: str = "default"):
+async def spotify_devices(request: Request):
     """List user's Spotify devices (for 'where to play' picker)."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     devices = await list_user_devices(user_id)
     return {"devices": devices, "connected": len(devices) > 0}
 
 
 @router.post("/spotify/play")
-async def spotify_play(body: PlayIn, user_id: str = "default"):
+async def spotify_play(request: Request, body: PlayIn):
     """Start playback on a device. track_uri e.g. spotify:track:xxx."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     if not (body.track_uri or "").strip():
         return {"ok": False, "error": "track_uri required"}
     ok = await start_playback(user_id, body.device_id, body.track_uri.strip())
@@ -108,15 +115,19 @@ async def spotify_play(body: PlayIn, user_id: str = "default"):
 
 
 @router.get("/spotify/status")
-async def spotify_status(user_id: str = "default"):
+async def spotify_status(request: Request):
     """Whether the user has connected Spotify for playback."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     token = await get_user_access_token(user_id)
     return {"connected": bool(token)}
 
 
 @router.post("/spotify/disconnect")
-async def spotify_disconnect(user_id: str = "default"):
+async def spotify_disconnect(request: Request):
     """Clear stored Spotify tokens so the user can re-authorize."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     from app.db import get_db
     db = get_db()
     await db.connect()

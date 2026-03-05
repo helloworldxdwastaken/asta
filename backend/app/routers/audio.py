@@ -3,9 +3,10 @@ import asyncio
 import logging
 import time
 import uuid
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 
+from app.auth_utils import get_current_user_id, require_admin
 from app.audio_notes import process_audio_to_notes
 
 logger = logging.getLogger(__name__)
@@ -25,13 +26,14 @@ def _cleanup_old_jobs() -> None:
 
 @router.post("/audio/process")
 async def process_audio(
+    request: Request,
     file: UploadFile = File(...),
     instruction: str = Form(""),
-    user_id: str = Form("default"),
     whisper_model: str = Form("base"),
     async_mode: str = Form("0"),
 ):
     """Upload an audio file; transcribe and format. If async_mode=1, returns 202 with job_id; poll GET /audio/status/{job_id} for progress."""
+    user_id = get_current_user_id(request)
     data = await file.read()
     if not data:
         raise HTTPException(400, "Empty file.")

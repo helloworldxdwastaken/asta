@@ -17,7 +17,7 @@ const THEME_MODES: { mode: ThemeMode; label: string; Icon: React.FC<{ size?: num
   { mode: "dark", label: "Dark", Icon: IconMoon },
 ];
 
-export default function TabGeneral() {
+export default function TabGeneral({ isAdmin = true }: { isAdmin?: boolean }) {
   const [provider, setProvider] = useState("claude");
   const [thinking, setThinkingState] = useState("off");
   const [reasoning, setReasoningState] = useState("off");
@@ -58,12 +58,14 @@ export default function TabGeneral() {
         </p>
       </Section>
 
-      <Section title="AI Provider">
-        {PROVIDERS.map(p => (
-          <Radio key={p.key} label={p.name} checked={provider === p.key}
-            onChange={async () => { setProvider(p.key); await setDefaultAI(p.key); notifySettingsChanged(); }} />
-        ))}
-      </Section>
+      {isAdmin && (
+        <Section title="AI Provider">
+          {PROVIDERS.map(p => (
+            <Radio key={p.key} label={p.name} checked={provider === p.key}
+              onChange={async () => { setProvider(p.key); await setDefaultAI(p.key); notifySettingsChanged(); }} />
+          ))}
+        </Section>
+      )}
 
       <Section title="Thinking Level">
         <div className="flex flex-wrap gap-2">
@@ -74,14 +76,16 @@ export default function TabGeneral() {
         </div>
       </Section>
 
-      <Section title="Reasoning Mode">
-        <div className="flex gap-2">
-          {["off", "on", "stream"].map(m => (
-            <Chip key={m} label={m} active={reasoning === m}
-              onClick={async () => { setReasoningState(m); await setReasoning(m); }} />
-          ))}
-        </div>
-      </Section>
+      {isAdmin && (
+        <Section title="Reasoning Mode">
+          <div className="flex gap-2">
+            {["off", "on", "stream"].map(m => (
+              <Chip key={m} label={m} active={reasoning === m}
+                onClick={async () => { setReasoningState(m); await setReasoning(m); }} />
+            ))}
+          </div>
+        </Section>
+      )}
 
       <Section title="Mood">
         <div className="flex gap-3">
@@ -93,19 +97,23 @@ export default function TabGeneral() {
         <p className="text-11 text-label-tertiary mt-1.5">Changes the tone of AI replies</p>
       </Section>
 
-      <Section title="Final Mode">
-        <div className="flex gap-2">
-          {["off", "strict"].map(m => (
-            <Chip key={m} label={m} active={finalMode === m}
-              onClick={async () => { setFinalModeState(m); await setFinalMode(m); }} />
-          ))}
-        </div>
-        <p className="text-11 text-label-tertiary mt-1.5">Strips thinking tags from output</p>
-      </Section>
+      {isAdmin && (
+        <Section title="Final Mode">
+          <div className="flex gap-2">
+            {["off", "strict"].map(m => (
+              <Chip key={m} label={m} active={finalMode === m}
+                onClick={async () => { setFinalModeState(m); await setFinalMode(m); }} />
+            ))}
+          </div>
+          <p className="text-11 text-label-tertiary mt-1.5">Strips thinking tags from output</p>
+        </Section>
+      )}
 
-      <Section title="Vision">
-        <Toggle checked={vision} onChange={async v => { setVisionState(v); try { await setVision(v); } catch { setVisionState(!v); } }} label="Enable image understanding" />
-      </Section>
+      {isAdmin && (
+        <Section title="Vision">
+          <Toggle checked={vision} onChange={async v => { setVisionState(v); try { await setVision(v); } catch { setVisionState(!v); } }} label="Enable image understanding" />
+        </Section>
+      )}
     </div>
   );
 }

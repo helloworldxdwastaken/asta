@@ -1,12 +1,15 @@
 import { useState, useEffect } from "react";
 import SetupWizard from "./components/Setup/SetupWizard";
+import LoginPage from "./components/Login/LoginPage";
 import Sidebar from "./components/Sidebar/Sidebar";
 import ChatView from "./components/Chat/ChatView";
 import SettingsSheet from "./components/Settings/SettingsSheet";
 import UpdateToast from "./components/UpdateToast";
 import AgentsSheet from "./components/Agents/AgentsSheet";
 import { getSetupDone } from "./lib/store";
-import { checkHealth, getDefaultAI, listAgents, autoResolveBackend } from "./lib/api";
+import { checkHealth, getDefaultAI, listAgents, autoResolveBackend, getMe } from "./lib/api";
+import { getJwt, getStoredUser, setAuth, clearAuth, User } from "./lib/auth";
+import { getVersion } from "@tauri-apps/api/app";
 
 interface Agent {
   id: string; name: string; description?: string; icon?: string;
@@ -28,30 +31,89 @@ export default function App() {
   const [chatKey, setChatKey] = useState(0);
   const [isOnline, setIsOnline] = useState(false);
   const [providerKey, setProviderKey] = useState("claude");
+  // Auth state: null = still checking, false = no multi-user (skip login), User = logged in
+  const [user, setUser] = useState<User | false | null>(null);
+  const [needsLogin, setNeedsLogin] = useState(false);
 
-  // On mount: auto-resolve backend URL, then poll health + fetch data
+  // Check auth on mount
   useEffect(() => {
-    const fetchProvider = () => getDefaultAI().then(r => setProviderKey(r.provider ?? r.default_ai_provider ?? "claude")).catch(() => {});
+    (async () => {
+      // Clear auth on app update so user must re-login
+      try {
+        const v = await getVersion();
+        const prev = localStorage.getItem("asta_app_version");
+        if (prev && prev !== v) clearAuth();
+        localStorage.setItem("asta_app_version", v);
+      } catch {}
 
-    // Auto-resolve first, then start normal polling
-    autoResolveBackend().then(ok => {
+      const ok = await autoResolveBackend().catch(() => false);
       setIsOnline(ok);
-      if (ok) {
-        fetchProvider();
-        listAgents().then(r => setAgents(r.agents ?? [])).catch(() => {});
+      if (!ok) { setUser(false); return; }
+      // Try to validate existing JWT
+      const jwt = getJwt();
+      if (jwt) {
+        try {
+          const me = await getMe();
+          const u: User = { id: me.id, username: me.username, role: me.role as "admin" | "user" };
+          setAuth(jwt, u);
+          setUser(u);
+          return;
+        } catch {
+          clearAuth();
+        }
       }
-    });
+      // No JWT — check if backend is in multi-user mode by trying /api/auth/me
+      // If 401 → needs login; if any other response → single-user mode
+      try {
+        await getMe();
+        // Succeeded without JWT = single-user mode (no auth needed)
+        setUser(false);
+      } catch (err: any) {
+        if (err?.message?.includes("401")) {
+          setNeedsLogin(true);
+        } else {
+          // Backend unreachable or other error — assume single-user
+          setUser(false);
+        }
+      }
+    })();
+
+    // Listen for auth expiry from api.ts
+    const onExpired = () => { setUser(null); setNeedsLogin(true); };
+    window.addEventListener("auth-expired", onExpired);
+    return () => window.removeEventListener("auth-expired", onExpired);
+  }, []);
+
+  // Once authenticated (or single-user), load data
+  useEffect(() => {
+    if (user === null && !needsLogin) return; // still loading
+    if (needsLogin) return; // waiting for login
+    const fetchProvider = () => getDefaultAI().then(r => setProviderKey(r.provider ?? r.default_ai_provider ?? "claude")).catch(() => {});
+    fetchProvider();
+    listAgents().then(r => setAgents(r.agents ?? [])).catch(() => {});
 
     const check = async () => {
       const ok = await checkHealth().catch(() => false);
       setIsOnline(ok);
     };
     const interval = setInterval(check, 15000);
-    fetchProvider();
-    listAgents().then(r => setAgents(r.agents ?? [])).catch(() => {});
     window.addEventListener("settings-changed", fetchProvider);
     return () => { clearInterval(interval); window.removeEventListener("settings-changed", fetchProvider); };
-  }, []);
+  }, [user, needsLogin]);
+
+  function handleLogin() {
+    const u = getStoredUser();
+    setUser(u || false);
+    setNeedsLogin(false);
+  }
+
+  function handleLogout() {
+    clearAuth();
+    setUser(null);
+    setNeedsLogin(true);
+    setConversationId(undefined);
+    setChatKey(k => k + 1);
+  }
 
   function handleNewChat() { setConversationId(undefined); setChatKey(k => k + 1); }
   function handleConversationCreated(id: string) {
@@ -61,8 +123,23 @@ export default function App() {
 
   const providerShortName = PROVIDER_NAMES[providerKey] ?? providerKey;
   const enabledAgentCount = agents.filter(a => a.enabled).length;
+  const userIsAdmin = user ? user.role === "admin" : true; // single-user = admin
 
-  if (!setupDone) {
+  // Show login page if multi-user and not logged in
+  if (needsLogin) {
+    return <LoginPage onLogin={handleLogin} />;
+  }
+
+  // Still checking auth
+  if (user === null) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-surface grain">
+        <div className="w-6 h-6 border-2 border-accent/40 border-t-accent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!setupDone && userIsAdmin) {
     return <SetupWizard onComplete={() => setSetupDone(true)} />;
   }
 
@@ -74,12 +151,14 @@ export default function App() {
           selectedId={conversationId}
           onSelect={setConversationId}
           onNewChat={handleNewChat}
-          onOpenSettings={() => setShowSettings(true)}
-          onOpenAgents={() => setShowAgents(true)}
+          onOpenSettings={userIsAdmin ? () => setShowSettings(true) : undefined}
+          onOpenAgents={userIsAdmin ? () => setShowAgents(true) : undefined}
           enabledAgentCount={enabledAgentCount}
           providerShortName={providerShortName}
           isOnline={isOnline}
           refreshTrigger={sidebarRefresh}
+          user={user || undefined}
+          onLogout={user ? handleLogout : undefined}
         />
       </div>
 
@@ -90,6 +169,7 @@ export default function App() {
           conversationId={conversationId}
           onConversationCreated={handleConversationCreated}
           agents={agents}
+          isAdmin={userIsAdmin}
         />
       </div>
 

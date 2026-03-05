@@ -1,6 +1,6 @@
 # Asta
 
-A personal AI workspace that runs on **desktop (macOS/Windows)**, **web**, and **Telegram** with one shared context and persistent chat history.
+A personal AI workspace that runs on **desktop (macOS/Windows)** and **Telegram** with one shared context, persistent chat history, and multi-user support.
 
 ## Preview
 
@@ -9,6 +9,7 @@ A personal AI workspace that runs on **desktop (macOS/Windows)**, **web**, and *
 ## Why Asta
 
 - **Cross-platform desktop app** — Tauri-based app (macOS + Windows) with sidebar conversation history, agent picker, PDF generation, and Tailscale remote access. Global shortcut `Alt+Space` to toggle.
+- **Multi-user authentication** — JWT-based login with admin/user roles, self-registration, and per-user memories. Role-based access control across all endpoints and tools.
 - Multi-provider AI: Groq, Google Gemini, Claude, OpenAI, OpenRouter, and Ollama.
 - OpenClaw-style skill flow: model selects the best workspace skill and reads its `SKILL.md` on demand.
 - Built-in skills: time/weather, web search, Spotify, reminders, audio notes, PDF generation, background learning, and Google Workspace (Gmail, Calendar, Drive via gog CLI).
@@ -89,7 +90,7 @@ If the panel shows "API off", start the backend first or use **Settings -> Run t
 - **Tool-first execution**: structured tools for exec/files/reminders/cron, OpenClaw-style `process` background session management, and single-user subagent orchestration (`sessions_spawn/list/history/send/stop`).
 - **Image generation fallback**: `image_gen` tool uses Gemini first and Hugging Face FLUX.1-dev fallback (provider-aware routing + 5 req/min guardrail). If a model incorrectly claims image tools are unavailable, backend now runs deterministic image fallback instead of returning a false denial.
 - **Subagent control UX**: deterministic `/subagents` command flow (`list/spawn/info/send/stop`, optional `--wait` on send) plus conservative auto-spawn for explicit long/background requests (toggle: `ASTA_SUBAGENTS_AUTO_SPAWN`).
-- **Files**: local knowledge files + allowed paths. User context (who you are) lives in **workspace/USER.md**.
+- **Files**: local knowledge files + allowed paths. User context (who you are) lives in per-user memory files (editable in Settings > Memories).
 - **Learning**: "learn about X for Y minutes" (also: "research/study/become an expert on X") with retrievable context.
 - **Schedule (Reminders + Cron)**: list, add, update, remove, and run recurring jobs or one-shot reminders. One-shot reminders (created via "Remind me at...") are now visible on the **Cron** page with a **One-Shot** badge for easier management.
 - **Automated Voice Calls (Pingram)**: triggering reliable phone calls for reminders and jobs via NotificationAPI (integration: Pingram). Supports custom **Pingram Templates** and fallback to default messages. Configure your phone number and credentials in the **Channels** page.
@@ -103,7 +104,7 @@ If the panel shows "API off", start the backend first or use **Settings -> Run t
 - Telegram bot commands: `/status`, `/exec_mode`, `/allow`, `/allowlist`, `/approvals` (inline `Once/Always/Deny` actions, with automatic post-approval continuation), `/think` (aliases: `/thinking`, `/t`), `/reasoning`, `/subagents`.
 - Telegram markdown image replies (`![...](...)`) are sent as native media (photos/animations), including inline `data:image/...` payloads from image generation.
 - Exec allowlist hardening: in `allowlist` mode, Asta accepts only a single direct command (no `|`, `&&`, `;`, redirects, command substitution, or multiline scripts), and blocks shell launchers (`bash`, `sh`, `zsh`, `pwsh`, `cmd`) even if manually allowlisted.
-- Vision input is currently supported on **Telegram photos** (desktop app image upload planned).
+- Vision input is supported on **Telegram photos** and **desktop app** (drag-and-drop or attach button).
 - Optional debugging: set `ASTA_SHOW_TOOL_TRACE=true` and `ASTA_TOOL_TRACE_CHANNELS=web` to append `Tools used: ...` on replies (Telegram footer is suppressed because it already shows proactive skill-status pings).
 
 ## Learning / RAG Setup
@@ -143,7 +144,7 @@ The cross-platform desktop app lives in `MACWinApp/asta-app/`. It's built with *
 **Releasing:**
 ```bash
 # Bump version in VERSION, Cargo.toml, and tauri.conf.json, then:
-git tag v1.3.54
+git tag v1.4.2
 git push origin main --tags
 ```
 GitHub Actions automatically builds macOS DMG (Apple Silicon + Intel) and Windows MSI, then publishes them to [GitHub Releases](https://github.com/helloworldxdwastaken/asta/releases).

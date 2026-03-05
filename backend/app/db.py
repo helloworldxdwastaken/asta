@@ -1798,6 +1798,52 @@ class Db:
             self._conn = None
 
 
+    # ── Users ──────────────────────────────────────────────────────────────────
+
+    async def create_user(self, username: str, password_hash: str, role: str = "user") -> dict:
+        await self.connect()
+        uid = str(uuid4())
+        now = datetime.now(timezone.utc).isoformat()
+        await self._conn.execute(
+            "INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?, ?, ?, ?, ?)",
+            (uid, username, password_hash, role, now),
+        )
+        await self._conn.commit()
+        return {"id": uid, "username": username, "role": role, "created_at": now}
+
+    async def get_user_by_username(self, username: str) -> dict | None:
+        await self.connect()
+        cursor = await self._conn.execute("SELECT * FROM users WHERE username = ?", (username,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def get_user_by_id(self, user_id: str) -> dict | None:
+        await self.connect()
+        cursor = await self._conn.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def list_users(self) -> list[dict]:
+        await self.connect()
+        cursor = await self._conn.execute("SELECT id, username, role, created_at FROM users ORDER BY created_at")
+        return [dict(row) for row in await cursor.fetchall()]
+
+    async def delete_user(self, user_id: str) -> None:
+        await self.connect()
+        await self._conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        await self._conn.commit()
+
+    async def update_user_password(self, user_id: str, password_hash: str) -> None:
+        await self.connect()
+        await self._conn.execute("UPDATE users SET password_hash = ? WHERE id = ?", (password_hash, user_id))
+        await self._conn.commit()
+
+    async def has_any_users(self) -> bool:
+        await self.connect()
+        cursor = await self._conn.execute("SELECT COUNT(*) FROM users")
+        return (await cursor.fetchone())[0] > 0
+
+
 _db: Db | None = None
 
 

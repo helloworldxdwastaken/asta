@@ -19,6 +19,7 @@ async def build_context(
     conversation_id: str | None,
     extra: dict | None = None,
     skills_in_use: set[str] | None = None,
+    user_role: str = "admin",
 ) -> str:
     """Build a context string the AI can use. If skills_in_use is set, only include those skill sections (saves tokens)."""
     extra = extra or {}
@@ -27,7 +28,7 @@ async def build_context(
     
     # 0. OpenClaw-style workspace context (AGENTS.md, USER.md, SOUL.md, TOOLS.md)
     from app.workspace import get_workspace_context_section
-    workspace_ctx = get_workspace_context_section()
+    workspace_ctx = get_workspace_context_section(user_id=user_id)
     if workspace_ctx:
         parts.append(workspace_ctx)
         parts.append("")
@@ -98,6 +99,7 @@ async def build_context(
         user_id,
         skills_in_use,
         agent_skill_filter=_resolve_selected_agent_skill_filter(extra),
+        user_role=user_role,
     )
     if skills_prompt:
         parts.append(skills_prompt)
@@ -180,11 +182,20 @@ def _resolve_selected_agent_skill_filter(extra: dict) -> list[str] | None:
     return normalized
 
 
+_ADMIN_ONLY_SKILLS = frozenset({
+    "apple-notes", "things-mac", "notion", "notion-operator", "files", "spotify",
+    "reminders", "learning", "audio_notes", "vercel", "github", "google_workspace",
+    "competitor", "esimo-copywriter", "knowledge-curator", "librarian",
+    "skill-creator", "notes", "after-effects-assistant", "seo-strategist", "rag",
+})
+
+
 async def _get_available_skills_prompt(
     db: "Db",
     user_id: str,
     skills_in_use: set[str] | None,
     agent_skill_filter: list[str] | None = None,
+    user_role: str = "admin",
 ) -> str:
     """OpenClaw-style list of workspace skills with name/description/location."""
     from app.skills.registry import get_all_skills
@@ -204,6 +215,9 @@ async def _get_available_skills_prompt(
         if not isinstance(skill, MarkdownSkill):
             continue
         if allowed is not None and skill.name not in allowed:
+            continue
+        # Role-based skill filtering: hide admin-only skills from regular users
+        if user_role != "admin" and skill.name in _ADMIN_ONLY_SKILLS:
             continue
         r = skill._resolved
         markdown_skill_names.add(skill.name)

@@ -4,6 +4,7 @@ import {
   IconNewChat, IconAgents, IconSettings, IconFolder, IconNewFolder,
   IconChevronRight, IconChevronDown, IconTrash,
 } from "../../lib/icons";
+import type { User } from "../../lib/auth";
 import {
   listConversations, listFolders, createFolder, renameFolder,
   deleteFolder, deleteConversation, assignConversationFolder,
@@ -20,17 +21,20 @@ interface Props {
   selectedId?: string;
   onSelect: (id: string) => void;
   onNewChat: () => void;
-  onOpenSettings: () => void;
-  onOpenAgents: () => void;
+  onOpenSettings?: () => void;
+  onOpenAgents?: () => void;
   enabledAgentCount: number;
   providerShortName: string;
   isOnline: boolean;
   refreshTrigger?: number;
+  user?: User;
+  onLogout?: () => void;
 }
 
 export default function Sidebar({
   selectedId, onSelect, onNewChat, onOpenSettings, onOpenAgents,
   enabledAgentCount, providerShortName, isOnline, refreshTrigger,
+  user, onLogout,
 }: Props) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
@@ -147,20 +151,22 @@ export default function Sidebar({
             {providerShortName}
           </span>
         </button>
-        <button
-          onClick={onOpenAgents}
-          className="w-full flex items-center justify-between px-3 py-2 rounded-mac bg-white/[.04] hover:bg-white/[.08] text-label text-13 font-medium transition-all duration-200 border border-separator active:scale-[0.98]"
-        >
-          <span className="flex items-center gap-2.5">
-            <IconAgents size={14} className="text-label-secondary" />
-            <span>Agents</span>
-          </span>
-          {enabledAgentCount > 0 && (
-            <span className="text-11 text-label-secondary bg-white/[.08] px-2 py-0.5 rounded-full tabular-nums font-semibold">
-              {enabledAgentCount}
+        {onOpenAgents && (
+          <button
+            onClick={onOpenAgents}
+            className="w-full flex items-center justify-between px-3 py-2 rounded-mac bg-white/[.04] hover:bg-white/[.08] text-label text-13 font-medium transition-all duration-200 border border-separator active:scale-[0.98]"
+          >
+            <span className="flex items-center gap-2.5">
+              <IconAgents size={14} className="text-label-secondary" />
+              <span>Agents</span>
             </span>
-          )}
-        </button>
+            {enabledAgentCount > 0 && (
+              <span className="text-11 text-label-secondary bg-white/[.08] px-2 py-0.5 rounded-full tabular-nums font-semibold">
+                {enabledAgentCount}
+              </span>
+            )}
+          </button>
+        )}
       </div>
 
       <div className="h-px bg-separator mx-3 my-1.5" />
@@ -247,15 +253,29 @@ export default function Sidebar({
             <div className={`w-2 h-2 rounded-full ${isOnline ? "bg-success" : "bg-danger"}`} />
             {isOnline && <div className="absolute inset-0 w-2 h-2 rounded-full bg-success animate-ping opacity-40" />}
           </div>
-          <span className="text-11 text-label-tertiary font-medium">{isOnline ? "Connected" : "Offline"}</span>
+          {user ? (
+            <>
+              <span className="text-11 text-label-secondary font-medium truncate max-w-[80px]">{user.username}</span>
+              <span className="text-[10px] text-label-tertiary bg-white/[.06] px-1.5 py-0.5 rounded-full uppercase tracking-wider font-semibold">{user.role}</span>
+            </>
+          ) : (
+            <span className="text-11 text-label-tertiary font-medium">{isOnline ? "Connected" : "Offline"}</span>
+          )}
         </div>
         <div className="flex gap-0.5">
           <button onClick={() => setShowNewFolder(true)} className="w-8 h-8 flex items-center justify-center rounded-mac hover:bg-white/[.06] text-label-tertiary hover:text-label-secondary transition-all duration-200" title="New folder">
             <IconNewFolder size={14} />
           </button>
-          <button onClick={onOpenSettings} className="w-8 h-8 flex items-center justify-center rounded-mac hover:bg-white/[.06] text-label-tertiary hover:text-label-secondary transition-all duration-200" title="Settings">
-            <IconSettings size={15} />
-          </button>
+          {onOpenSettings && (
+            <button onClick={onOpenSettings} className="w-8 h-8 flex items-center justify-center rounded-mac hover:bg-white/[.06] text-label-tertiary hover:text-label-secondary transition-all duration-200" title="Settings">
+              <IconSettings size={15} />
+            </button>
+          )}
+          {onLogout && (
+            <button onClick={onLogout} className="w-8 h-8 flex items-center justify-center rounded-mac hover:bg-white/[.06] text-label-tertiary hover:text-danger transition-all duration-200" title="Sign out">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+            </button>
+          )}
         </div>
       </div>
 

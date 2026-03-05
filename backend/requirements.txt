@@ -35,6 +35,9 @@ moviepy
 # PDF
 pymupdf
 psutil
+# Auth
+bcrypt
+PyJWT
 # Timezone from coordinates (local time, reminders)
 timezonefinder
 # Testing

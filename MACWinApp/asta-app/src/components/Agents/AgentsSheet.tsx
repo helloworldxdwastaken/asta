@@ -246,9 +246,11 @@ export default function AgentsSheet({ onClose, onAgentsChange }: Props) {
   }
 
   async function handleToggle(id: string) {
-    await toggleAgent(id);
+    const current = agents.find(a => a.id === id);
+    const newEnabled = !(current?.enabled ?? true);
+    await toggleAgent(id, newEnabled);
     setAgents(prev => {
-      const next = prev.map(a => a.id === id ? { ...a, enabled: !a.enabled } : a);
+      const next = prev.map(a => a.id === id ? { ...a, enabled: newEnabled } : a);
       onAgentsChange(next);
       return next;
     });

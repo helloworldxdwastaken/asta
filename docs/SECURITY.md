@@ -9,8 +9,6 @@ All sensitive data lives in **one place**: `backend/.env`. That file is **gitign
 
 ## Where to put your real config
 
-**If you had an old `.env` with `CLAWD_*` variables:** rename them to `ASTA_*` (e.g. `CLAWD_ALLOWED_PATHS` → `ASTA_ALLOWED_PATHS`).
-
 1. **Create your env file (only on your machine):**
    ```bash
    cp .env.example backend/.env
@@ -34,11 +32,22 @@ All sensitive data lives in **one place**: `backend/.env`. That file is **gitign
    - Paths that include your username or sensitive dirs (use generic docs in `.env.example`)
    - The file `backend/asta.db` (it may contain stored API keys and chat/reminder data)
 
+## Authentication
+
+Asta supports **multi-user JWT authentication**. When users exist in the database, all API endpoints require a valid JWT token (except `/api/auth/login` and `/api/auth/register`).
+
+- **JWT secret:** Auto-generated and stored in `backend/.env` as `ASTA_JWT_SECRET`. Rotating this invalidates all existing tokens.
+- **Password hashing:** bcrypt with random salt.
+- **Token expiry:** 30 days.
+- **Role-based access:** Admin users have full access. Regular users are restricted to chat with safe tools only.
+- **Backward compatibility:** When no users exist in the DB, Asta falls back to legacy Bearer token auth (single-user mode).
+
 ## What is gitignored (won’t be pushed)
 
-- `backend/.env` — env-based secrets
-- `backend/asta.db` — DB with chat, reminders, stored API keys (Settings), Spotify tokens
+- `backend/.env` — env-based secrets (including `ASTA_JWT_SECRET`)
+- `backend/asta.db` — DB with chat, reminders, stored API keys (Settings), Spotify tokens, **user accounts and password hashes**
 - `backend/chroma_db/` — RAG vectors
+- `workspace/users/` — per-user memory files
 - Any file named `.env`, `.env.local`, or under `secrets/`
 
 See the project root **`.gitignore`** for the full list.

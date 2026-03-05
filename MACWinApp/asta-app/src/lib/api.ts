@@ -14,7 +14,10 @@ const _fetch: typeof globalThis.fetch = (() => {
   return globalThis.fetch;
 })();
 
+import { getJwt, clearAuth } from "./auth";
+
 let _backendUrl = localStorage.getItem("backendURL") ?? "http://localhost:8010";
+// Legacy auth token (for backward compat when no users exist)
 let _authToken = localStorage.getItem("authToken") ?? "";
 
 export function getBackendUrl(): string { return _backendUrl; }
@@ -30,8 +33,10 @@ export function setAuthToken(token: string): void {
   else localStorage.removeItem("authToken");
 }
 
-/** Build auth headers (Bearer token if configured). */
+/** Build auth headers: prefer JWT, fall back to legacy Bearer token. */
 function _authHeaders(): Record<string, string> {
+  const jwt = getJwt();
+  if (jwt) return { Authorization: `Bearer ${jwt}` };
   return _authToken ? { Authorization: `Bearer ${_authToken}` } : {};
 }
 
@@ -110,7 +115,13 @@ async function req<T>(method: string, path: string, body?: unknown, query?: Reco
     opts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
   }
   const res = await _fetch(url, opts);
-  if (!res.ok) throw new Error(`${method} ${path} → ${res.status}`);
+  if (!res.ok) {
+    if (res.status === 401 && getJwt()) {
+      clearAuth();
+      window.dispatchEvent(new Event("auth-expired"));
+    }
+    throw new Error(`${method} ${path} → ${res.status}`);
+  }
   const text = await res.text();
   return text ? JSON.parse(text) : ({} as T);
 }
@@ -130,33 +141,33 @@ export const getServerStatus = () => req<any>("GET", "/api/settings/server-statu
 // ── Conversations ─────────────────────────────────────────────────────────────
 export const listConversations = (limit?: number) =>
   req<{ conversations: any[] }>("GET", "/api/chat/conversations", undefined,
-    { user_id: "default", channel: "web", ...(limit ? { limit: String(limit) } : {}) });
+    { channel: "web", ...(limit ? { limit: String(limit) } : {}) });
 
 export const deleteConversation = (id: string) =>
-  req("DELETE", `/api/chat/conversations/${id}`, undefined, { user_id: "default" });
+  req("DELETE", `/api/chat/conversations/${id}`);
 
 export const truncateConversation = (id: string, keepCount: number) =>
-  req("POST", `/api/chat/conversations/${id}/truncate`, { keep_count: keepCount }, { user_id: "default" });
+  req("POST", `/api/chat/conversations/${id}/truncate`, { keep_count: keepCount });
 
 export const loadMessages = (conversationId: string, limit?: number) =>
   req<{ messages: any[] }>("GET", "/api/chat/messages", undefined,
-    { conversation_id: conversationId, user_id: "default", ...(limit ? { limit: String(limit) } : {}) });
+    { conversation_id: conversationId, ...(limit ? { limit: String(limit) } : {}) });
 
 // ── Folders ───────────────────────────────────────────────────────────────────
 export const listFolders = () =>
-  req<{ folders: any[] }>("GET", "/api/chat/folders", undefined, { user_id: "default", channel: "web" });
+  req<{ folders: any[] }>("GET", "/api/chat/folders", undefined, { channel: "web" });
 
 export const createFolder = (name: string) =>
-  req("POST", "/api/chat/folders", { name }, { user_id: "default", channel: "web" });
+  req("POST", "/api/chat/folders", { name, channel: "web" });
 
 export const renameFolder = (id: string, name: string) =>
-  req("PATCH", `/api/chat/folders/${id}`, { name }, { user_id: "default" });
+  req("PATCH", `/api/chat/folders/${id}`, { name });
 
 export const deleteFolder = (id: string) =>
-  req("DELETE", `/api/chat/folders/${id}`, undefined, { user_id: "default" });
+  req("DELETE", `/api/chat/folders/${id}`);
 
 export const assignConversationFolder = (id: string, folderId: string | null) =>
-  req("PUT", `/api/chat/conversations/${id}/folder`, { folder_id: folderId }, { user_id: "default" });
+  req("PUT", `/api/chat/conversations/${id}/folder`, { folder_id: folderId });
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
 export interface SendMessageOpts {
@@ -171,7 +182,7 @@ export interface SendMessageOpts {
 
 export const sendMessage = (opts: SendMessageOpts) =>
   req<{ conversation_id: string; reply: string }>("POST", "/api/chat", {
-    ...opts, channel: opts.channel ?? "web", user_id: opts.user_id ?? "default",
+    ...opts, channel: opts.channel ?? "web",
   });
 
 /** Normalise backend SSE event names to UI types. */
@@ -202,13 +213,15 @@ export function streamChat(
   onError: (err: Error) => void,
 ): () => void {
   let aborted = false;
+  let finished = false;
   const controller = new AbortController();
+  const safeOnDone = (convId?: string) => { if (!finished) { finished = true; onDone(convId); } };
 
   const fetchOpts: any = {
     method: "POST",
     headers: { "Content-Type": "application/json", ..._authHeaders() },
     body: JSON.stringify({
-      ...opts, channel: opts.channel ?? "web", user_id: opts.user_id ?? "default",
+      ...opts, channel: opts.channel ?? "web",
     }),
     signal: controller.signal,
   };
@@ -216,7 +229,13 @@ export function streamChat(
     fetchOpts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
   }
   _fetch(`${_backendUrl}/api/chat/stream`, fetchOpts).then(async (res) => {
-    if (!res.ok || !res.body) throw new Error(`Stream error: ${res.status}`);
+    if (!res.ok || !res.body) {
+      if (res.status === 401 && getJwt()) {
+        clearAuth();
+        window.dispatchEvent(new Event("auth-expired"));
+      }
+      throw new Error(`Stream error: ${res.status}`);
+    }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
@@ -248,7 +267,7 @@ export function streamChat(
 
         if (dataStr === null) continue;
         const raw = dataStr.trim();
-        if (raw === "[DONE]") { onDone(lastConvId); return; }
+        if (raw === "[DONE]") { safeOnDone(lastConvId); return; }
 
         try {
           const parsed = JSON.parse(raw) as StreamChunk;
@@ -260,10 +279,15 @@ export function streamChat(
         }
       }
     }
-    onDone(lastConvId);
+    safeOnDone(lastConvId);
   }).catch((err) => { if (!aborted) onError(err); });
 
-  return () => { aborted = true; controller.abort(); };
+  return () => {
+    aborted = true;
+    controller.abort();
+    // Ensure UI resets even when abort races with reader
+    setTimeout(() => safeOnDone(undefined), 0);
+  };
 }
 
 // ── Settings — GET ────────────────────────────────────────────────────────────
@@ -329,15 +353,30 @@ export const testPingramCall = (testNumber: string) =>
 export const triggerUpdate = () =>
   req("POST", "/api/settings/update");
 
+// ── Auth ──────────────────────────────────────────────────────────────────────
+export const login = (username: string, password: string) =>
+  req<{ access_token: string; user: { id: string; username: string; role: string } }>(
+    "POST", "/api/auth/login", { username, password });
+export const register = (username: string, password: string) =>
+  req("POST", "/api/auth/register", { username, password });
+export const getMe = () => req<{ id: string; username: string; role: string }>("GET", "/api/auth/me");
+export const changePassword = (current_password: string, new_password: string) =>
+  req("POST", "/api/auth/change-password", { current_password, new_password });
+export const listUsers = () => req<{ users: any[] }>("GET", "/api/auth/users");
+export const createUser = (username: string, password: string, role: string) =>
+  req("POST", "/api/auth/users", { username, password, role });
+export const deleteUser = (userId: string) => req("DELETE", `/api/auth/users/${userId}`);
+export const resetUserPassword = (userId: string, new_password: string) =>
+  req("PUT", `/api/auth/users/${userId}/reset-password`, { new_password });
+
 // ── Spotify ───────────────────────────────────────────────────────────────────
-export const spotifyStatus = () =>
-  req<any>("GET", "/api/spotify/status", undefined, { user_id: "default" });
-export const spotifyDevices = () =>
-  req<any>("GET", "/api/spotify/devices", undefined, { user_id: "default" });
-export const spotifyConnectUrl = () =>
-  `${_backendUrl}/api/spotify/connect?user_id=default`;
-export const spotifyDisconnect = () =>
-  req("POST", "/api/spotify/disconnect", undefined, { user_id: "default" });
+export const spotifyStatus = () => req<any>("GET", "/api/spotify/status");
+export const spotifyDevices = () => req<any>("GET", "/api/spotify/devices");
+export const spotifyConnectUrl = () => {
+  const jwt = getJwt();
+  return `${_backendUrl}/api/spotify/connect${jwt ? `?token=${jwt}` : ""}`;
+};
+export const spotifyDisconnect = () => req("POST", "/api/spotify/disconnect");
 
 // ── Cron Jobs ─────────────────────────────────────────────────────────────────
 export const listCron = () => req<any>("GET", "/api/cron");
@@ -368,7 +407,7 @@ export const listAgents = (q?: string, activeOnly?: boolean, inactiveOnly?: bool
 export const createAgent = (agent: any) => req("POST", "/api/agents", agent);
 export const updateAgent = (id: string, agent: any) => req("PATCH", `/api/agents/${id}`, agent);
 export const deleteAgent = (id: string) => req("DELETE", `/api/agents/${id}`);
-export const toggleAgent = (id: string) => req("PUT", `/api/agents/${id}/enabled`);
+export const toggleAgent = (id: string, enabled: boolean) => req("PUT", `/api/agents/${id}/enabled`, { enabled });
 
 // ── Skills Upload ─────────────────────────────────────────────────────────────
 export async function uploadSkill(file: File): Promise<any> {

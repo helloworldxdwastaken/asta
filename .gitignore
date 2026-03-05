@@ -60,6 +60,9 @@ esimo_dump.txt
 reference/openclaw/
 .vercel
 
+# Per-user memory files (contain personal info)
+workspace/users/
+
 # Personal data files
 asta.db
 backend.log.old

@@ -1,8 +1,9 @@
 """Local file management (allowed paths only) + Asta knowledge + User memories. OpenClaw-style: request access when path not allowed."""
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
+from app.auth_utils import get_current_user_id, require_admin
 from app.config import get_settings
 from app.db import get_db
 
@@ -124,8 +125,10 @@ def _asta_docs() -> list[tuple[str, str]]:
 
 
 @router.get("/files/list")
-async def list_files(directory: str = "", user_id: str = "default"):
+async def list_files(request: Request, directory: str = ""):
     """List files. Virtual roots: asta:knowledge. User context = workspace/USER.md (not listed here)."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     allowed = await _allowed_paths(user_id)
 
     if directory == ASTA_KNOWLEDGE:
@@ -197,8 +200,10 @@ def _read_virtual(path: str, user_id: str) -> str:
 
 
 @router.get("/files/read")
-async def read_file(path: str, user_id: str = "default"):
+async def read_file(request: Request, path: str):
     """Read file content. If path not allowed, returns 403 with code PATH_ACCESS_REQUEST so client can show 'Grant access'."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     if path.startswith(ASTA_KNOWLEDGE) or path.startswith(USER_MEMORIES):
         content = _read_virtual(path, user_id)
         return {"path": path, "content": content}
@@ -223,8 +228,10 @@ async def read_file(path: str, user_id: str = "default"):
 
 
 @router.put("/files/write")
-async def write_file(path: str, body: FileWriteIn, user_id: str = "default"):
+async def write_file(request: Request, path: str, body: FileWriteIn):
     """Write content. Supports: user:memories/User.md (memories) or any path under allowed/workspace (create file)."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     if path == f"{USER_MEMORIES}/User.md" or path == "user:memories/User.md":
         from app.memories import save_user_memories
         save_user_memories(user_id, body.content)
@@ -242,16 +249,20 @@ class AllowPathIn(BaseModel):
 
 
 @router.get("/files/allowed-paths")
-async def get_allowed_paths(user_id: str = "default"):
+async def get_allowed_paths(request: Request):
     """List allowed path bases (env + user allowlist). For UI to show and manage."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     paths = await _allowed_paths(user_id)
     return {"paths": [str(p) for p in paths]}
 
 
 @router.post("/files/allow-path")
 @router.put("/files/allow-path")
-async def allow_path(body: AllowPathIn, user_id: str = "default"):
+async def allow_path(request: Request, body: AllowPathIn):
     """Add a path to the user's allowlist (OpenClaw-style: grant access when AI or user requests it). Path can be file or directory. If file, also add parent dir so listing works."""
+    require_admin(request)
+    user_id = get_current_user_id(request)
     p = Path(body.path.strip()).resolve()
     if not p.exists():
         raise HTTPException(400, "Path does not exist")
@@ -266,8 +277,9 @@ async def allow_path(body: AllowPathIn, user_id: str = "default"):
 
 
 @router.get("/files/download-pdf/{filename:path}")
-async def download_pdf(filename: str):
+async def download_pdf(request: Request, filename: str):
     """Serve a generated PDF from workspace/pdfs/."""
+    require_admin(request)
     pdf_dir = Path(__file__).resolve().parent.parent.parent.parent / "workspace" / "pdfs"
     # Sanitize: no path traversal
     safe_name = Path(filename).name

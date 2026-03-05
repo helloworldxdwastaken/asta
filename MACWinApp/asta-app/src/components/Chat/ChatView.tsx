@@ -50,6 +50,7 @@ interface Props {
   conversationId?: string;
   onConversationCreated: (id: string) => void;
   agents: Agent[];
+  isAdmin?: boolean;
 }
 
 /* ── Code block with copy button ─────────────────────────────────────────── */
@@ -103,7 +104,7 @@ function ThinkingWords() {
   );
 }
 
-export default function ChatView({ conversationId, onConversationCreated, agents }: Props) {
+export default function ChatView({ conversationId, onConversationCreated, agents, isAdmin = true }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
   const [streaming, setStreaming] = useState(false);
@@ -471,11 +472,15 @@ export default function ChatView({ conversationId, onConversationCreated, agents
       onClick={closeMenus}
       onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
 
-      {/* Synthwave grid behind entire view when chat is empty */}
+      {/* Synthwave grid + scanlines behind entire view when chat is empty */}
       {!loading && messages.length === 0 && !streaming && (
-        <div className="synth-grid z-0" style={{ opacity: input.trim() ? 0 : 1 }} aria-hidden>
-          <div className="synth-grid-inner" />
-        </div>
+        <>
+          <div className="synth-grid z-0" style={{ opacity: input.trim() ? 0 : 1 }} aria-hidden>
+            <div className="synth-grid-inner" />
+          </div>
+          <div className="absolute inset-0 pointer-events-none z-[1]" aria-hidden
+            style={{ background: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.02) 2px, rgba(0,0,0,0.02) 4px)", mixBlendMode: "multiply", opacity: input.trim() ? 0 : 1, transition: "opacity 0.5s" }} />
+        </>
       )}
 
       {/* Drag overlay */}
@@ -534,12 +539,14 @@ export default function ChatView({ conversationId, onConversationCreated, agents
           </button>
         )}
 
-        {/* Learning mode */}
-        <button onClick={() => setLearningMode(!learningMode)}
-          className={`flex items-center gap-1 rounded-mac px-2 py-1.5 text-11 transition-all duration-200 active:scale-[0.95] ${learningMode ? "text-success bg-success/[.12]" : "text-label-tertiary bg-white/[.05] hover:bg-white/[.08]"}`}>
-          <IconBook size={12} />
-          {learningMode && <span className="font-medium">Learn</span>}
-        </button>
+        {/* Learning mode — admin only */}
+        {isAdmin && (
+          <button onClick={() => setLearningMode(!learningMode)}
+            className={`flex items-center gap-1 rounded-mac px-2 py-1.5 text-11 transition-all duration-200 active:scale-[0.95] ${learningMode ? "text-success bg-success/[.12]" : "text-label-tertiary bg-white/[.05] hover:bg-white/[.08]"}`}>
+            <IconBook size={12} />
+            {learningMode && <span className="font-medium">Learn</span>}
+          </button>
+        )}
 
       </div>
 
@@ -557,28 +564,103 @@ export default function ChatView({ conversationId, onConversationCreated, agents
         {/* Empty state */}
         {!loading && messages.length === 0 && !streaming && (
           <div className="flex flex-col items-center justify-center h-full gap-4 relative overflow-hidden pt-8">
-            {/* 8-bit floating pixel blocks */}
+            {/* 8-bit floating pixel sprites */}
             <div className="absolute inset-0 pointer-events-none transition-opacity duration-500" style={{ opacity: input.trim() ? 0 : 1 }} aria-hidden>
-              {/* Left side blocks */}
-              <div className="pixel-block absolute left-[8%] top-[15%] w-3 h-3 rounded-sm bg-accent/20" style={{ animationDelay: "0s", animationDuration: "6s" }} />
-              <div className="pixel-block absolute left-[12%] top-[35%] w-2.5 h-2.5 rounded-sm bg-violet-400/15" style={{ animationDelay: "1.2s", animationDuration: "7s" }} />
-              <div className="pixel-block absolute left-[5%] top-[55%] w-4 h-4 rounded-sm bg-accent/10" style={{ animationDelay: "2.5s", animationDuration: "8s" }} />
-              <div className="pixel-block absolute left-[15%] top-[72%] w-2 h-2 rounded-sm bg-success/15" style={{ animationDelay: "0.8s", animationDuration: "5.5s" }} />
-              <div className="pixel-block absolute left-[3%] top-[85%] w-3 h-3 rounded-sm bg-violet-400/10" style={{ animationDelay: "3.2s", animationDuration: "7.5s" }} />
-              {/* Right side blocks */}
-              <div className="pixel-block absolute right-[10%] top-[12%] w-2.5 h-2.5 rounded-sm bg-accent/15" style={{ animationDelay: "0.5s", animationDuration: "6.5s" }} />
-              <div className="pixel-block absolute right-[6%] top-[30%] w-3.5 h-3.5 rounded-sm bg-violet-400/12" style={{ animationDelay: "1.8s", animationDuration: "7.2s" }} />
-              <div className="pixel-block absolute right-[14%] top-[50%] w-2 h-2 rounded-sm bg-success/12" style={{ animationDelay: "3s", animationDuration: "5.8s" }} />
-              <div className="pixel-block absolute right-[4%] top-[68%] w-3 h-3 rounded-sm bg-accent/12" style={{ animationDelay: "2s", animationDuration: "8.2s" }} />
-              <div className="pixel-block absolute right-[11%] top-[82%] w-2.5 h-2.5 rounded-sm bg-violet-400/15" style={{ animationDelay: "0.3s", animationDuration: "6.8s" }} />
-              {/* Scattered extras */}
-              <div className="pixel-block absolute left-[22%] top-[22%] w-1.5 h-1.5 rounded-sm bg-warning/10" style={{ animationDelay: "4s", animationDuration: "9s" }} />
-              <div className="pixel-block absolute right-[20%] top-[25%] w-1.5 h-1.5 rounded-sm bg-warning/10" style={{ animationDelay: "1.5s", animationDuration: "8.5s" }} />
+              {/* Left side sprites */}
+              <div className="pixel-block absolute left-[6%] top-[12%]" style={{ animationDelay: "0s", animationDuration: "7s" }}>
+                <svg width="20" height="20" viewBox="0 0 5 5" style={{ imageRendering: "pixelated" }}>
+                  <rect x="2" y="0" width="1" height="1" fill="var(--accent)" /><rect x="0" y="2" width="1" height="1" fill="var(--accent)" />
+                  <rect x="1" y="1" width="1" height="1" fill="var(--accent)" /><rect x="2" y="2" width="1" height="1" fill="var(--accent)" />
+                  <rect x="3" y="1" width="1" height="1" fill="var(--accent)" /><rect x="4" y="2" width="1" height="1" fill="var(--accent)" />
+                  <rect x="2" y="4" width="1" height="1" fill="var(--accent)" /><rect x="1" y="3" width="1" height="1" fill="var(--accent)" />
+                  <rect x="3" y="3" width="1" height="1" fill="var(--accent)" />
+                </svg>
+              </div>
+              <div className="pixel-block absolute left-[14%] top-[38%]" style={{ animationDelay: "1.2s", animationDuration: "8s" }}>
+                <svg width="15" height="15" viewBox="0 0 5 5" style={{ imageRendering: "pixelated" }}>
+                  <rect x="2" y="0" width="1" height="1" fill="#a78bfa" /><rect x="1" y="1" width="1" height="1" fill="#a78bfa" />
+                  <rect x="3" y="1" width="1" height="1" fill="#a78bfa" /><rect x="0" y="2" width="1" height="1" fill="#a78bfa" />
+                  <rect x="4" y="2" width="1" height="1" fill="#a78bfa" /><rect x="1" y="3" width="1" height="1" fill="#a78bfa" />
+                  <rect x="3" y="3" width="1" height="1" fill="#a78bfa" /><rect x="2" y="4" width="1" height="1" fill="#a78bfa" />
+                </svg>
+              </div>
+              <div className="pixel-block absolute left-[4%] top-[60%]" style={{ animationDelay: "2.4s", animationDuration: "9s" }}>
+                <svg width="21" height="18" viewBox="0 0 7 6" style={{ imageRendering: "pixelated" }}>
+                  <rect x="1" y="0" width="2" height="1" fill="var(--accent-end, #FF3D7F)" />
+                  <rect x="4" y="0" width="2" height="1" fill="var(--accent-end, #FF3D7F)" />
+                  <rect x="0" y="1" width="7" height="1" fill="var(--accent-end, #FF3D7F)" />
+                  <rect x="0" y="2" width="7" height="1" fill="var(--accent-end, #FF3D7F)" />
+                  <rect x="1" y="3" width="5" height="1" fill="var(--accent-end, #FF3D7F)" />
+                  <rect x="2" y="4" width="3" height="1" fill="var(--accent-end, #FF3D7F)" />
+                  <rect x="3" y="5" width="1" height="1" fill="var(--accent-end, #FF3D7F)" />
+                </svg>
+              </div>
+              <div className="pixel-block absolute left-[10%] top-[78%]" style={{ animationDelay: "0.8s", animationDuration: "6.5s" }}>
+                <svg width="20" height="20" viewBox="0 0 5 5" style={{ imageRendering: "pixelated" }}>
+                  <rect x="2" y="0" width="1" height="1" fill="#FFD700" /><rect x="0" y="2" width="5" height="1" fill="#FFD700" />
+                  <rect x="2" y="1" width="1" height="1" fill="#FFD700" /><rect x="1" y="1" width="1" height="1" fill="#FFD700" opacity="0.5" />
+                  <rect x="3" y="1" width="1" height="1" fill="#FFD700" opacity="0.5" /><rect x="2" y="3" width="1" height="1" fill="#FFD700" />
+                  <rect x="1" y="4" width="1" height="1" fill="#FFD700" /><rect x="3" y="4" width="1" height="1" fill="#FFD700" />
+                </svg>
+              </div>
+              <div className="pixel-block absolute left-[20%] top-[25%]" style={{ animationDelay: "3.5s", animationDuration: "8.5s" }}>
+                <svg width="12" height="12" viewBox="0 0 3 3" style={{ imageRendering: "pixelated" }}>
+                  <rect width="3" height="3" fill="var(--accent)" /><rect x="0" y="0" width="1" height="1" fill="white" opacity="0.3" />
+                </svg>
+              </div>
+              {/* Right side sprites */}
+              <div className="pixel-block absolute right-[8%] top-[15%]" style={{ animationDelay: "0.5s", animationDuration: "7.5s" }}>
+                <svg width="18" height="18" viewBox="0 0 7 6" style={{ imageRendering: "pixelated" }}>
+                  <rect x="1" y="0" width="2" height="1" fill="var(--accent)" />
+                  <rect x="4" y="0" width="2" height="1" fill="var(--accent)" />
+                  <rect x="0" y="1" width="7" height="1" fill="var(--accent)" />
+                  <rect x="0" y="2" width="7" height="1" fill="var(--accent)" />
+                  <rect x="1" y="3" width="5" height="1" fill="var(--accent)" />
+                  <rect x="2" y="4" width="3" height="1" fill="var(--accent)" />
+                  <rect x="3" y="5" width="1" height="1" fill="var(--accent)" />
+                </svg>
+              </div>
+              <div className="pixel-block absolute right-[5%] top-[35%]" style={{ animationDelay: "1.8s", animationDuration: "6s" }}>
+                <svg width="15" height="15" viewBox="0 0 5 5" style={{ imageRendering: "pixelated" }}>
+                  <rect x="2" y="0" width="1" height="1" fill="var(--accent-end, #FF3D7F)" />
+                  <rect x="1" y="1" width="3" height="1" fill="var(--accent-end, #FF3D7F)" />
+                  <rect x="0" y="2" width="5" height="1" fill="var(--accent-end, #FF3D7F)" />
+                  <rect x="2" y="3" width="1" height="1" fill="var(--accent-end, #FF3D7F)" />
+                  <rect x="2" y="4" width="1" height="1" fill="var(--accent-end, #FF3D7F)" />
+                </svg>
+              </div>
+              <div className="pixel-block absolute right-[12%] top-[55%]" style={{ animationDelay: "3s", animationDuration: "7.2s" }}>
+                <svg width="16" height="16" viewBox="0 0 5 5" style={{ imageRendering: "pixelated" }}>
+                  <rect x="2" y="0" width="1" height="1" fill="#FFD700" /><rect x="0" y="2" width="5" height="1" fill="#FFD700" />
+                  <rect x="2" y="1" width="1" height="1" fill="#FFD700" /><rect x="1" y="1" width="1" height="1" fill="#FFD700" opacity="0.5" />
+                  <rect x="3" y="1" width="1" height="1" fill="#FFD700" opacity="0.5" /><rect x="2" y="3" width="1" height="1" fill="#FFD700" />
+                  <rect x="1" y="4" width="1" height="1" fill="#FFD700" /><rect x="3" y="4" width="1" height="1" fill="#FFD700" />
+                </svg>
+              </div>
+              <div className="pixel-block absolute right-[3%] top-[72%]" style={{ animationDelay: "2s", animationDuration: "8.2s" }}>
+                <svg width="20" height="20" viewBox="0 0 5 5" style={{ imageRendering: "pixelated" }}>
+                  <rect x="2" y="0" width="1" height="1" fill="#a78bfa" /><rect x="1" y="1" width="1" height="1" fill="#a78bfa" />
+                  <rect x="3" y="1" width="1" height="1" fill="#a78bfa" /><rect x="0" y="2" width="1" height="1" fill="#a78bfa" />
+                  <rect x="4" y="2" width="1" height="1" fill="#a78bfa" /><rect x="1" y="3" width="1" height="1" fill="#a78bfa" />
+                  <rect x="3" y="3" width="1" height="1" fill="#a78bfa" /><rect x="2" y="4" width="1" height="1" fill="#a78bfa" />
+                </svg>
+              </div>
+              <div className="pixel-block absolute right-[18%] top-[85%]" style={{ animationDelay: "0.3s", animationDuration: "6.8s" }}>
+                <svg width="12" height="12" viewBox="0 0 3 3" style={{ imageRendering: "pixelated" }}>
+                  <rect width="3" height="3" fill="var(--accent-end, #FF3D7F)" /><rect x="0" y="0" width="1" height="1" fill="white" opacity="0.3" />
+                </svg>
+              </div>
+              {/* Ambient glow orbs */}
+              <div className="absolute w-48 h-48 rounded-full opacity-[0.03] pointer-events-none"
+                style={{ background: "radial-gradient(circle, var(--accent), transparent 70%)", top: "8%", left: "-3%", animation: "orb-float 12s ease-in-out infinite" }} />
+              <div className="absolute w-36 h-36 rounded-full opacity-[0.025] pointer-events-none"
+                style={{ background: "radial-gradient(circle, var(--accent-end, #FF3D7F), transparent 70%)", bottom: "5%", right: "-2%", animation: "orb-float 15s ease-in-out infinite reverse" }} />
             </div>
 
             <div className="relative w-20 h-20 z-10 hero-enter" style={{ animationDelay: "0s" }}>
               <div className="absolute inset-0 rounded-full bg-[var(--user-bubble)] opacity-20 blur-xl animate-[orb-float_8s_ease-in-out_infinite]" />
-              <img src="/appicon-512.png" alt="Asta" className="relative w-20 h-20 rounded-2xl" />
+              <img src="/appicon-512.png" alt="Asta" className="relative w-20 h-20 rounded-2xl"
+                style={{ boxShadow: "0 8px 32px rgba(255,107,44,0.12), 0 0 0 1px rgba(255,255,255,0.06)" }} />
             </div>
             <div className="text-center z-10 hero-enter" style={{ animationDelay: "0.12s" }}>
               <p className="text-label text-[28px] font-bold tracking-tight leading-tight">What can I help with?</p>
