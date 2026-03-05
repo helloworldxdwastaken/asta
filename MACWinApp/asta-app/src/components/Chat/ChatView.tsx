@@ -290,8 +290,9 @@ export default function ChatView({ conversationId, onConversationCreated, agents
         stopRef.current = null;
       },
       (err) => {
+        const errMsg = err?.message || (typeof err === "string" ? err : String(err)) || "Unknown error";
         setMessages(prev => [...prev, {
-          id: (Date.now()+1).toString(), role: "assistant", content: `Error: ${err.message}`,
+          id: (Date.now()+1).toString(), role: "assistant", content: `Error: ${errMsg}`,
           activeTools: [], completedTools: [],
         }]);
         setStreamContent(""); setStreamStatus(null); setStreaming(false); stopRef.current = null;
