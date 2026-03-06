@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { login as apiLogin, register as apiRegister } from "../../lib/api";
 import { setAuth } from "../../lib/auth";
+import { getVersion } from "@tauri-apps/api/app";
 
 interface Props { onLogin: () => void; }
 
@@ -91,6 +92,9 @@ export default function LoginPage({ onLogin }: Props) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [registered, setRegistered] = useState(false);
+  const [version, setVersion] = useState("");
+
+  useEffect(() => { getVersion().then(setVersion).catch(() => {}); }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -280,9 +284,11 @@ export default function LoginPage({ onLogin }: Props) {
         </div>
 
         {/* Version */}
-        <p className="text-center text-[10px] text-label-tertiary mt-5 font-mono tracking-widest uppercase opacity-40">
-          v1.4.2
-        </p>
+        {version && (
+          <p className="text-center text-[10px] text-label-tertiary mt-5 font-mono tracking-widest uppercase opacity-40">
+            v{version}
+          </p>
+        )}
       </div>
     </div>
   );

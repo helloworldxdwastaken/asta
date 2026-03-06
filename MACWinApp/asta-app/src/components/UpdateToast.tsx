@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 const CHECK_INTERVAL = 60 * 60 * 1000; // 1 hour
 
@@ -59,7 +60,8 @@ export default function UpdateToast() {
   }
 
   function openRelease() {
-    if (update?.release_url) window.open(update.release_url, "_blank");
+    const url = update?.download_url || update?.release_url;
+    if (url) openUrl(url).catch(() => window.open(url, "_blank"));
   }
 
   if (!update || dismissed) return null;
@@ -89,7 +91,7 @@ export default function UpdateToast() {
         </div>
         <button onClick={openRelease}
           className="w-full text-12 font-medium bg-accent hover:bg-accent-hover text-white py-2 rounded-xl transition-colors">
-          View release
+          {update?.download_url ? "Download update" : "View release"}
         </button>
       </div>
     </div>
