@@ -16,7 +16,7 @@ const STEPS = [
 
 export default function SetupWizard({ onComplete }: Props) {
   const [step, setStep] = useState(0);
-  const [url, setUrl] = useState("http://localhost:8010");
+  const [url, setUrl] = useState("https://asta.noxamusic.com");
   const [checking, setChecking] = useState(false);
   const [connected, setConnected] = useState(false);
   const [backendVersion, setBackendVersion] = useState("");
@@ -34,7 +34,7 @@ export default function SetupWizard({ onComplete }: Props) {
   useEffect(() => {
     if (autoTested.current) return;
     autoTested.current = true;
-    testBackend("http://localhost:8010", true);
+    testBackend("https://asta.noxamusic.com", true);
   }, []);
 
   async function testBackend(testUrl: string, silent = false) {

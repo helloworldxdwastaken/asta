@@ -48,9 +48,18 @@ export default function App() {
 
       const ok = await autoResolveBackend().catch(() => false);
       setIsOnline(ok);
-      if (!ok) { setUser(false); return; }
       // Try to validate existing JWT
       const jwt = getJwt();
+      if (!ok) {
+        // Backend unreachable: trust stored JWT if present, else show login
+        if (jwt) {
+          const stored = getStoredUser();
+          setUser(stored || false);
+        } else {
+          setNeedsLogin(true);
+        }
+        return;
+      }
       if (jwt) {
         try {
           const me = await getMe();

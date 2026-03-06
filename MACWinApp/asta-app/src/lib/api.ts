@@ -16,7 +16,11 @@ const _fetch: typeof globalThis.fetch = (() => {
 
 import { getJwt, clearAuth } from "./auth";
 
-let _backendUrl = localStorage.getItem("backendURL") ?? "http://localhost:8010";
+// Migrate: clear old localhost URL so it falls back to the hardcoded remote
+if (localStorage.getItem("backendURL") === "http://localhost:8010") {
+  localStorage.removeItem("backendURL");
+}
+let _backendUrl = localStorage.getItem("backendURL") ?? "https://asta.noxamusic.com";
 // Legacy auth token (for backward compat when no users exist)
 let _authToken = localStorage.getItem("authToken") ?? "";
 
@@ -46,7 +50,7 @@ async function _probe(url: string): Promise<boolean> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 5000);
     const opts: any = { signal: controller.signal, headers: _authHeaders() };
-    // Tauri HTTP plugin: accept Tailscale/self-signed certs on remote URLs
+    // Tauri HTTP plugin: accept certs on remote HTTPS URLs (e.g. Cloudflare Tunnel)
     if (url.startsWith("https://")) {
       opts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
     }
@@ -56,45 +60,9 @@ async function _probe(url: string): Promise<boolean> {
   } catch { return false; }
 }
 
-/**
- * Auto-resolve the backend URL on startup.
- * 1. Try the stored URL.
- * 2. If stored URL is not localhost, also try http://localhost:8010 as fallback.
- * 3. If Tailscale is connected and serving, try the HTTPS tunnel URL.
- * Returns true if a working backend was found.
- */
+/** Probe the configured backend URL. Returns true if reachable. */
 export async function autoResolveBackend(): Promise<boolean> {
-  const stored = _backendUrl;
-
-  // 1. Try stored URL
-  if (await _probe(stored)) return true;
-
-  // 2. Try localhost:8010 if stored URL was different
-  const local = "http://localhost:8010";
-  if (stored !== local) {
-    if (await _probe(local)) {
-      setBackendUrl(local);
-      return true;
-    }
-  }
-
-  // 3. Try Tailscale HTTPS URL if available
-  try {
-    const { invoke } = await import("@tauri-apps/api/core");
-    const ts = await invoke<any>("tailscale_status");
-    if (ts?.status === "connected" && ts?.dns_name) {
-      const serve = await invoke<any>("tailscale_serve_status").catch(() => null);
-      if (serve?.enabled) {
-        const tsUrl = `https://${ts.dns_name}`;
-        if (await _probe(tsUrl)) {
-          setBackendUrl(tsUrl);
-          return true;
-        }
-      }
-    }
-  } catch { /* not in Tauri or tailscale not available */ }
-
-  return false;
+  return _probe(_backendUrl);
 }
 
 async function req<T>(method: string, path: string, body?: unknown, query?: Record<string, string>): Promise<T> {
@@ -110,7 +78,7 @@ async function req<T>(method: string, path: string, body?: unknown, query?: Reco
     headers,
     body: body ? JSON.stringify(body) : undefined,
   };
-  // Tauri HTTP plugin: accept Tailscale/self-signed certs on remote HTTPS
+  // Tauri HTTP plugin: accept certs on remote HTTPS (e.g. Cloudflare Tunnel)
   if (_backendUrl.startsWith("https://")) {
     opts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
   }
