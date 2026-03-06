@@ -244,6 +244,18 @@ export default function ChatView({ conversationId, onConversationCreated, agents
             setStreamContent(accumulated);
             break;
           }
+          case "assistant_final": {
+            // Final post-processed reply from backend — correct what was streamed.
+            // Use `text` (full content) if present; fall back to delta.
+            const finalText = (chunk.text ?? chunk.delta ?? "").trim();
+            if (!finalText) break;
+            // Only update if genuinely different from what was accumulated
+            if (finalText !== accumulated.trim()) {
+              accumulated = finalText;
+              setStreamContent(accumulated);
+            }
+            break;
+          }
           case "tool_start": {
             const label = chunk.label ?? chunk.name ?? "tool";
             setActiveTools(prev => prev.includes(label) ? prev : [...prev, label]);

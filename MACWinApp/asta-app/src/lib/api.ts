@@ -156,7 +156,9 @@ export const sendMessage = (opts: SendMessageOpts) =>
 /** Normalise backend SSE event names to UI types. */
 function normaliseEventType(name: string): string {
   switch (name) {
-    case "assistant": return "text";
+    // "assistant" = final content correction from backend (post-tool-processing).
+    // Keep it separate from "text" so the frontend can set rather than append.
+    case "assistant": return "assistant_final";
     case "reasoning": return "thinking";
     default: return name; // tool_start, tool_end, done, error, status, meta
   }
