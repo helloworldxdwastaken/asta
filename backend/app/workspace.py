@@ -346,8 +346,11 @@ def _get_user_md_path(root, user_id: str | None = None):
     return root / "USER.md"
 
 
-def get_workspace_context_section(user_id: str | None = None) -> str | None:
-    """Read AGENTS.md, USER.md (per-user), SOUL.md, TOOLS.md and return a single context block."""
+def get_workspace_context_section(user_id: str | None = None, role: str = "admin") -> str | None:
+    """Read AGENTS.md, USER.md (per-user), SOUL.md, TOOLS.md and return a single context block.
+
+    For non-admin users, serves USER_SOUL.md instead of SOUL.md (falls back to SOUL.md if absent).
+    """
     root = get_workspace_dir()
     if not root:
         return None
@@ -355,6 +358,10 @@ def get_workspace_context_section(user_id: str | None = None) -> str | None:
     for filename in WORKSPACE_CONTEXT_FILES:
         if filename == "USER.md":
             path = _get_user_md_path(root, user_id)
+        elif filename == "SOUL.md" and role != "admin":
+            # Non-admin users get USER_SOUL.md; fall back to SOUL.md if it doesn't exist
+            user_soul = root / "USER_SOUL.md"
+            path = user_soul if user_soul.is_file() else root / "SOUL.md"
         else:
             path = root / filename
         if path.is_file():

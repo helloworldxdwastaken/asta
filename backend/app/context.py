@@ -28,7 +28,7 @@ async def build_context(
     
     # 0. OpenClaw-style workspace context (AGENTS.md, USER.md, SOUL.md, TOOLS.md)
     from app.workspace import get_workspace_context_section
-    workspace_ctx = get_workspace_context_section(user_id=user_id)
+    workspace_ctx = get_workspace_context_section(user_id=user_id, role=user_role)
     if workspace_ctx:
         parts.append(workspace_ctx)
         parts.append("")

@@ -34,6 +34,9 @@ faster-whisper
 moviepy
 # PDF
 pymupdf
+# Office documents
+python-pptx
+python-docx
 psutil
 # Auth
 bcrypt

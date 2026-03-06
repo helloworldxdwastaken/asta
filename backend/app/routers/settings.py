@@ -1398,6 +1398,7 @@ async def set_telegram_username(request: Request, body: TelegramUsernameIn):
 
 class PersonaIn(BaseModel):
     soul: str | None = None
+    user_soul: str | None = None
     user: str | None = None
 
 
@@ -1430,8 +1431,10 @@ async def get_persona(request: Request):
         global_user = ws / "USER.md"
         if global_user.is_file():
             user_path = global_user
+    user_soul_path = ws / "USER_SOUL.md"
     return {
         "soul": soul_path.read_text(encoding="utf-8") if soul_path.is_file() and user_role == "admin" else "",
+        "user_soul": user_soul_path.read_text(encoding="utf-8") if user_soul_path.is_file() and user_role == "admin" else "",
         "user": user_path.read_text(encoding="utf-8") if user_path.is_file() else "",
     }
 
@@ -1447,6 +1450,9 @@ async def set_persona(request: Request, body: PersonaIn):
     if body.soul is not None:
         require_admin(request)
         (ws / "SOUL.md").write_text(body.soul, encoding="utf-8")
+    if body.user_soul is not None:
+        require_admin(request)
+        (ws / "USER_SOUL.md").write_text(body.user_soul, encoding="utf-8")
     if body.user is not None:
         _user_memories_path(user_id).write_text(body.user, encoding="utf-8")
     return {"ok": True}

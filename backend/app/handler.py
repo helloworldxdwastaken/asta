@@ -3360,6 +3360,12 @@ async def handle_message(
     from app.pdf_tool import get_pdf_tool_openai_def, is_fitz_available
     if is_fitz_available():
         tools = tools + get_pdf_tool_openai_def()
+    # Office document generation (pptx/docx) — allowed for ALL users
+    from app.office_tool import get_pptx_tool_openai_def, get_docx_tool_openai_def, is_pptx_available, is_docx_available
+    if is_pptx_available():
+        tools = tools + get_pptx_tool_openai_def()
+    if is_docx_available():
+        tools = tools + get_docx_tool_openai_def()
     # Subagent orchestration: admin-only
     if _is_admin and channel != "subagent":
         from app.subagent_orchestrator import get_subagent_tools_openai_def
@@ -3899,8 +3905,40 @@ async def handle_message(
                     out = "Error: content is required"
                 else:
                     pdf_path = generate_pdf_fn(pdf_content, filename=pdf_filename, title=pdf_title)
-                    out = f"PDF generated: {pdf_path}"
+                    import os as _os
+                    pdf_safe = _os.path.basename(pdf_path)
+                    out = f"PDF generated successfully. Download: /api/files/download-pdf/{pdf_safe}"
                 used_tool_labels.append(_build_tool_trace_label("generate_pdf"))
+            elif name == "generate_pptx":
+                from app.office_tool import generate_pptx as _gen_pptx, parse_pptx_tool_args
+
+                params = parse_pptx_tool_args(args_str)
+                slides = params.get("slides")
+                if not slides or not isinstance(slides, list):
+                    out = "Error: slides array is required"
+                else:
+                    pptx_filename = (params.get("filename") or "presentation.pptx").strip()
+                    pptx_theme = (params.get("theme") or "dark").strip()
+                    pptx_path = _gen_pptx(slides, filename=pptx_filename, theme=pptx_theme)
+                    import os as _os
+                    pptx_safe = _os.path.basename(pptx_path)
+                    out = f"Presentation generated successfully. Download: /api/files/download-office/{pptx_safe}"
+                used_tool_labels.append(_build_tool_trace_label("generate_pptx"))
+            elif name == "generate_docx":
+                from app.office_tool import generate_docx as _gen_docx, parse_docx_tool_args
+
+                params = parse_docx_tool_args(args_str)
+                docx_content = (params.get("content") or "").strip()
+                if not docx_content:
+                    out = "Error: content is required"
+                else:
+                    docx_filename = (params.get("filename") or "document.docx").strip()
+                    docx_title = params.get("title")
+                    docx_path = _gen_docx(docx_content, filename=docx_filename, title=docx_title)
+                    import os as _os
+                    docx_safe = _os.path.basename(docx_path)
+                    out = f"Document generated successfully. Download: /api/files/download-office/{docx_safe}"
+                used_tool_labels.append(_build_tool_trace_label("generate_docx"))
             elif name == "web_search":
                 from app.openclaw_compat_tools import parse_openclaw_compat_args, run_web_search_compat
 

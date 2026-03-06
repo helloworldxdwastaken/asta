@@ -298,7 +298,7 @@ export const setReasoning = (mode: string) =>
   req("PUT", "/api/settings/reasoning", { reasoning_mode: mode });
 export const setMoodSetting = (mood: string) =>
   req("PUT", "/api/settings/mood", { mood });
-export const setPersona = (data: { soul?: string; user?: string }) =>
+export const setPersona = (data: { soul?: string; user_soul?: string; user?: string }) =>
   req("PUT", "/api/settings/persona", data);
 export const setProviderEnabled = (provider: string, enabled: boolean) =>
   req("PUT", "/api/settings/provider-flow/provider-enabled", { provider, enabled });
@@ -391,8 +391,8 @@ export async function uploadSkill(file: File): Promise<any> {
 }
 
 // ── Downloads ─────────────────────────────────────────────────────────────────
-export async function downloadPdf(filename: string): Promise<void> {
-  const url = `${_backendUrl}/api/files/download-pdf/${encodeURIComponent(filename)}`;
+async function _downloadFile(apiPath: string, filename: string): Promise<void> {
+  const url = `${_backendUrl}${apiPath}`;
   const dlOpts: any = { headers: _authHeaders() };
   if (_backendUrl.startsWith("https://")) {
     dlOpts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
@@ -408,6 +408,14 @@ export async function downloadPdf(filename: string): Promise<void> {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(blobUrl);
+}
+
+export function downloadPdf(filename: string): Promise<void> {
+  return _downloadFile(`/api/files/download-pdf/${encodeURIComponent(filename)}`, filename);
+}
+
+export function downloadOfficeDoc(filename: string): Promise<void> {
+  return _downloadFile(`/api/files/download-office/${encodeURIComponent(filename)}`, filename);
 }
 
 // ── System ────────────────────────────────────────────────────────────────────

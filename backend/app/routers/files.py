@@ -278,12 +278,32 @@ async def allow_path(request: Request, body: AllowPathIn):
 
 @router.get("/files/download-pdf/{filename:path}")
 async def download_pdf(request: Request, filename: str):
-    """Serve a generated PDF from workspace/pdfs/."""
-    require_admin(request)
+    """Serve a generated PDF from workspace/pdfs/. Available to all authenticated users."""
+    get_current_user_id(request)  # just requires auth, not admin
     pdf_dir = Path(__file__).resolve().parent.parent.parent.parent / "workspace" / "pdfs"
-    # Sanitize: no path traversal
     safe_name = Path(filename).name
     pdf_path = pdf_dir / safe_name
     if not pdf_path.exists() or not pdf_path.is_file():
         raise HTTPException(404, "PDF not found")
     return FileResponse(pdf_path, media_type="application/pdf", filename=safe_name)
+
+
+_OFFICE_MIME = {
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
+
+@router.get("/files/download-office/{filename:path}")
+async def download_office(request: Request, filename: str):
+    """Serve a generated Office document from workspace/office_docs/. Available to all authenticated users."""
+    get_current_user_id(request)  # requires auth, not admin
+    office_dir = Path(__file__).resolve().parent.parent.parent.parent / "workspace" / "office_docs"
+    safe_name = Path(filename).name
+    file_path = office_dir / safe_name
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(404, "File not found")
+    ext = file_path.suffix.lower()
+    media_type = _OFFICE_MIME.get(ext, "application/octet-stream")
+    return FileResponse(file_path, media_type=media_type, filename=safe_name)

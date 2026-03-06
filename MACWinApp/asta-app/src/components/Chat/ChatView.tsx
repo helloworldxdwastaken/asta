@@ -11,7 +11,7 @@ import {
   getDefaultAI, getThinking, getMoodSetting, truncateConversation,
 } from "../../lib/api";
 import type { StreamChunk } from "../../lib/api";
-import { downloadPdf } from "../../lib/api";
+import { downloadPdf, downloadOfficeDoc } from "../../lib/api";
 import ProviderLogo from "../ProviderLogo";
 
 const STATUS_PREFIX = "[[ASTA_STATUS]]";
@@ -424,20 +424,40 @@ export default function ChatView({ conversationId, onConversationCreated, agents
     return s.trim();
   }
 
-  /** Extract generated PDF references from assistant message content */
+  /** Extract generated PDF references from assistant message content (legacy path format) */
   const PDF_PATH_RE = /PDF generated:\s*(.*?[/\\]workspace[/\\]pdfs[/\\](.+?\.pdf))/gi;
-  function extractPdfLinks(c: string): { path: string; name: string }[] {
-    const links: { path: string; name: string }[] = [];
+  /** Extract download links emitted by generate_pdf / generate_pptx / generate_docx */
+  const DOWNLOAD_LINK_RE = /Download:\s*(\/api\/files\/download-(?:pdf|office)\/([^\s\n]+))/gi;
+
+  interface DownloadLink { url: string; name: string; }
+
+  function extractDownloadLinks(c: string): DownloadLink[] {
+    const links: DownloadLink[] = [];
     let m;
-    const re = new RegExp(PDF_PATH_RE.source, PDF_PATH_RE.flags);
-    while ((m = re.exec(c)) !== null) {
-      links.push({ path: m[1], name: m[2] });
+    // New format: "Download: /api/files/download-office/foo.pptx"
+    const re1 = new RegExp(DOWNLOAD_LINK_RE.source, DOWNLOAD_LINK_RE.flags);
+    while ((m = re1.exec(c)) !== null) {
+      links.push({ url: m[1], name: decodeURIComponent(m[2]) });
+    }
+    // Legacy PDF path format
+    const re2 = new RegExp(PDF_PATH_RE.source, PDF_PATH_RE.flags);
+    while ((m = re2.exec(c)) !== null) {
+      links.push({ url: `/api/files/download-pdf/${encodeURIComponent(m[2])}`, name: m[2] });
     }
     return links;
   }
-  function stripPdfPaths(c: string): string {
-    return c.replace(PDF_PATH_RE, "").replace(/\n{3,}/g, "\n\n").trim();
+
+  function stripDownloadPaths(c: string): string {
+    return c
+      .replace(DOWNLOAD_LINK_RE, "")
+      .replace(PDF_PATH_RE, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
   }
+
+  // Keep backward-compat aliases
+  const extractPdfLinks = (c: string) => extractDownloadLinks(c);
+  const stripPdfPaths = (c: string) => stripDownloadPaths(c);
 
   function isStatus(c: string) { return c.startsWith(STATUS_PREFIX); }
   function statusText(c: string) { return c.slice(STATUS_PREFIX.length).trim(); }
@@ -794,20 +814,31 @@ export default function ChatView({ conversationId, onConversationCreated, agents
                     ))}
                   </div>
                 )}
-                {/* Generated PDF download links */}
-                {extractPdfLinks(msg.content).length > 0 && (
+                {/* Generated file download links (PDF, PPTX, DOCX) */}
+                {extractDownloadLinks(msg.content).length > 0 && (
                   <div className="flex flex-wrap gap-2 mb-2">
-                    {extractPdfLinks(msg.content).map((pdf, i) => (
-                      <button key={i} onClick={() => downloadPdf(pdf.name).catch(() => {})}
-                        className="inline-flex items-center gap-2 bg-accent/10 hover:bg-accent/20 border border-accent/20 rounded-xl px-3 py-2 text-13 text-accent transition-colors cursor-pointer">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-                          <polyline points="7 10 12 15 17 10" />
-                          <line x1="12" y1="15" x2="12" y2="3" />
-                        </svg>
-                        {pdf.name}
-                      </button>
-                    ))}
+                    {extractDownloadLinks(msg.content).map((file, i) => {
+                      const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+                      const isPdf  = ext === "pdf";
+                      const isPptx = ext === "pptx";
+                      const isDocx = ext === "docx";
+                      const label = isPptx ? "PowerPoint" : isDocx ? "Word Doc" : "PDF";
+                      function handleDownload() {
+                        if (isPdf) downloadPdf(file.name).catch(() => {});
+                        else downloadOfficeDoc(file.name).catch(() => {});
+                      }
+                      return (
+                        <button key={i} onClick={handleDownload}
+                          className="inline-flex items-center gap-2 bg-accent/10 hover:bg-accent/20 border border-accent/20 rounded-xl px-3 py-2 text-13 text-accent transition-colors cursor-pointer">
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                            <polyline points="7 10 12 15 17 10" />
+                            <line x1="12" y1="15" x2="12" y2="3" />
+                          </svg>
+                          <span>{label}: {file.name}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
                 {/* Content */}

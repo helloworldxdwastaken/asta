@@ -65,9 +65,12 @@ function fieldsToMarkdown(fields: MemoryFields): string {
   return lines.join("\n");
 }
 
+type ActiveTab = "SOUL.md" | "USER_SOUL.md" | "USER.md";
+
 export default function TabPersona({ isAdmin = true }: { isAdmin?: boolean }) {
-  const [active, setActive] = useState<"SOUL.md" | "USER.md">(isAdmin ? "SOUL.md" : "USER.md");
+  const [active, setActive] = useState<ActiveTab>(isAdmin ? "SOUL.md" : "USER.md");
   const [soul, setSoul] = useState("");
+  const [userSoul, setUserSoul] = useState("");
   const [fields, setFields] = useState<MemoryFields>({ name: "", location: "", about: "", preferences: "", notes: "" });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -75,6 +78,7 @@ export default function TabPersona({ isAdmin = true }: { isAdmin?: boolean }) {
   useEffect(() => {
     getPersona().then(r => {
       setSoul(r.soul ?? r.SOUL ?? "");
+      setUserSoul(r.user_soul ?? "");
       const raw = r.user ?? r.USER ?? "";
       setFields(parseMemoryFields(raw));
     }).catch(() => {});
@@ -84,6 +88,8 @@ export default function TabPersona({ isAdmin = true }: { isAdmin?: boolean }) {
     setSaving(true);
     if (active === "SOUL.md") {
       await setPersona({ soul });
+    } else if (active === "USER_SOUL.md") {
+      await setPersona({ user_soul: userSoul });
     } else {
       await setPersona({ user: fieldsToMarkdown(fields) });
     }
@@ -98,26 +104,34 @@ export default function TabPersona({ isAdmin = true }: { isAdmin?: boolean }) {
 
   const inputClass = "w-full bg-white/[.04] border border-separator hover:border-separator-bold rounded-mac px-3.5 py-2.5 text-13 text-label outline-none focus:border-accent/40 transition-colors placeholder:text-label-tertiary";
 
+  const ADMIN_TABS: { id: ActiveTab; label: string }[] = [
+    { id: "SOUL.md", label: "Soul" },
+    { id: "USER_SOUL.md", label: "User Soul" },
+    { id: "USER.md", label: "Memories" },
+  ];
+
+  const descMap: Record<ActiveTab, string> = {
+    "SOUL.md": "Asta's personality, voice, and character — shown to admins.",
+    "USER_SOUL.md": "Asta's personality shown to regular users. Falls back to Soul if empty.",
+    "USER.md": "Info about you — Asta uses this to personalize responses.",
+  };
+
   return (
     <div className="text-label flex flex-col h-full space-y-4">
       <h2 className="text-16 font-semibold">{isAdmin ? "Persona" : "Memories"}</h2>
 
       {isAdmin && (
         <div className="flex gap-1 bg-white/[.04] rounded-mac p-1 w-fit border border-separator">
-          {(["SOUL.md", "USER.md"] as const).map(f => (
-            <button key={f} onClick={() => setActive(f)}
-              className={`px-4 py-1.5 rounded-[8px] text-13 font-medium transition-all duration-200 ${active === f ? "bg-white/[.1] text-label shadow-sm" : "text-label-tertiary hover:text-label-secondary"}`}>
-              {f === "SOUL.md" ? "Soul" : "Memories"}
+          {ADMIN_TABS.map(({ id, label }) => (
+            <button key={id} onClick={() => setActive(id)}
+              className={`px-4 py-1.5 rounded-[8px] text-13 font-medium transition-all duration-200 ${active === id ? "bg-white/[.1] text-label shadow-sm" : "text-label-tertiary hover:text-label-secondary"}`}>
+              {label}
             </button>
           ))}
         </div>
       )}
 
-      <p className="text-11 text-label-tertiary">
-        {active === "SOUL.md"
-          ? "Asta's personality, voice, and character."
-          : "Info about you — Asta uses this to personalize responses."}
-      </p>
+      <p className="text-11 text-label-tertiary">{descMap[active]}</p>
 
       {active === "SOUL.md" ? (
         <textarea
@@ -125,6 +139,13 @@ export default function TabPersona({ isAdmin = true }: { isAdmin?: boolean }) {
           onChange={e => setSoul(e.target.value)}
           className="flex-1 min-h-[300px] bg-white/[.04] border border-separator hover:border-separator-bold rounded-mac px-4 py-3 text-13 font-mono text-label/90 placeholder-label-tertiary outline-none focus:border-accent/40 resize-none transition-colors"
           placeholder="Edit SOUL.md…"
+        />
+      ) : active === "USER_SOUL.md" ? (
+        <textarea
+          value={userSoul}
+          onChange={e => setUserSoul(e.target.value)}
+          className="flex-1 min-h-[300px] bg-white/[.04] border border-separator hover:border-separator-bold rounded-mac px-4 py-3 text-13 font-mono text-label/90 placeholder-label-tertiary outline-none focus:border-accent/40 resize-none transition-colors"
+          placeholder="Edit USER_SOUL.md — leave blank to use Soul for all users…"
         />
       ) : (
         <div className="flex-1 overflow-y-auto space-y-4 scrollbar-thin pr-1">
