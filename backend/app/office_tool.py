@@ -1,4 +1,4 @@
-"""Office document generation tool: create .pptx and .docx files from AI-provided content."""
+"""Office document generation tool: create .pptx, .docx, and .xlsx files from AI-provided content."""
 from __future__ import annotations
 import json
 import logging
@@ -352,6 +352,188 @@ def get_docx_tool_openai_def() -> list[dict]:
                         },
                     },
                     "required": ["content"],
+                },
+            },
+        }
+    ]
+
+
+# ── Excel Spreadsheet ──────────────────────────────────────────────────────────
+
+def is_xlsx_available() -> bool:
+    try:
+        import openpyxl  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def generate_xlsx(sheets: list[dict], filename: str = "spreadsheet.xlsx", title: str | None = None) -> str:
+    """Generate a .xlsx file from a list of sheet dicts.
+
+    Each sheet dict:
+      - name: str (sheet tab name)
+      - headers: list[str] (column headers)
+      - rows: list[list[Any]] (data rows)
+      - column_widths: list[int] (optional, per-column widths)
+    Returns the output file path.
+    """
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        return "[Error: openpyxl is not installed. Run: pip install openpyxl]"
+
+    OFFICE_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    filename = _sanitize_filename(filename, ".xlsx")
+
+    ACCENT_HEX = "FF6B2C"  # Asta orange
+    HEADER_BG  = "1A1A2E"  # dark navy
+    ALT_ROW_BG = "F5F5FA"  # light lavender tint
+
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)  # remove default sheet
+
+    for sheet_data in sheets:
+        sheet_name = str(sheet_data.get("name", "Sheet"))[:31]  # Excel max 31 chars
+        ws = wb.create_sheet(title=sheet_name)
+
+        headers: list = sheet_data.get("headers", [])
+        rows: list = sheet_data.get("rows", [])
+        col_widths: list = sheet_data.get("column_widths", [])
+
+        # Header row
+        header_font  = Font(bold=True, color="FFFFFF", size=11)
+        header_fill  = PatternFill("solid", fgColor=HEADER_BG)
+        header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        thin_side    = Side(style="thin", color="DDDDDD")
+        thin_border  = Border(left=thin_side, right=thin_side, bottom=thin_side)
+
+        for col_idx, header in enumerate(headers, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=str(header))
+            cell.font   = header_font
+            cell.fill   = header_fill
+            cell.alignment = header_align
+            cell.border = thin_border
+
+        # Data rows
+        alt_fill = PatternFill("solid", fgColor=ALT_ROW_BG)
+        data_align = Alignment(vertical="center", wrap_text=True)
+
+        for row_idx, row in enumerate(rows, start=2):
+            is_alt = (row_idx % 2 == 0)
+            for col_idx, value in enumerate(row, start=1):
+                cell = ws.cell(row=row_idx, column=col_idx, value=value)
+                cell.alignment = data_align
+                cell.border = thin_border
+                if is_alt:
+                    cell.fill = alt_fill
+
+        # Column widths
+        for col_idx, header in enumerate(headers, start=1):
+            col_letter = get_column_letter(col_idx)
+            if col_idx <= len(col_widths) and col_widths[col_idx - 1]:
+                ws.column_dimensions[col_letter].width = col_widths[col_idx - 1]
+            else:
+                # Auto-size: use max of header length and sample data
+                max_len = len(str(header))
+                for row in rows[:50]:
+                    if col_idx - 1 < len(row):
+                        max_len = max(max_len, len(str(row[col_idx - 1])))
+                ws.column_dimensions[col_letter].width = min(max_len + 4, 40)
+
+        # Freeze header row
+        ws.freeze_panes = "A2"
+
+        # Row height for header
+        ws.row_dimensions[1].height = 28
+
+    # Add title sheet at front if requested
+    if title and wb.sheetnames:
+        ws_title = wb.create_sheet(title="Cover", index=0)
+        cell = ws_title.cell(row=2, column=2, value=title)
+        cell.font = Font(bold=True, size=20, color=ACCENT_HEX)
+        cell.alignment = Alignment(horizontal="left", vertical="center")
+        ws_title.column_dimensions["B"].width = 40
+        ws_title.row_dimensions[2].height = 40
+
+    out_path = OFFICE_OUTPUT_DIR / filename
+    wb.save(str(out_path))
+    logger.info("Generated XLSX: %s", out_path)
+    return str(out_path)
+
+
+def parse_xlsx_tool_args(raw: str) -> dict:
+    raw = raw.strip()
+    if raw.startswith("{"):
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+    m = re.search(r"\{[\s\S]*\}", raw)
+    if m:
+        try:
+            return json.loads(m.group())
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def get_xlsx_tool_openai_def() -> list[dict]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "generate_xlsx",
+                "description": (
+                    "Create an Excel (.xlsx) spreadsheet file. "
+                    "Use when the user asks for a spreadsheet, tracker, table, budget, schedule, or any data in Excel format. "
+                    "Supports multiple sheets, styled headers, and auto-sized columns. "
+                    "After generating, provide the download link from the result."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "filename": {
+                            "type": "string",
+                            "description": "Output filename (e.g. 'budget.xlsx'). No path.",
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": "Optional cover sheet title.",
+                        },
+                        "sheets": {
+                            "type": "array",
+                            "description": "List of sheet objects.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "name": {"type": "string", "description": "Sheet tab name."},
+                                    "headers": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                        "description": "Column header labels.",
+                                    },
+                                    "rows": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "array",
+                                            "items": {},
+                                        },
+                                        "description": "Data rows. Each row is an array of values matching the headers.",
+                                    },
+                                    "column_widths": {
+                                        "type": "array",
+                                        "items": {"type": "number"},
+                                        "description": "Optional explicit column widths (characters). Omit for auto-sizing.",
+                                    },
+                                },
+                                "required": ["name", "headers", "rows"],
+                            },
+                        },
+                    },
+                    "required": ["sheets"],
                 },
             },
         }

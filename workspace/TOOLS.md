@@ -42,6 +42,16 @@ To find an ID: open the page in Notion → copy the URL → the ID is the last 3
 
 ---
 
+## Generated Documents & Files
+
+When creating any document, spreadsheet, or data file (CSV, XLSX, PPTX, DOCX, PDF, etc.) always save it to **`workspace/office_docs/`** — never to the workspace root, Desktop, or other locations unless the user explicitly asks.
+
+- `workspace/office_docs/` → all generated documents (CSV, spreadsheets, reports, presentations, word docs, PDFs)
+- `workspace/scripts/` → scripts created for task automation
+- `workspace/notes/` → text notes
+
+---
+
 ## Bulk / Multi-Step Tasks
 
 For any task that requires the same operation on many items (organizing notes, moving files, batch renaming, processing a list), **always write a single script and run it in one exec call** — never loop the same tool call one item at a time.

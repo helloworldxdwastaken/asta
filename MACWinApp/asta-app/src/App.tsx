@@ -3,11 +3,12 @@ import SetupWizard from "./components/Setup/SetupWizard";
 import LoginPage from "./components/Login/LoginPage";
 import Sidebar from "./components/Sidebar/Sidebar";
 import ChatView from "./components/Chat/ChatView";
+import ProjectView from "./components/Projects/ProjectView";
 import SettingsSheet from "./components/Settings/SettingsSheet";
 import UpdateToast from "./components/UpdateToast";
 import AgentsSheet from "./components/Agents/AgentsSheet";
 import { getSetupDone } from "./lib/store";
-import { checkHealth, getDefaultAI, listAgents, autoResolveBackend, getMe } from "./lib/api";
+import { checkHealth, listAgents, autoResolveBackend, getMe } from "./lib/api";
 import { getJwt, getStoredUser, setAuth, clearAuth, User } from "./lib/auth";
 import { getVersion } from "@tauri-apps/api/app";
 
@@ -16,21 +17,17 @@ interface Agent {
   enabled: boolean; model_override?: string; category?: string;
 }
 
-const PROVIDER_NAMES: Record<string, string> = {
-  claude: "Claude", google: "Gemini",
-  openrouter: "OR", ollama: "Local",
-};
 
 export default function App() {
   const [setupDone, setSetupDone] = useState(getSetupDone());
   const [conversationId, setConversationId] = useState<string | undefined>();
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showAgents, setShowAgents] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [sidebarRefresh, setSidebarRefresh] = useState(0);
   const [chatKey, setChatKey] = useState(0);
   const [isOnline, setIsOnline] = useState(false);
-  const [providerKey, setProviderKey] = useState("claude");
   // Auth state: null = still checking, false = no multi-user (skip login), User = logged in
   const [user, setUser] = useState<User | false | null>(null);
   const [needsLogin, setNeedsLogin] = useState(false);
@@ -97,8 +94,6 @@ export default function App() {
   useEffect(() => {
     if (user === null && !needsLogin) return; // still loading
     if (needsLogin) return; // waiting for login
-    const fetchProvider = () => getDefaultAI().then(r => setProviderKey(r.provider ?? r.default_ai_provider ?? "claude")).catch(() => {});
-    fetchProvider();
     listAgents().then(r => setAgents(r.agents ?? [])).catch(() => {});
 
     const check = async () => {
@@ -106,8 +101,7 @@ export default function App() {
       setIsOnline(ok);
     };
     const interval = setInterval(check, 15000);
-    window.addEventListener("settings-changed", fetchProvider);
-    return () => { clearInterval(interval); window.removeEventListener("settings-changed", fetchProvider); };
+    return () => { clearInterval(interval); };
   }, [user, needsLogin]);
 
   function handleLogin() {
@@ -124,14 +118,12 @@ export default function App() {
     setChatKey(k => k + 1);
   }
 
-  function handleNewChat() { setConversationId(undefined); setChatKey(k => k + 1); }
+  function handleNewChat() { setConversationId(undefined); setActiveProjectId(null); setChatKey(k => k + 1); }
   function handleConversationCreated(id: string) {
     setConversationId(id);
     setSidebarRefresh(n => n + 1);
   }
 
-  const providerShortName = PROVIDER_NAMES[providerKey] ?? providerKey;
-  const enabledAgentCount = agents.filter(a => a.enabled).length;
   const userIsAdmin = user ? user.role === "admin" : true; // single-user = admin
 
   // Show login page if multi-user and not logged in
@@ -158,12 +150,10 @@ export default function App() {
       <div className="w-60 shrink-0 border-r border-separator relative glass-subtle">
         <Sidebar
           selectedId={conversationId}
-          onSelect={setConversationId}
+          onSelect={(id) => { setConversationId(id); setActiveProjectId(null); }}
           onNewChat={handleNewChat}
           onOpenSettings={userIsAdmin ? () => setShowSettings(true) : undefined}
-          onOpenAgents={userIsAdmin ? () => setShowAgents(true) : undefined}
-          enabledAgentCount={enabledAgentCount}
-          providerShortName={providerShortName}
+          onSelectProject={(id) => { setActiveProjectId(id); setConversationId(undefined); }}
           isOnline={isOnline}
           refreshTrigger={sidebarRefresh}
           user={user || undefined}
@@ -171,15 +161,23 @@ export default function App() {
         />
       </div>
 
-      {/* Chat */}
+      {/* Main content */}
       <div className="flex-1 min-w-0 relative">
-        <ChatView
-          key={chatKey}
-          conversationId={conversationId}
-          onConversationCreated={handleConversationCreated}
-          agents={agents}
-          isAdmin={userIsAdmin}
-        />
+        {activeProjectId !== null ? (
+          <ProjectView
+            folderId={activeProjectId}
+            onSelectChat={(id) => { setConversationId(id); setActiveProjectId(null); }}
+            onBack={() => setActiveProjectId(null)}
+          />
+        ) : (
+          <ChatView
+            key={chatKey}
+            conversationId={conversationId}
+            onConversationCreated={handleConversationCreated}
+            agents={agents}
+            isAdmin={userIsAdmin}
+          />
+        )}
       </div>
 
       {showSettings && <SettingsSheet onClose={() => setShowSettings(false)} />}

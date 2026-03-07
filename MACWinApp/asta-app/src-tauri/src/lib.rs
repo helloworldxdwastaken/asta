@@ -10,166 +10,62 @@ fn get_backend_url() -> String {
     "http://localhost:8010".to_string()
 }
 
-// ── Tailscale commands ──────────────────────────────────────────────────────
-
-/// Find the tailscale binary on this machine.
-fn find_tailscale() -> Option<String> {
-    let candidates = [
-        "/usr/local/bin/tailscale",
-        "/opt/homebrew/bin/tailscale",
-        "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
-    ];
-    for path in &candidates {
-        if std::path::Path::new(path).exists() {
-            return Some(path.to_string());
-        }
-    }
-    // Try PATH
-    if let Ok(output) = Command::new("which").arg("tailscale").output() {
-        if output.status.success() {
-            let p = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !p.is_empty() {
-                return Some(p);
-            }
-        }
-    }
-    None
-}
-
-fn run_tailscale(args: &[&str]) -> Result<(String, i32), String> {
-    let bin = find_tailscale().ok_or("Tailscale not installed")?;
-    let output = Command::new(&bin)
-        .args(args)
-        .output()
-        .map_err(|e| format!("Failed to run tailscale: {}", e))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let combined = if stderr.is_empty() { stdout } else { format!("{}\n{}", stdout, stderr) };
-    let code = output.status.code().unwrap_or(-1);
-    Ok((combined, code))
-}
+// ── File download (curl from Rust → ~/Downloads, no bytes over IPC) ──────────
 
 #[tauri::command]
-fn tailscale_status() -> Result<serde_json::Value, String> {
-    let bin = find_tailscale();
-    if bin.is_none() {
-        return Ok(serde_json::json!({
-            "installed": false,
-            "status": "not_installed"
-        }));
-    }
-    let (output, code) = run_tailscale(&["status", "--json"])?;
-    if code != 0 {
-        // Not logged in or other error
-        if output.contains("not logged in") || output.contains("NeedsLogin") {
-            return Ok(serde_json::json!({
-                "installed": true,
-                "status": "not_logged_in"
-            }));
-        }
-        return Ok(serde_json::json!({
-            "installed": true,
-            "status": "disconnected",
-            "error": output.trim()
-        }));
-    }
-    // Parse JSON output
-    let parsed: serde_json::Value = serde_json::from_str(&output)
-        .unwrap_or(serde_json::json!({"raw": output}));
-
-    let backend_state = parsed["BackendState"].as_str().unwrap_or("");
-    let status = match backend_state {
-        "Running" => "connected",
-        "Starting" => "connecting",
-        "Stopped" => "disconnected",
-        "NeedsLogin" | "NeedsMachineAuth" => "not_logged_in",
-        _ => "disconnected",
+fn download_to_file(url: String, filename: String, auth_header: Option<String>) -> Result<String, String> {
+    // Resolve ~/Downloads, fall back to ~/.asta-downloads
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let downloads = std::path::PathBuf::from(&home).join("Downloads");
+    let dir = if downloads.is_dir() {
+        downloads
+    } else {
+        let fallback = std::path::PathBuf::from(&home).join(".asta-downloads");
+        let _ = std::fs::create_dir_all(&fallback);
+        fallback
     };
 
-    let ip = parsed["Self"]["TailscaleIPs"]
-        .as_array()
-        .and_then(|arr| arr.first())
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
+    // Sanitize filename — strip any path separators
+    let safe_name = std::path::Path::new(&filename)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("download")
         .to_string();
 
-    let dns_name = parsed["Self"]["DNSName"]
-        .as_str()
-        .unwrap_or("")
-        .trim_end_matches('.')
-        .to_string();
+    let out_path = dir.join(&safe_name);
+    let path_str = out_path.to_string_lossy().to_string();
 
-    Ok(serde_json::json!({
-        "installed": true,
-        "status": status,
-        "ip": ip,
-        "dns_name": dns_name,
-    }))
-}
+    // Build curl args: download directly to disk, no bytes cross the IPC boundary.
+    // -k: allow self-signed certs (Cloudflare Tunnel / local HTTPS backends)
+    let mut args: Vec<String> = vec![
+        "-sLk".into(),
+        "-o".into(), path_str.clone(),
+        "--write-out".into(), "%{http_code}".into(),
+    ];
+    if let Some(header) = auth_header {
+        args.push("-H".into());
+        args.push(header);
+    }
+    args.push(url);
 
-#[tauri::command]
-fn tailscale_serve_status() -> Result<serde_json::Value, String> {
-    let (output, _code) = run_tailscale(&["serve", "status"])?;
-    let enabled = !output.contains("No serve config") && !output.trim().is_empty();
-    Ok(serde_json::json!({
-        "enabled": enabled,
-        "raw": output.trim()
-    }))
-}
+    let output = Command::new("curl")
+        .args(&args)
+        .output()
+        .map_err(|e| format!("curl failed: {}", e))?;
 
-#[tauri::command]
-fn tailscale_serve_enable(port: u16) -> Result<serde_json::Value, String> {
-    let target = format!("http://localhost:{}", port);
-    let (output, code) = run_tailscale(&["serve", "--bg", &target])?;
-    Ok(serde_json::json!({
-        "ok": code == 0,
-        "output": output.trim()
-    }))
-}
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(format!("Download failed: {}", stderr));
+    }
+    // Check HTTP status code written to stdout by --write-out
+    let http_code = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !http_code.starts_with('2') && !http_code.is_empty() {
+        return Err(format!("Server returned HTTP {}", http_code));
+    }
 
-#[tauri::command]
-fn tailscale_serve_disable() -> Result<serde_json::Value, String> {
-    let (output, code) = run_tailscale(&["serve", "--https=443", "off"])?;
-    Ok(serde_json::json!({
-        "ok": code == 0,
-        "output": output.trim()
-    }))
-}
-
-#[tauri::command]
-fn tailscale_connect() -> Result<serde_json::Value, String> {
-    let (output, code) = run_tailscale(&["up"])?;
-    Ok(serde_json::json!({
-        "ok": code == 0,
-        "output": output.trim()
-    }))
-}
-
-#[tauri::command]
-fn tailscale_disconnect() -> Result<serde_json::Value, String> {
-    let (output, code) = run_tailscale(&["down"])?;
-    Ok(serde_json::json!({
-        "ok": code == 0,
-        "output": output.trim()
-    }))
-}
-
-#[tauri::command]
-fn tailscale_login() -> Result<serde_json::Value, String> {
-    let (output, code) = run_tailscale(&["login"])?;
-    // Parse login URL from output
-    let login_url = output.lines()
-        .find(|line| line.contains("https://"))
-        .and_then(|line| {
-            line.split_whitespace()
-                .find(|w| w.starts_with("https://"))
-        })
-        .map(|s| s.to_string());
-    Ok(serde_json::json!({
-        "ok": code == 0,
-        "output": output.trim(),
-        "login_url": login_url,
-    }))
+    // Reveal in Finder (macOS) / Explorer (Windows)
+    let _ = tauri_plugin_opener::reveal_item_in_dir(&path_str);
+    Ok(path_str)
 }
 
 // ── App update check (GitHub releases) ──────────────────────────────────────
@@ -354,13 +250,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_backend_url,
             check_app_update,
-            tailscale_status,
-            tailscale_serve_status,
-            tailscale_serve_enable,
-            tailscale_serve_disable,
-            tailscale_connect,
-            tailscale_disconnect,
-            tailscale_login,
+            download_to_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

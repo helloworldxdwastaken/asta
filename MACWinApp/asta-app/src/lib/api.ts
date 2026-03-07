@@ -3,6 +3,7 @@
 // falls back to standard fetch in plain browser.
 
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 
 // Pick the right fetch: Tauri plugin (Rust-side, no CORS) or browser native.
 // Tauri v2: check for __TAURI_INTERNALS__ (v2 marker) or __TAURI__ (v1 compat).
@@ -395,21 +396,12 @@ export async function uploadSkill(file: File): Promise<any> {
 // ── Downloads ─────────────────────────────────────────────────────────────────
 async function _downloadFile(apiPath: string, filename: string): Promise<void> {
   const url = `${_backendUrl}${apiPath}`;
-  const dlOpts: any = { headers: _authHeaders() };
-  if (_backendUrl.startsWith("https://")) {
-    dlOpts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
-  }
-  const res = await _fetch(url, dlOpts);
-  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
-  const blob = await res.blob();
-  const blobUrl = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = blobUrl;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(blobUrl);
+  // Pass the URL to Rust which downloads via curl directly to ~/Downloads.
+  // This avoids sending file bytes over Tauri IPC (which crashes the webview
+  // for large files), and avoids blob-URL navigation in WKWebView.
+  const headers = _authHeaders();
+  const authHeader = headers["Authorization"] ? `Authorization: ${headers["Authorization"]}` : undefined;
+  await tauriInvoke("download_to_file", { url, filename, authHeader });
 }
 
 export function downloadPdf(filename: string): Promise<void> {

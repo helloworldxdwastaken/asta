@@ -2,6 +2,27 @@
 
 All notable changes to Asta are documented here.
 
+## [1.4.3] - 2026-03-07
+
+### Added
+
+- **Excel spreadsheet generation** — New `generate_xlsx` tool creates styled `.xlsx` files with multiple sheets, formatted headers, alternating row colors, and auto-sized columns (requires `openpyxl`).
+- **Projects view** — New ProjectView component: browse all projects in a grid, open a project to see its chats, create new projects inline, and quick-add unfiled chats to a project.
+- **Sidebar redesign** — Claude-style sidebar with inline project folders, two-state search (button expands to input), clean bottom bar with username/role/settings/logout.
+- **Download fix for WKWebView** — Markdown links to generated PDFs and Office docs now download correctly instead of navigating the webview away. Custom link handler intercepts clicks and routes through the Rust `download_to_file` command.
+- **Thinking persistence** — Thinking level setting now cached in localStorage so it survives component remounts and navigation.
+
+### Changed
+
+- **Reasoning mode simplified** — Removed "stream" option; enabling thinking now automatically streams the thought process. Backend treats `reasoning_mode: "on"` the same as `"stream"` for Claude providers.
+- **Tailscale tab removed** — Network settings consolidated; removed separate TabTailscale component.
+- **Rust backend simplified** — Removed Tailscale Rust commands from `lib.rs` (status, connect, disconnect, login, serve enable/disable).
+
+### Fixed
+
+- **Thinking not streaming** — Backend now enables live reasoning streaming when thinking level is set to anything other than "off", not just when reasoning mode is explicitly "stream".
+- **Sidebar dead code cleanup** — Removed unused folder modal, collapsed state, toggle functions, and orphaned icon imports.
+
 ## [1.4.2] - 2026-03-05
 
 ### Added

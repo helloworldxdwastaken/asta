@@ -71,7 +71,7 @@ export default function TabGeneral({ isAdmin = true }: { isAdmin?: boolean }) {
         <div className="flex flex-wrap gap-2">
           {THINKING.map(l => (
             <Chip key={l} label={l} active={thinking === l}
-              onClick={async () => { setThinkingState(l); await setThinking(l); notifySettingsChanged(); }} />
+              onClick={async () => { setThinkingState(l); localStorage.setItem("thinkingLevel", l); await setThinking(l); notifySettingsChanged(); }} />
           ))}
         </div>
       </Section>
@@ -79,7 +79,7 @@ export default function TabGeneral({ isAdmin = true }: { isAdmin?: boolean }) {
       {isAdmin && (
         <Section title="Reasoning Mode">
           <div className="flex gap-2">
-            {["off", "on", "stream"].map(m => (
+            {["off", "on"].map(m => (
               <Chip key={m} label={m} active={reasoning === m}
                 onClick={async () => { setReasoningState(m); await setReasoning(m); }} />
             ))}

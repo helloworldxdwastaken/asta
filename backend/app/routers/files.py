@@ -292,6 +292,8 @@ _OFFICE_MIME = {
     ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".csv":  "text/csv",
+    ".pdf":  "application/pdf",
 }
 
 

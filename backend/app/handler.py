@@ -3360,12 +3360,17 @@ async def handle_message(
     from app.pdf_tool import get_pdf_tool_openai_def, is_fitz_available
     if is_fitz_available():
         tools = tools + get_pdf_tool_openai_def()
-    # Office document generation (pptx/docx) — allowed for ALL users
-    from app.office_tool import get_pptx_tool_openai_def, get_docx_tool_openai_def, is_pptx_available, is_docx_available
+    # Office document generation (pptx/docx/xlsx) — allowed for ALL users
+    from app.office_tool import (
+        get_pptx_tool_openai_def, get_docx_tool_openai_def, get_xlsx_tool_openai_def,
+        is_pptx_available, is_docx_available, is_xlsx_available,
+    )
     if is_pptx_available():
         tools = tools + get_pptx_tool_openai_def()
     if is_docx_available():
         tools = tools + get_docx_tool_openai_def()
+    if is_xlsx_available():
+        tools = tools + get_xlsx_tool_openai_def()
     # Subagent orchestration: admin-only
     if _is_admin and channel != "subagent":
         from app.subagent_orchestrator import get_subagent_tools_openai_def
@@ -3399,7 +3404,13 @@ async def handle_message(
         chat_kwargs["tools"] = tools
     allowed_tool_names = _tool_names_from_defs(tools)
 
-    live_stream_reasoning_enabled = reasoning_mode_norm == "stream"
+    # Stream reasoning when explicitly set to "stream" mode, or when Claude's native
+    # thinking is active (thinkingLevel != "off") — Claude users should always see
+    # the thought process when they've enabled thinking.
+    _thinking_level_norm = (thinking_level or "off").strip().lower()
+    live_stream_reasoning_enabled = reasoning_mode_norm in ("stream", "on") or (
+        provider_name == "claude" and _thinking_level_norm not in ("off", "")
+    )
     # Enable provider streaming for real-time web assistant deltas, even when reasoning mode is off.
     live_model_stream_enabled = live_stream_reasoning_enabled or stream_events_enabled
     live_stream_reasoning_emitted = False
@@ -3939,6 +3950,21 @@ async def handle_message(
                     docx_safe = _os.path.basename(docx_path)
                     out = f"Document generated successfully. Download: /api/files/download-office/{docx_safe}"
                 used_tool_labels.append(_build_tool_trace_label("generate_docx"))
+            elif name == "generate_xlsx":
+                from app.office_tool import generate_xlsx as _gen_xlsx, parse_xlsx_tool_args
+
+                params = parse_xlsx_tool_args(args_str)
+                xlsx_sheets = params.get("sheets")
+                if not xlsx_sheets or not isinstance(xlsx_sheets, list):
+                    out = "Error: sheets array is required"
+                else:
+                    xlsx_filename = (params.get("filename") or "spreadsheet.xlsx").strip()
+                    xlsx_title = params.get("title")
+                    xlsx_path = _gen_xlsx(xlsx_sheets, filename=xlsx_filename, title=xlsx_title)
+                    import os as _os
+                    xlsx_safe = _os.path.basename(xlsx_path)
+                    out = f"Spreadsheet generated successfully. Download: /api/files/download-office/{xlsx_safe}"
+                used_tool_labels.append(_build_tool_trace_label("generate_xlsx"))
             elif name == "web_search":
                 from app.openclaw_compat_tools import parse_openclaw_compat_args, run_web_search_compat
 

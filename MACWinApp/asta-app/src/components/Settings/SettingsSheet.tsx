@@ -1,7 +1,7 @@
 import { useState } from "react";
 import {
   IconSettings, IconPerson, IconCpu, IconKey, IconMusic, IconPuzzle,
-  IconBrain, IconLink, IconClock, IconGlobe, IconAntenna, IconHand, IconInfo, IconClose,
+  IconBrain, IconLink, IconClock, IconGlobe, IconHand, IconInfo, IconClose,
 } from "../../lib/icons";
 import { isAdmin } from "../../lib/auth";
 import TabGeneral from "./tabs/TabGeneral";
@@ -41,7 +41,7 @@ const ALL_TABS = [
   { id: "channels",    label: "Channels",    Icon: IconLink,      adminOnly: true },
   { id: "cron",        label: "Schedule",    Icon: IconClock,     adminOnly: true },
   { id: "google",      label: "Google",      Icon: IconGlobe,     adminOnly: true },
-  { id: "network",     label: "Connection",  Icon: IconAntenna,   adminOnly: true },
+  { id: "network",     label: "Connection",  Icon: IconLink,      adminOnly: true },
   { id: "permissions", label: "Permissions", Icon: IconHand,      adminOnly: true },
   { id: "users",       label: "Users",       Icon: IconUsers,     adminOnly: true },
   { id: "about",       label: "About",       Icon: IconInfo,      adminOnly: false },

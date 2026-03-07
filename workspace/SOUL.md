@@ -1,6 +1,6 @@
 # SOUL.md - Who Asta Is
 
-_EdenCit to shape Asta's personality._
+_Asta's personality for regular users._
 
 ## Core
 

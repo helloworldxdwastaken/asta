@@ -115,11 +115,11 @@ export default function ChatView({ conversationId, onConversationCreated, agents
   const [, setStreamProvider] = useState(""); // kept for re-render trigger
   const [input, setInput] = useState("");
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
-  const [showThinking, setShowThinking] = useState(localStorage.getItem("showThinking") === "true");
+  const [showThinking, setShowThinking] = useState(localStorage.getItem("showThinking") !== "false");
   const [webEnabled] = useState(localStorage.getItem("webEnabled") === "true");
   const [learningMode, setLearningMode] = useState(false);
   const [provider, setProvider] = useState("claude");
-  const [thinkingLevel, setThinkingLevel] = useState("off");
+  const [thinkingLevel, setThinkingLevel] = useState(() => localStorage.getItem("thinkingLevel") ?? "off");
   const [mood, setMood] = useState("normal");
   const [showProviderMenu, setShowProviderMenu] = useState(false);
   const [showThinkingMenu, setShowThinkingMenu] = useState(false);
@@ -142,7 +142,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
   // Load settings from backend on mount + when changed in Settings
   const fetchSettings = useCallback(() => {
     getDefaultAI().then(r => setProvider(r.provider ?? r.default_ai_provider ?? "claude")).catch(() => {});
-    getThinking().then(r => setThinkingLevel(r.thinking_level ?? "off")).catch(() => {});
+    getThinking().then(r => { const l = r.thinking_level ?? "off"; localStorage.setItem("thinkingLevel", l); setThinkingLevel(l); }).catch(() => {});
     getMoodSetting().then(r => setMood(r.mood ?? "normal")).catch(() => {});
   }, []);
   useEffect(() => {
@@ -259,6 +259,10 @@ export default function ChatView({ conversationId, onConversationCreated, agents
           case "tool_start": {
             const label = chunk.label ?? chunk.name ?? "tool";
             setActiveTools(prev => prev.includes(label) ? prev : [...prev, label]);
+            // Clear any pre-tool preamble — the final answer comes after the tool runs,
+            // so showing intermediate text then replacing it looks like a "double answer".
+            accumulated = "";
+            setStreamContent("");
             break;
           }
           case "tool_end": {
@@ -467,9 +471,6 @@ export default function ChatView({ conversationId, onConversationCreated, agents
       .trim();
   }
 
-  // Keep backward-compat aliases
-  const extractPdfLinks = (c: string) => extractDownloadLinks(c);
-  const stripPdfPaths = (c: string) => stripDownloadPaths(c);
 
   function isStatus(c: string) { return c.startsWith(STATUS_PREFIX); }
   function statusText(c: string) { return c.slice(STATUS_PREFIX.length).trim(); }
@@ -478,6 +479,24 @@ export default function ChatView({ conversationId, onConversationCreated, agents
 
   // Custom markdown renderers
   const mdComponents = {
+    a: ({ href, children, ...props }: any) => {
+      function handleLinkClick(e: React.MouseEvent) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!href) return;
+        if (href.includes("/api/files/download-pdf/") || href.includes("/api/files/download-office/")) {
+          const filename = decodeURIComponent(href.split("/").pop() ?? "download");
+          const fn = href.includes("/download-pdf/") ? downloadPdf : downloadOfficeDoc;
+          fn(filename).catch(err => alert(`Download failed: ${err?.message ?? err}`));
+        } else {
+          // Open external links in system browser, not inside the webview
+          import("@tauri-apps/plugin-opener").then(({ openUrl }) => openUrl(href)).catch(() => {
+            window.open(href, "_blank");
+          });
+        }
+      }
+      return <a href={href} onClick={handleLinkClick} className="text-accent underline cursor-pointer" {...props}>{children}</a>;
+    },
     img: ({ src, alt, ...props }: any) => (
       <img src={src} alt={alt ?? ""} {...props}
         className="max-w-full max-h-80 rounded-mac my-2 block"
@@ -544,7 +563,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
               {THINKING_LEVELS.map(l => (
                 <button key={l}
                   className={`w-full text-left px-4 py-2 text-13 transition-all duration-150 capitalize ${thinkingLevel === l ? "text-accent bg-accent/[.08]" : "text-label-secondary hover:bg-white/[.04]"}`}
-                  onClick={async () => { setThinkingLevel(l); await setThinking(l); }}>
+                  onClick={async () => { setThinkingLevel(l); localStorage.setItem("thinkingLevel", l); await setThinking(l); }}>
                   {l}
                 </button>
               ))}
@@ -826,7 +845,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
                     ))}
                   </div>
                 )}
-                {/* Generated file download links (PDF, PPTX, DOCX) */}
+                {/* Generated file download links (PDF, PPTX, DOCX, XLSX, CSV) */}
                 {extractDownloadLinks(msg.content).length > 0 && (
                   <div className="flex flex-wrap gap-2 mb-2">
                     {extractDownloadLinks(msg.content).map((file, i) => {
@@ -834,10 +853,15 @@ export default function ChatView({ conversationId, onConversationCreated, agents
                       const isPdf  = ext === "pdf";
                       const isPptx = ext === "pptx";
                       const isDocx = ext === "docx";
-                      const label = isPptx ? "PowerPoint" : isDocx ? "Word Doc" : "PDF";
-                      function handleDownload() {
-                        if (isPdf) downloadPdf(file.name).catch(() => {});
-                        else downloadOfficeDoc(file.name).catch(() => {});
+                      const isXlsx = ext === "xlsx";
+                      const isCsv  = ext === "csv";
+                      const label = isPptx ? "PowerPoint" : isDocx ? "Word Doc" : isXlsx ? "Excel" : isCsv ? "CSV" : "PDF";
+                      function handleDownload(e: React.MouseEvent) {
+                        e.stopPropagation();
+                        const fn = isPdf ? downloadPdf : downloadOfficeDoc;
+                        fn(file.name).catch((err) => {
+                          alert(`Download failed: ${err?.message ?? err ?? "unknown error"}`);
+                        });
                       }
                       return (
                         <button key={i} onClick={handleDownload}
@@ -855,7 +879,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
                 )}
                 {/* Content */}
                 <div className="text-label text-14 prose prose-invert prose-sm leading-relaxed">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{stripPdfPaths(cleanContent(msg.content))}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{stripDownloadPaths(cleanContent(msg.content))}</ReactMarkdown>
                 </div>
                 {/* Provider badge + actions */}
                 <div className="flex items-center gap-3 mt-1.5">
