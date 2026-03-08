@@ -17,6 +17,7 @@
         { "url": "http://**" },
         { "url": "https://**" }
       ]
-    }
+    },
+    "updater:default"
   ]
 }

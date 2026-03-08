@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { check } from "@tauri-apps/plugin-updater";
 
 const CHECK_INTERVAL = 60 * 60 * 1000; // 1 hour
 
@@ -12,12 +13,16 @@ interface UpdateInfo {
   release_url: string;
   download_url?: string;
   release_notes?: string;
+  canAutoUpdate?: boolean;
 }
 
 export default function UpdateToast() {
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [dismissed, setDismissed] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [progress, setProgress] = useState("");
   const versionRef = useRef<string | null>(null);
+  const nativeUpdateRef = useRef<Awaited<ReturnType<typeof check>> | null>(null);
 
   useEffect(() => {
     let interval: ReturnType<typeof setInterval>;
@@ -36,6 +41,31 @@ export default function UpdateToast() {
   async function checkForUpdate() {
     const ver = versionRef.current;
     if (!ver) return;
+
+    // Try Tauri native updater first (supports in-place install)
+    try {
+      const native = await check();
+      if (native?.available) {
+        nativeUpdateRef.current = native;
+        const dismissedVersion = localStorage.getItem("dismissedAppUpdate");
+        if (dismissedVersion !== native.version) {
+          setUpdate({
+            has_update: true,
+            latest_version: native.version,
+            current_version: ver,
+            release_url: "",
+            release_notes: native.body ?? "",
+            canAutoUpdate: true,
+          });
+          setDismissed(false);
+        }
+        return;
+      }
+    } catch {
+      // Native updater not available (no latest.json yet, etc.) — fall through
+    }
+
+    // Fallback: manual check via Rust command (GitHub API)
     try {
       const result = await invoke<UpdateInfo>("check_app_update", {
         currentVersion: ver,
@@ -43,14 +73,37 @@ export default function UpdateToast() {
       if (result.has_update) {
         const dismissedVersion = localStorage.getItem("dismissedAppUpdate");
         if (dismissedVersion !== result.latest_version) {
-          setUpdate(result);
+          setUpdate({ ...result, canAutoUpdate: false });
           setDismissed(false);
         }
       } else {
         setUpdate(null);
       }
     } catch {
-      // Silently fail — not critical
+      // Silently fail
+    }
+  }
+
+  async function installUpdate() {
+    const native = nativeUpdateRef.current;
+    if (!native) return;
+    setInstalling(true);
+    setProgress("Downloading...");
+    try {
+      await native.downloadAndInstall((e) => {
+        if (e.event === "Started" && e.data.contentLength) {
+          setProgress(`Downloading (${Math.round(e.data.contentLength / 1024 / 1024)}MB)...`);
+        } else if (e.event === "Finished") {
+          setProgress("Installing...");
+        }
+      });
+      setProgress("Restarting...");
+      // Tauri restarts automatically after install
+    } catch {
+      setInstalling(false);
+      setProgress("");
+      // Fall back to manual download
+      openRelease();
     }
   }
 
@@ -83,16 +136,27 @@ export default function UpdateToast() {
               <p className="text-11 text-label-tertiary">v{update.latest_version}</p>
             </div>
           </div>
-          <button onClick={dismiss} className="text-label-tertiary hover:text-label-secondary p-0.5 -mt-0.5 -mr-0.5">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
-          </button>
+          {!installing && (
+            <button onClick={dismiss} className="text-label-tertiary hover:text-label-secondary p-0.5 -mt-0.5 -mr-0.5">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
+          )}
         </div>
-        <button onClick={openRelease}
-          className="w-full text-12 font-medium bg-accent hover:bg-accent-hover text-white py-2 rounded-xl transition-colors">
-          {update?.download_url ? "Download update" : "View release"}
-        </button>
+        {installing ? (
+          <div className="text-12 text-label-tertiary text-center py-1.5">{progress}</div>
+        ) : update.canAutoUpdate ? (
+          <button onClick={installUpdate}
+            className="w-full text-12 font-medium bg-accent hover:bg-accent-hover text-white py-2 rounded-xl transition-colors">
+            Install & restart
+          </button>
+        ) : (
+          <button onClick={openRelease}
+            className="w-full text-12 font-medium bg-accent hover:bg-accent-hover text-white py-2 rounded-xl transition-colors">
+            {update?.download_url ? "Download update" : "View release"}
+          </button>
+        )}
       </div>
     </div>
   );

@@ -181,6 +181,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![]),
         ))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             // Build tray context menu
             let show = MenuItem::with_id(app, "show", "Open", true, None::<&str>)?;

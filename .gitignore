@@ -1,5 +1,6 @@
 # ─── SECRETS: never commit ────────────────────────────────────────────────────
 .env
+**/updater.key
 .env.*
 !.env.example
 *.env.local
