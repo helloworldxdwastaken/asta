@@ -115,7 +115,8 @@ export default function ChatView({ conversationId, onConversationCreated, agents
   const [, setStreamProvider] = useState(""); // kept for re-render trigger
   const [input, setInput] = useState("");
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
-  const [showThinking, setShowThinking] = useState(localStorage.getItem("showThinking") !== "false");
+  // Thinking is always visible when thinking level is enabled — no toggle needed
+  const showThinking = true;
   const [webEnabled] = useState(localStorage.getItem("webEnabled") === "true");
   const [learningMode, setLearningMode] = useState(false);
   const [provider, setProvider] = useState("claude");
@@ -582,12 +583,11 @@ export default function ChatView({ conversationId, onConversationCreated, agents
 
         <div className="w-px h-4 bg-separator mx-0.5" />
 
-        {/* Brain toggle */}
+        {/* Brain indicator (thinking is always shown when enabled) */}
         {thinkingLevel !== "off" && (
-          <button onClick={() => { const v = !showThinking; setShowThinking(v); localStorage.setItem("showThinking", String(v)); }}
-            className={`flex items-center gap-1 rounded-mac px-2 py-1.5 text-11 transition-all duration-200 active:scale-[0.95] ${showThinking ? "text-violet-400 bg-violet-500/[.12]" : "text-label-tertiary bg-white/[.05] hover:bg-white/[.08]"}`}>
+          <span className="flex items-center gap-1 rounded-mac px-2 py-1.5 text-11 text-violet-400 bg-violet-500/[.12]">
             <IconBrain size={12} />
-          </button>
+          </span>
         )}
 
         {/* Learning mode — admin only */}
