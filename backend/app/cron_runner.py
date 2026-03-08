@@ -160,11 +160,18 @@ async def _fire_cron_job_async(
         # For recurring jobs (agentturn), call AI
         try:
             from app.handler import handle_message
+
+            # Pass a no-op stream callback so _emit_stream_status won't
+            # persist ephemeral status messages to the DB (nobody is watching).
+            async def _noop_stream(*_a, **_kw):
+                pass
+
             reply = await handle_message(
                 user_id=str(user_id),
                 channel=channel,
                 channel_target=channel_target,
                 text=message,
+                extra_context={"_stream_event_callback": _noop_stream},
             )
             run_status = "ok"
             run_output = (reply or "").strip()
