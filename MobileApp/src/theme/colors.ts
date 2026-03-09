@@ -30,10 +30,19 @@ export const colors = {
   violetSubtle: "rgba(139,92,246,0.12)",
   violetText: "rgba(139,92,246,0.8)",
 
+  // User bubble (dark gray, NOT accent orange)
+  userBubble: "#2C2C30",
+  userBubbleText: "#F0EDE8",
+
   // Misc
   white05: "rgba(255,255,255,0.05)",
   white08: "rgba(255,255,255,0.08)",
   white04: "rgba(255,255,255,0.04)",
+  white10: "rgba(255,255,255,0.10)",
+  separatorBold: "rgba(255,255,255,0.1)",
+
+  // Danger subtle
+  dangerSubtle: "rgba(255,59,48,0.2)",
 };
 
 export const spacing = {

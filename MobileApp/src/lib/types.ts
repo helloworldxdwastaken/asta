@@ -22,6 +22,7 @@ export interface Message {
   provider?: string;
   activeTools: string[];
   completedTools: string[];
+  imageUri?: string;
 }
 
 export interface Agent {

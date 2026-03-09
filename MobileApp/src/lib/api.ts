@@ -72,6 +72,8 @@ export async function streamChat(
     conversation_id?: string;
     provider?: string;
     agent_id?: string;
+    image_base64?: string;
+    image_mime?: string;
   },
   onChunk: (chunk: StreamChunk) => void,
   onDone: (conversationId?: string) => void,
@@ -81,17 +83,18 @@ export async function streamChat(
   const headers = await authHeaders();
   const controller = new AbortController();
 
-  const params = new URLSearchParams({
-    text: opts.text,
-    channel: "mobile",
-    ...(opts.conversation_id ? { conversation_id: opts.conversation_id } : {}),
-    ...(opts.provider ? { provider: opts.provider } : {}),
-    ...(opts.agent_id ? { agent_id: opts.agent_id } : {}),
-  });
-
   try {
-    const res = await fetch(`${base}/api/chat/stream?${params}`, {
-      headers,
+    const res = await fetch(`${base}/api/chat/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({
+        text: opts.text,
+        channel: "mobile",
+        ...(opts.conversation_id ? { conversation_id: opts.conversation_id } : {}),
+        ...(opts.provider ? { provider: opts.provider } : {}),
+        ...(opts.agent_id ? { agent_id: opts.agent_id } : {}),
+        ...(opts.image_base64 ? { image_base64: opts.image_base64, image_mime: opts.image_mime || "image/jpeg" } : {}),
+      }),
       signal: controller.signal,
     });
 
@@ -125,7 +128,6 @@ export async function streamChat(
               }
               try {
                 const parsed = JSON.parse(data);
-                // Normalize event types
                 const type = eventType || parsed.type || "text";
                 const normalized = type === "reasoning" ? "thinking"
                   : type === "assistant" || type === "assistant_final" ? "assistant_final"
@@ -161,7 +163,7 @@ export const deleteConversation = (id: string) =>
 export const truncateConversation = (id: string, keep: number) =>
   req("POST", `/api/chat/conversations/${id}/truncate`, { keep_last: keep });
 
-// ── Folders ─────────────────────────────────────────────────
+// ── Folders / Projects ──────────────────────────────────────
 export const listFolders = () => req<{ folders: Folder[] }>("GET", "/api/chat/folders");
 export const createFolder = (name: string) => req("POST", "/api/chat/folders", { name });
 export const renameFolder = (id: string, name: string) => req("PATCH", `/api/chat/folders/${id}`, { name });
@@ -180,12 +182,61 @@ export const getKeyStatus = () => req("GET", "/api/settings/keys");
 export const setKeys = (keys: Record<string, string>) => req("PUT", "/api/settings/keys", keys);
 export const getServerStatus = () => req("GET", "/api/settings/server-status");
 export const getUsage = () => req("GET", "/api/settings/usage");
+export const getProviders = () => req("GET", "/api/providers");
+export const getVision = () => req("GET", "/api/settings/vision");
+export const setVision = (v: any) => req("PUT", "/api/settings/vision", v);
+export const getPersona = () => req("GET", "/api/settings/persona");
+export const setPersona = (p: any) => req("PUT", "/api/settings/persona", p);
+export const getSkills = () => req("GET", "/api/settings/skills");
+export const toggleSkill = (skill_id: string, enabled: boolean) =>
+  req("PUT", "/api/settings/skills", { skill_id, enabled });
 
 // ── Agents ──────────────────────────────────────────────────
 export const listAgents = () => req<{ agents: Agent[] }>("GET", "/api/agents");
+export const createAgent = (agent: any) => req("POST", "/api/agents", agent);
+export const updateAgent = (id: string, agent: any) => req("PATCH", `/api/agents/${id}`, agent);
+export const deleteAgent = (id: string) => req("DELETE", `/api/agents/${id}`);
+export const toggleAgent = (id: string, enabled: boolean) =>
+  req("PUT", `/api/agents/${id}/enabled`, { enabled });
+
+// ── User Management ────────────────────────────────────────
+export const listUsers = () => req("GET", "/api/auth/users");
+export const createUser = (username: string, password: string, role: string) =>
+  req("POST", "/api/auth/users", { username, password, role });
+export const deleteUser = (userId: string) => req("DELETE", `/api/auth/users/${userId}`);
+export const resetUserPassword = (userId: string, new_password: string) =>
+  req("PUT", `/api/auth/users/${userId}/reset-password`, { new_password });
 
 // ── Cron ────────────────────────────────────────────────────
 export const listCron = () => req("GET", "/api/cron");
 export const createCron = (job: any) => req("POST", "/api/cron", job);
 export const updateCron = (id: string, job: any) => req("PUT", `/api/cron/${id}`, job);
 export const deleteCron = (id: string) => req("DELETE", `/api/cron/${id}`);
+
+// ── Models ─────────────────────────────────────────────────
+export const getModels = () => req("GET", "/api/settings/models");
+export const getAvailableModels = () => req("GET", "/api/settings/available-models");
+export const setModel = (provider: string, model: string) =>
+  req("PUT", "/api/settings/models", { provider, model });
+
+// ── Knowledge / RAG ────────────────────────────────────────
+export const ragStatus = () => req("GET", "/api/rag/status");
+export const ragLearned = () => req("GET", "/api/rag/learned");
+export const getMemoryHealth = () => req("GET", "/api/rag/health?detail=true");
+export const ragDeleteTopic = (topic: string) => req("DELETE", `/api/rag/learned/${encodeURIComponent(topic)}`);
+
+// ── Security ────────────────────────────────────────────────
+export const getSecurityAudit = () => req("GET", "/api/settings/security-audit");
+
+// ── Channels (Telegram / Pingram) ───────────────────────────
+export const getTelegramUsername = () => req("GET", "/api/settings/telegram/username");
+export const setTelegramUsername = (username: string) =>
+  req("POST", "/api/settings/telegram/username", { username });
+export const getPingram = () => req("GET", "/api/settings/pingram");
+export const setPingram = (data: any) => req("POST", "/api/settings/pingram", data);
+export const testPingramCall = (testNumber: string) =>
+  req("POST", "/api/settings/pingram/test-call", { test_number: testNumber });
+
+// ── Notifications ───────────────────────────────────────────
+export const getNotifications = (limit = 20) => req("GET", `/api/notifications?limit=${limit}`);
+export const deleteNotification = (id: string) => req("DELETE", `/api/notifications/${id}`);
