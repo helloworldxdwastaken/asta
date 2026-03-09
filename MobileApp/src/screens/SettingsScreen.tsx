@@ -17,6 +17,9 @@ import {
   listUsers, createUser, deleteUser, resetUserPassword,
   ragStatus, ragLearned, getMemoryHealth, ragDeleteTopic,
   getModels, getAvailableModels, setModel,
+  getReasoning, setReasoning as setReasoningApi,
+  getFinalMode, setFinalMode as setFinalModeApi,
+  getVision, setVision as setVisionApi,
 } from "../lib/api";
 import { clearAuth, getUser, isAdmin } from "../lib/auth";
 import type { User, Agent } from "../lib/types";
@@ -145,6 +148,11 @@ export default function SettingsScreen({
   const [availableModels, setAvailableModels] = useState<Record<string, string[]>>({});
   const [modelSaving, setModelSaving] = useState<string | null>(null);
 
+  // Advanced settings (admin)
+  const [reasoningMode, setReasoningMode] = useState("off");
+  const [finalMode, setFinalMode] = useState("off");
+  const [visionEnabled, setVisionEnabled] = useState(true);
+
   // Knowledge state
   const [ragInfo, setRagInfo] = useState<any>(null);
   const [ragTopics, setRagTopics] = useState<any[]>([]);
@@ -168,6 +176,9 @@ export default function SettingsScreen({
     ragStatus().then(setRagInfo).catch(() => {});
     ragLearned().then((r) => setRagTopics(r.topics || r.learned || [])).catch(() => {});
     getMemoryHealth().then(setMemHealth).catch(() => {});
+    getReasoning().then((r) => setReasoningMode(r.reasoning_mode || "off")).catch(() => {});
+    getFinalMode().then((r) => setFinalMode(r.final_mode || "off")).catch(() => {});
+    getVision().then((r) => setVisionEnabled(r.preprocess !== false)).catch(() => {});
   }, []);
 
   const visibleTabs = TABS.filter((t) => !t.adminOnly || admin);
@@ -343,6 +354,39 @@ export default function SettingsScreen({
             />
           ))}
         </View>
+
+        {admin && (
+          <>
+            <Label text="Reasoning Mode" />
+            <View style={st.chipRow}>
+              {["off", "on"].map((v) => (
+                <Chip key={v} label={v} active={reasoningMode === v} color={colors.accent}
+                  onPress={() => { setReasoningMode(v); setReasoningApi(v).catch(() => {}); }}
+                />
+              ))}
+            </View>
+
+            <Label text="Final Mode" />
+            <View style={st.chipRow}>
+              {["off", "strict"].map((v) => (
+                <Chip key={v} label={v} active={finalMode === v} color={colors.accent}
+                  onPress={() => { setFinalMode(v); setFinalModeApi(v).catch(() => {}); }}
+                />
+              ))}
+            </View>
+
+            <Label text="Vision / Image Understanding" />
+            <View style={st.switchRow}>
+              <Text style={st.switchLabel}>{visionEnabled ? "Enabled" : "Disabled"}</Text>
+              <Switch
+                value={visionEnabled}
+                onValueChange={(v) => { setVisionEnabled(v); setVisionApi({ preprocess: v }).catch(() => {}); }}
+                trackColor={{ false: colors.white10, true: colors.accent }}
+                thumbColor="#fff"
+              />
+            </View>
+          </>
+        )}
       </>
     );
   }
@@ -1865,4 +1909,11 @@ const st = StyleSheet.create({
     borderRadius: radius.sm, paddingHorizontal: 12, paddingVertical: 11,
     fontSize: 14, color: colors.label, marginBottom: 4,
   },
+  switchRow: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    backgroundColor: colors.surfaceRaised, borderRadius: radius.sm,
+    paddingHorizontal: 16, paddingVertical: 12,
+    borderWidth: 1, borderColor: colors.separator,
+  },
+  switchLabel: { fontSize: 14, fontWeight: "500", color: colors.label },
 });

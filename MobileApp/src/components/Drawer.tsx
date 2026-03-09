@@ -8,6 +8,7 @@ import { colors, spacing, radius } from "../theme/colors";
 import {
   listConversations, deleteConversation, listFolders,
   createFolder, deleteFolder, renameFolder, assignConversationFolder,
+  truncateConversation,
 } from "../lib/api";
 import { clearAuth, getUser } from "../lib/auth";
 import type { Conversation, Folder, User } from "../lib/types";
@@ -38,7 +39,6 @@ export default function Drawer({
   const [user, setUserState] = useState<User | null>(null);
   const [search, setSearch] = useState("");
   const [showSearch, setShowSearch] = useState(false);
-  const [activeSection, setActiveSection] = useState<"recents" | "projects">("recents");
   const [newFolderName, setNewFolderName] = useState("");
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [moveConvId, setMoveConvId] = useState<string | null>(null);
@@ -107,16 +107,26 @@ export default function Drawer({
     setMoveConvId(null);
   }
 
+  async function keepLast10(id: string) {
+    try {
+      await truncateConversation(id, 10);
+      // Refresh to show updated state
+      load();
+    } catch {}
+  }
+
   function showConversationActions(item: Conversation) {
     if (Platform.OS === "web") {
-      const action = prompt("Type 'delete' to delete, 'move' to move to folder:");
+      const action = prompt("Type 'delete' to delete, 'move' to move, 'trim' to keep last 10:");
       if (action === "delete") doDelete(item.id);
       else if (action === "move") setMoveConvId(item.id);
+      else if (action === "trim") keepLast10(item.id);
       return;
     }
     const buttons: any[] = [
       { text: "Cancel", style: "cancel" },
       { text: "Move to Folder", onPress: () => setMoveConvId(item.id) },
+      { text: "Keep Last 10 Messages", onPress: () => keepLast10(item.id) },
       { text: "Delete", style: "destructive", onPress: () => doDelete(item.id) },
     ];
     if (item.folder_id) {
@@ -203,34 +213,12 @@ export default function Drawer({
         <Text style={styles.newChatText}>New Chat</Text>
       </TouchableOpacity>
 
-      {/* Section tabs */}
-      <View style={styles.sectionTabs}>
-        <TouchableOpacity
-          style={[styles.sectionTab, activeSection === "recents" && styles.sectionTabActive]}
-          onPress={() => setActiveSection("recents")}
-        >
-          <Text style={[styles.sectionTabText, activeSection === "recents" && styles.sectionTabTextActive]}>
-            Recents
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.sectionTab, activeSection === "projects" && styles.sectionTabActive]}
-          onPress={() => setActiveSection("projects")}
-        >
-          <Text style={[styles.sectionTabText, activeSection === "projects" && styles.sectionTabTextActive]}>
-            Projects
-          </Text>
-        </TouchableOpacity>
-        <View style={{ flex: 1 }} />
+      {/* Search toggle */}
+      <View style={styles.searchToggleRow}>
         <TouchableOpacity style={styles.searchBtn} onPress={() => setShowSearch(!showSearch)}>
           {showSearch ? <IconX size={16} color={colors.labelTertiary} /> : <IconSearch size={16} color={colors.labelTertiary} />}
         </TouchableOpacity>
-      </View>
-
-      {/* Search bar */}
-      {showSearch && (
-        <View style={styles.searchBar}>
-          <IconSearch size={14} color={colors.labelTertiary} />
+        {showSearch && (
           <TextInput
             style={styles.searchInput}
             value={search}
@@ -239,21 +227,24 @@ export default function Drawer({
             placeholderTextColor={colors.labelTertiary}
             autoFocus
           />
-        </View>
-      )}
+        )}
+      </View>
 
-      {/* Chat list */}
+      {/* Main scrollable area: Projects then Recents */}
       <ScrollView style={styles.chatList} showsVerticalScrollIndicator={false}>
-        {activeSection === "recents" ? (
-          unfiled.length > 0 ? (
-            unfiled.map((c) => <ChatRow key={c.id} item={c} />)
-          ) : (
-            <Text style={styles.emptyText}>No conversations yet</Text>
-          )
-        ) : (
-          <>
-            {/* Create folder */}
-            {showNewFolder ? (
+        {/* ── Projects section ── */}
+        {(folders.length > 0 || showNewFolder) && (
+          <View style={styles.sectionBlock}>
+            <View style={styles.sectionHeaderRow}>
+              <Text style={styles.sectionLabel}>PROJECTS</Text>
+              <TouchableOpacity onPress={() => setShowNewFolder(!showNewFolder)} activeOpacity={0.7}>
+                {showNewFolder
+                  ? <IconX size={12} color={colors.labelTertiary} />
+                  : <IconNewFolder size={12} color={colors.accent} />
+                }
+              </TouchableOpacity>
+            </View>
+            {showNewFolder && (
               <View style={styles.newFolderRow}>
                 <TextInput style={styles.newFolderInput} value={newFolderName}
                   onChangeText={setNewFolderName} placeholder="Folder name"
@@ -262,17 +253,8 @@ export default function Drawer({
                 <TouchableOpacity onPress={handleCreateFolder} activeOpacity={0.7}>
                   <IconPlus size={16} color={colors.accent} />
                 </TouchableOpacity>
-                <TouchableOpacity onPress={() => { setShowNewFolder(false); setNewFolderName(""); }} activeOpacity={0.7}>
-                  <IconX size={16} color={colors.labelTertiary} />
-                </TouchableOpacity>
               </View>
-            ) : (
-              <TouchableOpacity style={styles.addFolderBtn} onPress={() => setShowNewFolder(true)} activeOpacity={0.7}>
-                <IconNewFolder size={14} color={colors.accent} />
-                <Text style={{ fontSize: 12, color: colors.accent, fontWeight: "600" }}>New Folder</Text>
-              </TouchableOpacity>
             )}
-
             {folders.map((f) => {
               const chats = getProjectChats(f.id);
               const collapsed = collapsedFolders.has(f.id);
@@ -296,11 +278,18 @@ export default function Drawer({
                 </View>
               );
             })}
-            {folders.length === 0 && !showNewFolder && (
-              <Text style={styles.emptyText}>No projects yet</Text>
-            )}
-          </>
+          </View>
         )}
+
+        {/* ── Recents section ── */}
+        <View style={styles.sectionBlock}>
+          <Text style={styles.sectionLabel}>RECENTS</Text>
+          {unfiled.length > 0 ? (
+            unfiled.map((c) => <ChatRow key={c.id} item={c} />)
+          ) : (
+            <Text style={styles.emptyText}>No conversations yet</Text>
+          )}
+        </View>
 
         {/* Move to folder overlay */}
         {moveConvId && (
@@ -383,32 +372,29 @@ const styles = StyleSheet.create({
   },
   newChatText: { color: "#fff", fontSize: 14, fontWeight: "600" },
 
-  // Section tabs
-  sectionTabs: {
-    flexDirection: "row", alignItems: "center", gap: 4,
-    marginBottom: spacing.sm,
-  },
-  sectionTab: {
-    paddingHorizontal: 12, paddingVertical: 6,
-    borderRadius: radius.full,
-  },
-  sectionTabActive: { backgroundColor: colors.accentSubtle },
-  sectionTabText: { fontSize: 13, fontWeight: "600", color: colors.labelTertiary },
-  sectionTabTextActive: { color: colors.accent },
-  searchBtn: { padding: 6 },
-
-  // Search
-  searchBar: {
+  // Search toggle
+  searchToggleRow: {
     flexDirection: "row", alignItems: "center", gap: 8,
-    backgroundColor: colors.white05,
-    borderRadius: radius.sm,
-    paddingHorizontal: spacing.sm,
     marginBottom: spacing.sm,
-    borderWidth: 1, borderColor: colors.separator,
   },
+  searchBtn: { padding: 6 },
   searchInput: {
     flex: 1, fontSize: 13, color: colors.label,
-    paddingVertical: 8,
+    backgroundColor: colors.white05,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm, paddingVertical: 8,
+    borderWidth: 1, borderColor: colors.separator,
+  },
+
+  // Section
+  sectionBlock: { marginBottom: spacing.md },
+  sectionHeaderRow: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    paddingHorizontal: spacing.sm, marginBottom: 6,
+  },
+  sectionLabel: {
+    fontSize: 10, fontWeight: "700", color: colors.labelTertiary,
+    textTransform: "uppercase", letterSpacing: 1.2,
   },
 
   // Chat list
@@ -459,12 +445,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10, paddingVertical: 8,
     borderWidth: 1, borderColor: colors.separator,
   },
-  addFolderBtn: {
-    flexDirection: "row", alignItems: "center", gap: 6,
-    paddingHorizontal: spacing.sm, paddingVertical: 8,
-    marginBottom: spacing.sm,
-  },
-
   // Move to folder
   moveOverlay: {
     position: "absolute", left: spacing.md, right: spacing.md,

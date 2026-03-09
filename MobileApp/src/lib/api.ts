@@ -160,8 +160,8 @@ export const loadMessages = (conversationId: string) =>
   req<{ messages: Message[] }>("GET", `/api/chat/messages?conversation_id=${conversationId}`);
 export const deleteConversation = (id: string) =>
   req("DELETE", `/api/chat/conversations/${id}`);
-export const truncateConversation = (id: string, keep: number) =>
-  req("POST", `/api/chat/conversations/${id}/truncate`, { keep_last: keep });
+export const truncateConversation = (id: string, keepCount: number) =>
+  req("POST", `/api/chat/conversations/${id}/truncate`, { keep_count: keepCount });
 
 // ── Folders / Projects ──────────────────────────────────────
 export const listFolders = () => req<{ folders: Folder[] }>("GET", "/api/chat/folders");
@@ -185,6 +185,12 @@ export const getUsage = () => req("GET", "/api/settings/usage");
 export const getProviders = () => req("GET", "/api/providers");
 export const getVision = () => req("GET", "/api/settings/vision");
 export const setVision = (v: any) => req("PUT", "/api/settings/vision", v);
+export const getReasoning = () => req("GET", "/api/settings/reasoning");
+export const setReasoning = (mode: string) =>
+  req("PUT", "/api/settings/reasoning", { reasoning_mode: mode });
+export const getFinalMode = () => req("GET", "/api/settings/final-mode");
+export const setFinalMode = (mode: string) =>
+  req("PUT", "/api/settings/final-mode", { final_mode: mode });
 export const getPersona = () => req("GET", "/api/settings/persona");
 export const setPersona = (p: any) => req("PUT", "/api/settings/persona", p);
 export const getSkills = () => req("GET", "/api/settings/skills");

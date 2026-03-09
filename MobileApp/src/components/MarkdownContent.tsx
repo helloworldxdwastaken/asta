@@ -182,9 +182,9 @@ export default function MarkdownContent({ children, isUser }: Props) {
 const mdStyles = StyleSheet.create({
   // Code blocks
   codeBlockContainer: {
-    backgroundColor: "rgba(255,255,255,0.03)",
+    backgroundColor: colors.codeBg,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.06)",
+    borderColor: colors.codeBorder,
     borderRadius: 12,
     overflow: "hidden",
     marginVertical: 8,
@@ -196,8 +196,8 @@ const mdStyles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderBottomWidth: 1,
-    borderBottomColor: "rgba(255,255,255,0.06)",
-    backgroundColor: "rgba(255,255,255,0.02)",
+    borderBottomColor: colors.codeBorder,
+    backgroundColor: colors.codeBg,
   },
   codeBlockLang: {
     fontSize: 11,
@@ -232,7 +232,7 @@ const mdStyles = StyleSheet.create({
   inlineCode: {
     fontFamily: MONO,
     fontSize: 13,
-    backgroundColor: "rgba(255,255,255,0.06)",
+    backgroundColor: colors.inlineCodeBg,
     paddingHorizontal: 6,
     paddingVertical: 1,
     borderRadius: 5,
@@ -246,7 +246,7 @@ const mdStyles = StyleSheet.create({
   // Blockquote
   blockquote: {
     borderLeftWidth: 3,
-    borderLeftColor: "rgba(255,255,255,0.12)",
+    borderLeftColor: colors.blockquoteBorder,
     paddingLeft: 14,
     marginVertical: 6,
   },
@@ -260,7 +260,7 @@ const mdStyles = StyleSheet.create({
   // Table
   table: {
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
+    borderColor: colors.tableBorder,
     borderRadius: 8,
     overflow: "hidden",
     marginVertical: 8,
@@ -268,12 +268,12 @@ const mdStyles = StyleSheet.create({
   tableRow: {
     flexDirection: "row",
     borderBottomWidth: 1,
-    borderBottomColor: "rgba(255,255,255,0.08)",
+    borderBottomColor: colors.tableBorder,
   },
   tableHeaderCell: {
     flex: 1,
     padding: 10,
-    backgroundColor: "rgba(255,255,255,0.03)",
+    backgroundColor: colors.tableHeaderBg,
   },
   tableCell: {
     flex: 1,
@@ -283,7 +283,7 @@ const mdStyles = StyleSheet.create({
   // HR
   hr: {
     height: 1,
-    backgroundColor: "rgba(255,255,255,0.08)",
+    backgroundColor: colors.tableBorder,
     marginVertical: 12,
   },
 });

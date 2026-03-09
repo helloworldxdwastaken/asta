@@ -43,6 +43,15 @@ export const colors = {
 
   // Danger subtle
   dangerSubtle: "rgba(255,59,48,0.2)",
+
+  // Code blocks & markdown
+  codeBg: "rgba(255,255,255,0.04)",
+  codeBorder: "rgba(255,255,255,0.08)",
+  inlineCodeBg: "rgba(255,255,255,0.06)",
+  blockquoteBorder: "rgba(255,255,255,0.12)",
+  blockquoteText: "rgba(240,237,232,0.55)",
+  tableBorder: "rgba(255,255,255,0.08)",
+  tableHeaderBg: "rgba(255,255,255,0.04)",
 };
 
 export const spacing = {
