@@ -1,0 +1,61 @@
+// Graphite Luxe — matches desktop app theme
+export const colors = {
+  // Surfaces
+  surface: "#111114",
+  surfaceRaised: "#19191D",
+  surfaceGlass: "rgba(25,25,29,0.78)",
+
+  // Text
+  label: "#F0EDE8",
+  labelSecondary: "rgba(240,237,232,0.55)",
+  labelTertiary: "rgba(240,237,232,0.28)",
+
+  // Accent (orange → pink gradient)
+  accent: "#FF6B2C",
+  accentEnd: "#FF3D7F",
+  accentGlow: "rgba(255,107,44,0.15)",
+  accentSubtle: "rgba(255,107,44,0.12)",
+
+  // Semantic
+  success: "#34C759",
+  danger: "#FF3B30",
+  warning: "#FF9F0A",
+
+  // Borders
+  separator: "rgba(255,255,255,0.06)",
+  separatorOpaque: "#222226",
+
+  // Thinking
+  violet: "#8B5CF6",
+  violetSubtle: "rgba(139,92,246,0.12)",
+  violetText: "rgba(139,92,246,0.8)",
+
+  // Misc
+  white05: "rgba(255,255,255,0.05)",
+  white08: "rgba(255,255,255,0.08)",
+  white04: "rgba(255,255,255,0.04)",
+};
+
+export const spacing = {
+  xs: 4,
+  sm: 8,
+  md: 12,
+  lg: 16,
+  xl: 20,
+  xxl: 24,
+};
+
+export const radius = {
+  sm: 8,
+  md: 12,
+  lg: 16,
+  xl: 24,
+  full: 9999,
+};
+
+export const fonts = {
+  regular: { fontSize: 15, color: colors.label },
+  small: { fontSize: 13, color: colors.label },
+  tiny: { fontSize: 11, color: colors.labelTertiary },
+  mono: { fontSize: 13, fontFamily: "SpaceMono" },
+};
