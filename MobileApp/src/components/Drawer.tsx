@@ -14,7 +14,7 @@ import type { Conversation, Folder, User } from "../lib/types";
 import {
   IconPlus, IconChat, IconFolder, IconSearch, IconSettings,
   IconLogout, IconTrash, IconUser, IconX, IconWifi, IconWifiOff,
-  IconEdit, IconNewFolder,
+  IconEdit, IconNewFolder, IconChevronDown, IconChevronRight,
 } from "./Icons";
 
 interface Props {
@@ -42,6 +42,7 @@ export default function Drawer({
   const [newFolderName, setNewFolderName] = useState("");
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [moveConvId, setMoveConvId] = useState<string | null>(null);
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     listConversations(80).then((r) => setConversations(r.conversations || [])).catch(() => {});
@@ -57,6 +58,14 @@ export default function Drawer({
 
   const unfiled = filtered.filter((c) => !c.folder_id);
   const getProjectChats = (fId: string) => filtered.filter((c) => c.folder_id === fId);
+
+  function toggleFolderCollapse(id: string) {
+    setCollapsedFolders(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
 
   async function handleCreateFolder() {
     const name = newFolderName.trim();
@@ -168,12 +177,17 @@ export default function Drawer({
         onLongPress={() => showConversationActions(item)}
         activeOpacity={0.7}
       >
+        <View style={[styles.chatDotWrap, active && styles.chatDotActive]} />
         <View style={styles.chatRowLeft}>
           <Text style={[styles.chatTitle, active && styles.chatTitleActive]} numberOfLines={1}>
             {item.title || "New chat"}
           </Text>
           <View style={styles.chatMeta}>
-            {item.approx_tokens ? <Text style={styles.chatTokens}>{fmtTokens(item.approx_tokens)}</Text> : null}
+            {item.approx_tokens ? (
+              <View style={styles.chatTokenBadge}>
+                <Text style={styles.chatTokens}>{fmtTokens(item.approx_tokens)}</Text>
+              </View>
+            ) : null}
             {item.last_active ? <Text style={styles.chatTime}>{fmtTime(item.last_active)}</Text> : null}
           </View>
         </View>
@@ -261,14 +275,24 @@ export default function Drawer({
 
             {folders.map((f) => {
               const chats = getProjectChats(f.id);
+              const collapsed = collapsedFolders.has(f.id);
               return (
                 <View key={f.id} style={styles.folderBlock}>
-                  <TouchableOpacity style={styles.folderHeader} onLongPress={() => confirmDeleteFolder(f)} activeOpacity={0.7}>
+                  <TouchableOpacity
+                    style={styles.folderHeader}
+                    onPress={() => toggleFolderCollapse(f.id)}
+                    onLongPress={() => confirmDeleteFolder(f)}
+                    activeOpacity={0.7}
+                  >
+                    {collapsed
+                      ? <IconChevronRight size={12} color={colors.labelTertiary} />
+                      : <IconChevronDown size={12} color={colors.labelTertiary} />
+                    }
                     <IconFolder size={14} color={f.color || colors.accent} />
                     <Text style={styles.folderName}>{f.name}</Text>
                     <Text style={styles.folderCount}>{chats.length}</Text>
                   </TouchableOpacity>
-                  {chats.map((c) => <ChatRow key={c.id} item={c} />)}
+                  {!collapsed && chats.map((c) => <ChatRow key={c.id} item={c} />)}
                 </View>
               );
             })}
@@ -390,17 +414,28 @@ const styles = StyleSheet.create({
   // Chat list
   chatList: { flex: 1 },
   chatRow: {
+    flexDirection: "row", alignItems: "center", gap: 8,
     paddingHorizontal: spacing.sm,
     paddingVertical: 10,
     borderRadius: radius.sm,
-    marginBottom: 2,
+    marginBottom: 1,
   },
   chatRowActive: { backgroundColor: colors.accentSubtle },
-  chatRowLeft: { gap: 2 },
+  chatDotWrap: {
+    width: 3, height: 24, borderRadius: 1.5,
+    backgroundColor: "transparent",
+  },
+  chatDotActive: { backgroundColor: colors.accent },
+  chatRowLeft: { flex: 1, gap: 3 },
   chatTitle: { fontSize: 13, fontWeight: "500", color: colors.label },
   chatTitleActive: { color: colors.accent, fontWeight: "600" },
-  chatMeta: { flexDirection: "row", gap: 8 },
-  chatTokens: { fontSize: 10, color: colors.labelTertiary, fontWeight: "600" },
+  chatMeta: { flexDirection: "row", alignItems: "center", gap: 6 },
+  chatTokenBadge: {
+    backgroundColor: colors.white05,
+    borderRadius: radius.full,
+    paddingHorizontal: 5, paddingVertical: 1,
+  },
+  chatTokens: { fontSize: 9, color: colors.labelTertiary, fontWeight: "700" },
   chatTime: { fontSize: 10, color: colors.labelTertiary },
 
   // Folders

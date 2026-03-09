@@ -7,7 +7,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, spacing, radius } from "../theme/colors";
 import { streamChat, loadMessages, setDefaultAI, setThinking, setMoodSetting } from "../lib/api";
 import type { Message, StreamChunk, Agent } from "../lib/types";
-import { IconSend, IconStop, IconMenu, IconBrain, IconCopy, IconCheck, IconSliders, IconAttach, IconX } from "../components/Icons";
+import { IconSend, IconStop, IconMenu, IconBrain, IconCopy, IconCheck, IconSliders, IconAttach, IconX, IconChevronDown } from "../components/Icons";
 import { ProviderBadge, ProviderDot, getProviderColor } from "../components/ProviderIcon";
 import { ThinkingWordAnimation, ThinkingDots } from "../components/ThinkingIndicator";
 import * as Clipboard from "expo-clipboard";
@@ -53,6 +53,7 @@ export default function ChatScreen({
   const [completedTools, setCompletedTools] = useState<string[]>([]);
   const [statusText, setStatusText] = useState("");
   const [showToolbar, setShowToolbar] = useState(false);
+  const [dropdown, setDropdown] = useState<"provider" | "thinking" | "mood" | "agent" | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<string | undefined>();
   const [inputFocused, setInputFocused] = useState(false);
@@ -319,16 +320,136 @@ export default function ChatScreen({
         <TouchableOpacity style={styles.menuBtn} onPress={onOpenDrawer} activeOpacity={0.7}>
           <IconMenu size={22} color={colors.label} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Asta</Text>
-        <TouchableOpacity style={styles.toolbarToggle} onPress={() => setShowToolbar(!showToolbar)} activeOpacity={0.7}>
+
+        {/* Compact header selectors */}
+        <View style={styles.headerSelectors}>
+          {/* Provider dropdown trigger */}
+          <TouchableOpacity
+            style={[styles.headerPill, dropdown === "provider" && styles.headerPillActive]}
+            onPress={() => setDropdown(dropdown === "provider" ? null : "provider")}
+            activeOpacity={0.7}
+          >
+            <ProviderDot provider={provider} size={7} />
+            <Text style={styles.headerPillText}>
+              {PROVIDERS.find(p => p.key === provider)?.label || provider}
+            </Text>
+            <IconChevronDown size={12} color={colors.labelTertiary} />
+          </TouchableOpacity>
+
+          {/* Thinking badge */}
+          <TouchableOpacity
+            style={[
+              styles.headerPill,
+              thinkingLevel !== "off" ? styles.headerPillThink : {},
+              dropdown === "thinking" && styles.headerPillActive,
+            ]}
+            onPress={() => setDropdown(dropdown === "thinking" ? null : "thinking")}
+            activeOpacity={0.7}
+          >
+            <IconBrain size={11} color={thinkingLevel !== "off" ? colors.violet : colors.labelTertiary} />
+            {thinkingLevel !== "off" && (
+              <Text style={[styles.headerPillText, { color: colors.violet, fontSize: 11 }]}>
+                {thinkingLevel === "xhigh" ? "max" : thinkingLevel}
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          {/* Agent badge */}
+          {selectedAgent && (
+            <TouchableOpacity
+              style={[styles.headerPill, dropdown === "agent" && styles.headerPillActive]}
+              onPress={() => setDropdown(dropdown === "agent" ? null : "agent")}
+              activeOpacity={0.7}
+            >
+              <Text style={{ fontSize: 12 }}>
+                {agents.find(a => a.id === selectedAgent)?.icon || "\uD83E\uDD16"}
+              </Text>
+              <Text style={[styles.headerPillText, { fontSize: 11 }]} numberOfLines={1}>
+                {agents.find(a => a.id === selectedAgent)?.name || "Agent"}
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        <TouchableOpacity style={styles.toolbarToggle} onPress={() => { setShowToolbar(!showToolbar); setDropdown(null); }} activeOpacity={0.7}>
           <IconSliders size={18} color={showToolbar ? colors.accent : colors.labelSecondary} />
         </TouchableOpacity>
       </View>
 
-      {/* Quick toolbar */}
-      {showToolbar && (
+      {/* Dropdown menus */}
+      {dropdown && (
+        <View style={styles.dropdownOverlay}>
+          <TouchableOpacity style={{ flex: 1 }} onPress={() => setDropdown(null)} activeOpacity={1} />
+          <View style={styles.dropdownMenu}>
+            {dropdown === "provider" && (
+              <>
+                <Text style={styles.dropdownTitle}>AI Provider</Text>
+                {PROVIDERS.map((p) => (
+                  <TouchableOpacity
+                    key={p.key}
+                    style={[styles.dropdownItem, provider === p.key && styles.dropdownItemActive]}
+                    onPress={() => { onProviderChange?.(p.key); setDefaultAI(p.key).catch(() => {}); setDropdown(null); }}
+                    activeOpacity={0.7}
+                  >
+                    <ProviderDot provider={p.key} size={8} />
+                    <Text style={[styles.dropdownItemText, provider === p.key && styles.dropdownItemTextActive]}>{p.label}</Text>
+                    {provider === p.key && <IconCheck size={14} color={colors.accent} />}
+                  </TouchableOpacity>
+                ))}
+              </>
+            )}
+            {dropdown === "thinking" && (
+              <>
+                <Text style={styles.dropdownTitle}>Thinking Level</Text>
+                {THINKING_LEVELS.map((t) => (
+                  <TouchableOpacity
+                    key={t}
+                    style={[styles.dropdownItem, thinkingLevel === t && styles.dropdownItemThinkActive]}
+                    onPress={() => { onThinkingChange?.(t); setThinking(t).catch(() => {}); setDropdown(null); }}
+                    activeOpacity={0.7}
+                  >
+                    {t !== "off" && <IconBrain size={12} color={thinkingLevel === t ? colors.violet : colors.labelTertiary} />}
+                    <Text style={[styles.dropdownItemText, thinkingLevel === t && { color: colors.violet, fontWeight: "700" }]}>
+                      {t === "xhigh" ? "Maximum" : t.charAt(0).toUpperCase() + t.slice(1)}
+                    </Text>
+                    {thinkingLevel === t && <IconCheck size={14} color={colors.violet} />}
+                  </TouchableOpacity>
+                ))}
+              </>
+            )}
+            {dropdown === "agent" && (
+              <>
+                <Text style={styles.dropdownTitle}>Agent</Text>
+                <TouchableOpacity
+                  style={[styles.dropdownItem, !selectedAgent && styles.dropdownItemActive]}
+                  onPress={() => { setSelectedAgent(undefined); setDropdown(null); }}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.dropdownItemText, !selectedAgent && styles.dropdownItemTextActive]}>None (default)</Text>
+                  {!selectedAgent && <IconCheck size={14} color={colors.accent} />}
+                </TouchableOpacity>
+                {agents.map((a) => (
+                  <TouchableOpacity
+                    key={a.id}
+                    style={[styles.dropdownItem, selectedAgent === a.id && styles.dropdownItemActive]}
+                    onPress={() => { setSelectedAgent(a.id); setDropdown(null); }}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={{ fontSize: 16 }}>{a.icon || "\uD83E\uDD16"}</Text>
+                    <Text style={[styles.dropdownItemText, selectedAgent === a.id && styles.dropdownItemTextActive]}>{a.name}</Text>
+                    {selectedAgent === a.id && <IconCheck size={14} color={colors.accent} />}
+                  </TouchableOpacity>
+                ))}
+              </>
+            )}
+          </View>
+        </View>
+      )}
+
+      {/* Quick toolbar (expanded settings panel) */}
+      {showToolbar && !dropdown && (
         <View style={styles.toolbar}>
-          {/* Provider selector */}
+          {/* Provider */}
           <View style={styles.toolbarSection}>
             <Text style={styles.toolbarLabel}>Provider</Text>
             <View style={styles.toolbarChips}>
@@ -336,21 +457,16 @@ export default function ChatScreen({
                 <TouchableOpacity
                   key={p.key}
                   style={[styles.toolbarChip, provider === p.key && styles.toolbarChipActive]}
-                  onPress={() => {
-                    onProviderChange?.(p.key);
-                    setDefaultAI(p.key).catch(() => {});
-                  }}
+                  onPress={() => { onProviderChange?.(p.key); setDefaultAI(p.key).catch(() => {}); }}
                   activeOpacity={0.7}
                 >
                   <ProviderDot provider={p.key} size={6} />
-                  <Text style={[styles.toolbarChipText, provider === p.key && styles.toolbarChipTextActive]}>
-                    {p.label}
-                  </Text>
+                  <Text style={[styles.toolbarChipText, provider === p.key && styles.toolbarChipTextActive]}>{p.label}</Text>
                 </TouchableOpacity>
               ))}
             </View>
           </View>
-          {/* Thinking level */}
+          {/* Thinking */}
           <View style={styles.toolbarSection}>
             <Text style={styles.toolbarLabel}>Thinking</Text>
             <View style={styles.toolbarChips}>
@@ -358,10 +474,7 @@ export default function ChatScreen({
                 <TouchableOpacity
                   key={t}
                   style={[styles.toolbarChip, thinkingLevel === t && styles.toolbarChipThinkActive]}
-                  onPress={() => {
-                    onThinkingChange?.(t);
-                    setThinking(t).catch(() => {});
-                  }}
+                  onPress={() => { onThinkingChange?.(t); setThinking(t).catch(() => {}); }}
                   activeOpacity={0.7}
                 >
                   <Text style={[styles.toolbarChipText, thinkingLevel === t && { color: colors.violet }]}>
@@ -379,10 +492,7 @@ export default function ChatScreen({
                 <TouchableOpacity
                   key={m}
                   style={[styles.toolbarChip, mood === m && styles.toolbarChipActive]}
-                  onPress={() => {
-                    onMoodChange?.(m);
-                    setMoodSetting(m).catch(() => {});
-                  }}
+                  onPress={() => { onMoodChange?.(m); setMoodSetting(m).catch(() => {}); }}
                   activeOpacity={0.7}
                 >
                   <Text style={[styles.toolbarChipText, mood === m && styles.toolbarChipTextActive]}>{m}</Text>
@@ -390,7 +500,7 @@ export default function ChatScreen({
               ))}
             </View>
           </View>
-          {/* Agent selector */}
+          {/* Agents */}
           {agents.length > 0 && (
             <View style={styles.toolbarSection}>
               <Text style={styles.toolbarLabel}>Agent</Text>
@@ -402,16 +512,15 @@ export default function ChatScreen({
                 >
                   <Text style={[styles.toolbarChipText, !selectedAgent && styles.toolbarChipTextActive]}>None</Text>
                 </TouchableOpacity>
-                {agents.slice(0, 5).map((a) => (
+                {agents.map((a) => (
                   <TouchableOpacity
                     key={a.id}
                     style={[styles.toolbarChip, selectedAgent === a.id && styles.toolbarChipActive]}
                     onPress={() => setSelectedAgent(a.id)}
                     activeOpacity={0.7}
                   >
-                    <Text style={[styles.toolbarChipText, selectedAgent === a.id && styles.toolbarChipTextActive]}>
-                      {a.name}
-                    </Text>
+                    <Text style={{ fontSize: 12 }}>{a.icon || "\uD83E\uDD16"}</Text>
+                    <Text style={[styles.toolbarChipText, selectedAgent === a.id && styles.toolbarChipTextActive]}>{a.name}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
@@ -584,11 +693,57 @@ const styles = StyleSheet.create({
   // Header
   header: {
     flexDirection: "row", alignItems: "center",
-    paddingBottom: 10, paddingHorizontal: spacing.md,
+    paddingBottom: 8, paddingHorizontal: spacing.md,
+    backgroundColor: colors.surface,
   },
-  menuBtn: { padding: 6, marginRight: 8 },
-  headerTitle: { fontSize: 18, fontWeight: "700", color: colors.label, flex: 1 },
+  menuBtn: { padding: 6, marginRight: 4 },
+  headerSelectors: {
+    flex: 1, flexDirection: "row", alignItems: "center",
+    gap: 6, flexWrap: "nowrap",
+  },
+  headerPill: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    backgroundColor: colors.white05,
+    borderRadius: radius.full,
+    paddingHorizontal: 10, paddingVertical: 5,
+    borderWidth: 1, borderColor: colors.separator,
+  },
+  headerPillActive: { borderColor: colors.accent + "60" },
+  headerPillThink: {
+    backgroundColor: colors.violetSubtle,
+    borderColor: "rgba(139,92,246,0.15)",
+  },
+  headerPillText: { fontSize: 12, fontWeight: "600", color: colors.label },
   toolbarToggle: { padding: 6 },
+
+  // Dropdown
+  dropdownOverlay: {
+    position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
+    zIndex: 100, backgroundColor: "rgba(0,0,0,0.25)",
+  },
+  dropdownMenu: {
+    position: "absolute", top: 8, left: spacing.md, right: spacing.md,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.separator,
+    padding: spacing.sm,
+    shadowColor: "#000", shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3, shadowRadius: 20, elevation: 30,
+  },
+  dropdownTitle: {
+    fontSize: 11, fontWeight: "700", color: colors.labelTertiary,
+    textTransform: "uppercase", letterSpacing: 1,
+    paddingHorizontal: 8, paddingVertical: 6,
+  },
+  dropdownItem: {
+    flexDirection: "row", alignItems: "center", gap: 10,
+    paddingHorizontal: 12, paddingVertical: 11,
+    borderRadius: radius.sm,
+  },
+  dropdownItemActive: { backgroundColor: colors.accentSubtle },
+  dropdownItemThinkActive: { backgroundColor: colors.violetSubtle },
+  dropdownItemText: { fontSize: 14, fontWeight: "500", color: colors.label, flex: 1 },
+  dropdownItemTextActive: { color: colors.accent, fontWeight: "600" },
 
   // Toolbar
   toolbar: {
