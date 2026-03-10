@@ -11,6 +11,7 @@ import type { Message, StreamChunk, Agent } from "../lib/types";
 import {
   IconSend, IconStop, IconMenu, IconBrain, IconCopy, IconCheck,
   IconSliders, IconAttach, IconX, IconChevronDown, IconAgents, IconEdit,
+  resolveAgentIcon,
 } from "../components/Icons";
 import { ProviderBadge, ProviderDot } from "../components/ProviderIcon";
 import { ThinkingWordAnimation, ThinkingDots } from "../components/ThinkingIndicator";
@@ -64,6 +65,7 @@ export default function ChatScreen({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
+  const [loadingMsgs, setLoadingMsgs] = useState(false);
   // Dropdown state: which menu is open (anchored to input bar)
   const [dropdown, setDropdown] = useState<"provider" | "thinking" | "mood" | "agent" | null>(null);
   const flatListRef = useRef<FlatList>(null);
@@ -73,6 +75,8 @@ export default function ChatScreen({
   useEffect(() => {
     convIdRef.current = conversationId;
     if (conversationId) {
+      setLoadingMsgs(true);
+      setErrorMsg("");
       loadMessages(conversationId)
         .then((r) => {
           const msgs = (r.messages || []).map((m: any) => ({
@@ -86,7 +90,11 @@ export default function ChatScreen({
           }));
           setMessages(msgs);
         })
-        .catch(() => {});
+        .catch((e) => {
+          setErrorMsg(e.message === "auth-expired" ? "Session expired — please sign in again" : "Failed to load messages");
+          setTimeout(() => setErrorMsg(""), 8000);
+        })
+        .finally(() => setLoadingMsgs(false));
     } else {
       setMessages([]);
     }
@@ -422,6 +430,12 @@ export default function ChatScreen({
         onScroll={handleScroll}
         scrollEventThrottle={100}
         ListEmptyComponent={
+          loadingMsgs ? (
+            <View style={styles.loadingCenter}>
+              <ActivityIndicator size="small" color={colors.accent} />
+              <Text style={styles.loadingText}>Loading messages...</Text>
+            </View>
+          ) : (
           <View style={styles.empty}>
             <PixelSprites />
             <View style={styles.emptyContent}>
@@ -431,13 +445,19 @@ export default function ChatScreen({
               <Text style={styles.emptyTitle}>What can I help with?</Text>
               <Text style={styles.emptySubtitle}>Ask anything, or try a suggestion</Text>
               <View style={styles.suggestions}>
-                {agents.slice(0, 4).map((a) => (
-                  <TouchableOpacity key={a.id} style={styles.suggestionChip}
-                    onPress={() => setSelectedAgent(a.id)} activeOpacity={0.7}>
-                    {a.icon ? <Text style={{ fontSize: 16 }}>{a.icon}</Text> : null}
-                    <Text style={styles.suggestionText}>{a.name}</Text>
-                  </TouchableOpacity>
-                ))}
+                {agents.slice(0, 4).map((a) => {
+                  const ai = resolveAgentIcon(a);
+                  return (
+                    <TouchableOpacity key={a.id} style={styles.agentCard}
+                      onPress={() => { setSelectedAgent(a.id); }}
+                      activeOpacity={0.7}>
+                      <View style={[styles.agentCardIcon, { backgroundColor: ai.bg }]}>
+                        <ai.Icon size={15} color={ai.color} />
+                      </View>
+                      <Text style={styles.agentCardName} numberOfLines={1}>{a.name}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
                 {agents.length === 0 && (
                   <>
                     <TouchableOpacity style={styles.suggestionChip} onPress={() => send("What's on my schedule today?")} activeOpacity={0.7}>
@@ -457,6 +477,7 @@ export default function ChatScreen({
               </View>
             </View>
           </View>
+          )
         }
         ListFooterComponent={
           streaming ? (
@@ -588,19 +609,30 @@ export default function ChatScreen({
                     {!selectedAgent && <IconCheck size={14} color={colors.accent} />}
                   </TouchableOpacity>
                   <View style={styles.dropdownDivider} />
-                  {agents.map((a) => (
-                    <TouchableOpacity key={a.id}
-                      style={[styles.dropdownItem, selectedAgent === a.id && styles.dropdownItemActive]}
-                      onPress={() => { setSelectedAgent(a.id); setDropdown(null); }}
-                      activeOpacity={0.7}>
-                      <Text style={{ fontSize: 18 }}>{a.icon || "\uD83E\uDD16"}</Text>
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.dropdownItemText, selectedAgent === a.id && styles.dropdownItemTextActive]}>{a.name}</Text>
-                        {a.description ? <Text style={styles.dropdownItemDesc} numberOfLines={1}>{a.description}</Text> : null}
-                      </View>
-                      {selectedAgent === a.id && <IconCheck size={14} color={colors.accent} />}
-                    </TouchableOpacity>
-                  ))}
+                  {agents.map((a) => {
+                    const ai = resolveAgentIcon(a);
+                    const isActive = selectedAgent === a.id;
+                    return (
+                      <TouchableOpacity key={a.id}
+                        style={[styles.dropdownItem, isActive && styles.dropdownItemActive]}
+                        onPress={() => { setSelectedAgent(a.id); setDropdown(null); }}
+                        activeOpacity={0.7}>
+                        <View style={[styles.agentIconSmall, { backgroundColor: ai.bg }]}>
+                          <ai.Icon size={12} color={ai.color} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.dropdownItemText, isActive && styles.dropdownItemTextActive]}>{a.name}</Text>
+                          {a.description ? <Text style={styles.dropdownItemDesc} numberOfLines={1}>{a.description}</Text> : null}
+                          {a.category ? (
+                            <View style={[styles.agentCategoryBadge, { backgroundColor: ai.color + "15" }]}>
+                              <Text style={[styles.agentCategoryText, { color: ai.color }]}>{a.category}</Text>
+                            </View>
+                          ) : null}
+                        </View>
+                        {isActive && <IconCheck size={14} color={colors.accent} />}
+                      </TouchableOpacity>
+                    );
+                  })}
                 </>
               )}
             </ScrollView>
@@ -924,4 +956,39 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12, paddingVertical: 6,
   },
   editSaveText: { fontSize: 13, fontWeight: "600", color: "#fff" },
+
+  // ── Loading state ──
+  loadingCenter: {
+    flex: 1, minHeight: 300,
+    justifyContent: "center", alignItems: "center", gap: 12,
+  },
+  loadingText: { fontSize: 13, color: colors.labelTertiary },
+
+  // ── Agent cards (empty state, matches desktop grid) ──
+  agentCard: {
+    flexDirection: "row", alignItems: "center", gap: 10,
+    backgroundColor: colors.white04,
+    borderRadius: radius.lg,
+    paddingHorizontal: 14, paddingVertical: 12,
+    borderWidth: 1, borderColor: colors.separator,
+    width: "48%",
+  },
+  agentCardIcon: {
+    width: 28, height: 28, borderRadius: 8,
+    alignItems: "center", justifyContent: "center",
+  },
+  agentCardName: { fontSize: 13, fontWeight: "600", color: colors.labelSecondary, flex: 1 },
+
+  // ── Agent icon in dropdown ──
+  agentIconSmall: {
+    width: 20, height: 20, borderRadius: 6,
+    alignItems: "center", justifyContent: "center",
+  },
+  agentCategoryBadge: {
+    alignSelf: "flex-start",
+    borderRadius: radius.full,
+    paddingHorizontal: 6, paddingVertical: 1,
+    marginTop: 3,
+  },
+  agentCategoryText: { fontSize: 10, fontWeight: "700" },
 });

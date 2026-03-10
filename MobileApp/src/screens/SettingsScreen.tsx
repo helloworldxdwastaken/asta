@@ -27,7 +27,8 @@ import {
   IconChevronLeft, IconChevronRight, IconBrain, IconUser, IconServer,
   IconKey, IconWifi, IconWifiOff, IconPuzzle, IconAgents, IconSend,
   IconInfo, IconSettings, IconPerson, IconClock, IconPlus, IconTrash,
-  IconWarning, IconCheck,
+  IconWarning, IconCheck, IconEdit, IconLink,
+  resolveAgentIcon,
 } from "../components/Icons";
 
 /* ── Tab definitions ──────────────────────────────── */
@@ -710,27 +711,61 @@ export default function SettingsScreen({
         </View>
 
         {filteredAgents.length === 0 && <Text style={st.emptyText}>No agents found</Text>}
-        {filteredAgents.map((a) => (
-          <View key={a.id} style={st.toggleRow}>
-            <TouchableOpacity style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 10 }}
-              onPress={() => openAgentForm(a)} activeOpacity={0.7}>
-              <Text style={{ fontSize: 24 }}>{a.icon || "\uD83E\uDD16"}</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={st.toggleName}>{a.name}</Text>
-                {a.description ? <Text style={st.toggleDesc} numberOfLines={1}>{a.description}</Text> : null}
-                {a.category ? <Text style={{ fontSize: 10, color: colors.labelTertiary, marginTop: 2 }}>{a.category}</Text> : null}
-              </View>
-            </TouchableOpacity>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <TouchableOpacity onPress={() => confirmDeleteAgent(a)} activeOpacity={0.7}>
-                <IconTrash size={16} color={colors.danger} />
+        {filteredAgents.map((a) => {
+          const ai = resolveAgentIcon(a);
+          return (
+            <View key={a.id} style={st.agentCardOuter}>
+              <TouchableOpacity style={st.agentCardTop}
+                onPress={() => openAgentForm(a)} activeOpacity={0.7}>
+                {/* Avatar */}
+                <View style={[st.agentAvatar, { backgroundColor: ai.bg }]}>
+                  <ai.Icon size={20} color={ai.color} />
+                </View>
+                {/* Info */}
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <Text style={st.toggleName} numberOfLines={1}>{a.name}</Text>
+                    <Switch value={a.enabled}
+                      onValueChange={(v) => { setAgents(prev => prev.map(x => x.id === a.id ? { ...x, enabled: v } : x)); toggleAgent(a.id, v).catch(() => {}); }}
+                      trackColor={{ false: colors.white08, true: colors.accent }} thumbColor="#fff"
+                      style={{ transform: [{ scaleX: 0.8 }, { scaleY: 0.8 }] }} />
+                  </View>
+                  {a.description ? <Text style={st.toggleDesc} numberOfLines={2}>{a.description}</Text> : null}
+                </View>
               </TouchableOpacity>
-              <Switch value={a.enabled}
-                onValueChange={(v) => { setAgents(prev => prev.map(x => x.id === a.id ? { ...x, enabled: v } : x)); toggleAgent(a.id, v).catch(() => {}); }}
-                trackColor={{ false: colors.white08, true: colors.accent }} thumbColor="#fff" />
+              {/* Footer badges + actions */}
+              <View style={st.agentCardFooter}>
+                <View style={{ flexDirection: "row", gap: 4, flex: 1, flexWrap: "wrap" }}>
+                  {a.category ? (
+                    <View style={[st.agentBadge, { backgroundColor: ai.color + "15" }]}>
+                      <Text style={[st.agentBadgeText, { color: ai.color }]}>{a.category}</Text>
+                    </View>
+                  ) : null}
+                  {a.model_override ? (
+                    <View style={[st.agentBadge, { backgroundColor: colors.white05 }]}>
+                      <Text style={[st.agentBadgeText, { color: colors.labelTertiary, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" }]}>{a.model_override}</Text>
+                    </View>
+                  ) : null}
+                  {a.skills && a.skills.length > 0 ? (
+                    <View style={[st.agentBadge, { backgroundColor: colors.white05 }]}>
+                      <Text style={[st.agentBadgeText, { color: colors.labelTertiary }]}>{a.skills.length} skill{a.skills.length !== 1 ? "s" : ""}</Text>
+                    </View>
+                  ) : null}
+                </View>
+                <View style={{ flexDirection: "row", gap: 4 }}>
+                  <TouchableOpacity onPress={() => openAgentForm(a)} activeOpacity={0.7}
+                    style={{ padding: 6, borderRadius: 8 }}>
+                    <IconEdit size={12} color={colors.labelTertiary} />
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => confirmDeleteAgent(a)} activeOpacity={0.7}
+                    style={{ padding: 6, borderRadius: 8 }}>
+                    <IconTrash size={12} color={colors.danger} />
+                  </TouchableOpacity>
+                </View>
+              </View>
             </View>
-          </View>
-        ))}
+          );
+        })}
       </>
     );
   }
@@ -1917,4 +1952,28 @@ const st = StyleSheet.create({
     borderWidth: 1, borderColor: colors.separator,
   },
   switchLabel: { fontSize: 14, fontWeight: "500", color: colors.label },
+
+  /* Agent cards (matches desktop) */
+  agentCardOuter: {
+    backgroundColor: colors.surfaceRaised, borderRadius: radius.lg,
+    borderWidth: 1, borderColor: colors.separator,
+    padding: 16, marginBottom: 6,
+  },
+  agentCardTop: {
+    flexDirection: "row", alignItems: "center", gap: 12,
+  },
+  agentAvatar: {
+    width: 40, height: 40, borderRadius: 12,
+    alignItems: "center", justifyContent: "center",
+  },
+  agentCardFooter: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    marginTop: 10, paddingTop: 10,
+    borderTopWidth: 1, borderTopColor: "rgba(255,255,255,0.04)",
+  },
+  agentBadge: {
+    borderRadius: 9999,
+    paddingHorizontal: 8, paddingVertical: 2,
+  },
+  agentBadgeText: { fontSize: 10, fontWeight: "700" },
 });
