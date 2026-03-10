@@ -715,24 +715,25 @@ export default function SettingsScreen({
           const ai = resolveAgentIcon(a);
           return (
             <View key={a.id} style={st.agentCardOuter}>
-              <TouchableOpacity style={st.agentCardTop}
-                onPress={() => openAgentForm(a)} activeOpacity={0.7}>
+              <View style={st.agentCardTop}>
                 {/* Avatar */}
-                <View style={[st.agentAvatar, { backgroundColor: ai.bg }]}>
-                  <ai.Icon size={20} color={ai.color} />
-                </View>
-                {/* Info */}
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                    <Text style={st.toggleName} numberOfLines={1}>{a.name}</Text>
-                    <Switch value={a.enabled}
-                      onValueChange={(v) => { setAgents(prev => prev.map(x => x.id === a.id ? { ...x, enabled: v } : x)); toggleAgent(a.id, v).catch(() => {}); }}
-                      trackColor={{ false: colors.white08, true: colors.accent }} thumbColor="#fff"
-                      style={{ transform: [{ scaleX: 0.8 }, { scaleY: 0.8 }] }} />
+                <TouchableOpacity onPress={() => openAgentForm(a)} activeOpacity={0.7}>
+                  <View style={[st.agentAvatar, { backgroundColor: ai.bg }]}>
+                    <ai.Icon size={20} color={ai.color} />
                   </View>
+                </TouchableOpacity>
+                {/* Info */}
+                <TouchableOpacity style={{ flex: 1, minWidth: 0 }}
+                  onPress={() => openAgentForm(a)} activeOpacity={0.7}>
+                  <Text style={st.toggleName} numberOfLines={1}>{a.name}</Text>
                   {a.description ? <Text style={st.toggleDesc} numberOfLines={2}>{a.description}</Text> : null}
-                </View>
-              </TouchableOpacity>
+                </TouchableOpacity>
+                {/* Toggle — outside TouchableOpacity so it captures its own events */}
+                <Switch value={a.enabled}
+                  onValueChange={(v) => { setAgents(prev => prev.map(x => x.id === a.id ? { ...x, enabled: v } : x)); toggleAgent(a.id, v).catch(() => {}); }}
+                  trackColor={{ false: colors.white08, true: colors.accent }} thumbColor="#fff"
+                  style={{ transform: [{ scaleX: 0.8 }, { scaleY: 0.8 }] }} />
+              </View>
               {/* Footer badges + actions */}
               <View style={st.agentCardFooter}>
                 <View style={{ flexDirection: "row", gap: 4, flex: 1, flexWrap: "wrap" }}>
