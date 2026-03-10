@@ -13,7 +13,7 @@ import {
   IconSliders, IconAttach, IconX, IconChevronDown, IconAgents, IconEdit,
   resolveAgentIcon,
 } from "../components/Icons";
-import { ProviderBadge, ProviderDot } from "../components/ProviderIcon";
+import { ProviderBadge, ProviderDot, ProviderLogo } from "../components/ProviderIcon";
 import { ThinkingWordAnimation, ThinkingDots } from "../components/ThinkingIndicator";
 import * as Clipboard from "expo-clipboard";
 import * as ImagePicker from "expo-image-picker";
@@ -561,7 +561,7 @@ export default function ChatScreen({
                       style={[styles.dropdownItem, provider === p.key && styles.dropdownItemActive]}
                       onPress={() => { onProviderChange?.(p.key); setDefaultAI(p.key).catch(() => {}); setDropdown(null); }}
                       activeOpacity={0.7}>
-                      <ProviderDot provider={p.key} size={8} />
+                      <ProviderLogo provider={p.key} size={18} />
                       <Text style={[styles.dropdownItemText, provider === p.key && styles.dropdownItemTextActive]}>{p.label}</Text>
                       {provider === p.key && <IconCheck size={14} color={colors.accent} />}
                     </TouchableOpacity>
@@ -691,7 +691,7 @@ export default function ChatScreen({
                 style={styles.providerSelector}
                 onPress={() => setDropdown(dropdown === "provider" ? null : "provider")}
                 activeOpacity={0.7}>
-                <ProviderDot provider={provider} size={6} />
+                <ProviderLogo provider={provider} size={14} />
                 <Text style={styles.providerSelectorText}>
                   {PROVIDERS.find(p => p.key === provider)?.label || provider}
                 </Text>
