@@ -6,14 +6,28 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#111114"
     },
+    "plugins": [
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Asta to access your photos to share images in chat.",
+          "cameraPermission": "Allow Asta to use the camera to take photos for chat."
+        }
+      ]
+    ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.asta.mobile"
+      "bundleIdentifier": "com.asta.mobile",
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "Allow Asta to access your photos to share images in chat."
+      }
     },
     "android": {
       "package": "com.asta.mobile",

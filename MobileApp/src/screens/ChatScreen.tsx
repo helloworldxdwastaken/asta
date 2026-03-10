@@ -63,6 +63,7 @@ export default function ChatScreen({
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
+  const [errorMsg, setErrorMsg] = useState("");
   // Dropdown state: which menu is open (anchored to input bar)
   const [dropdown, setDropdown] = useState<"provider" | "thinking" | "mood" | "agent" | null>(null);
   const flatListRef = useRef<FlatList>(null);
@@ -138,11 +139,13 @@ export default function ChatScreen({
     setActiveTools([]);
     setCompletedTools([]);
     setStatusText("");
+    setErrorMsg("");
 
     let thinkAcc = "";
     let textAcc = "";
     let toolsDone: string[] = [];
     let finalConvId = convIdRef.current;
+    let finished = false;
 
     const stop = await streamChat(
       {
@@ -200,6 +203,8 @@ export default function ChatScreen({
         }
       },
       (cid?: string) => {
+        if (finished) return;
+        finished = true;
         if (cid) finalConvId = cid;
         const assistantMsg: Message = {
           id: `a-${Date.now()}`,
@@ -223,10 +228,14 @@ export default function ChatScreen({
         }
         scrollToEnd();
       },
-      () => {
+      (err: string) => {
+        if (finished) return;
+        finished = true;
         setStreaming(false);
         setStreamContent("");
         setStreamThinking("");
+        setErrorMsg(err || "Connection failed");
+        setTimeout(() => setErrorMsg(""), 6000);
       },
     );
     stopRef.current = stop;
@@ -394,6 +403,14 @@ export default function ChatScreen({
         </TouchableOpacity>
       </View>
 
+      {/* ── Error banner ── */}
+      {errorMsg ? (
+        <TouchableOpacity style={styles.errorBanner} onPress={() => setErrorMsg("")} activeOpacity={0.8}>
+          <Text style={styles.errorBannerText}>{errorMsg}</Text>
+          <IconX size={12} color={colors.danger} />
+        </TouchableOpacity>
+      ) : null}
+
       {/* ── Messages ── */}
       <FlatList
         ref={flatListRef}
@@ -473,7 +490,9 @@ export default function ChatScreen({
                     <View style={styles.toolRow}>
                       {activeTools.map((t) => (
                         <View key={t} style={styles.toolPillActive}>
-                          <ActivityIndicator size={8} color={colors.accent} />
+                          <View style={{ transform: [{ scale: 0.5 }], width: 10, height: 10 }}>
+                            <ActivityIndicator size="small" color={colors.accent} />
+                          </View>
                           <Text style={styles.toolPillActiveText}>{t}</Text>
                         </View>
                       ))}
@@ -481,7 +500,9 @@ export default function ChatScreen({
                   )}
                   {statusText && !streamContent ? (
                     <View style={styles.statusLine}>
-                      <ActivityIndicator size={8} color={colors.labelTertiary} />
+                      <View style={{ transform: [{ scale: 0.5 }], width: 10, height: 10 }}>
+                        <ActivityIndicator size="small" color={colors.labelTertiary} />
+                      </View>
                       <Text style={styles.statusLineText}>{statusText}</Text>
                     </View>
                   ) : null}
@@ -661,6 +682,15 @@ export default function ChatScreen({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
+
+  // ── Error banner ──
+  errorBanner: {
+    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
+    backgroundColor: colors.dangerSubtle,
+    paddingHorizontal: spacing.md, paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: "rgba(255,59,48,0.2)",
+  },
+  errorBannerText: { fontSize: 13, fontWeight: "500", color: colors.danger, flex: 1 },
 
   // ── Header ──
   header: {

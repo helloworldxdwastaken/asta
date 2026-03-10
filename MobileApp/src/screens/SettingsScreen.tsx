@@ -1845,8 +1845,9 @@ const st = StyleSheet.create({
 
   /* Accent button */
   accentBtn: {
+    flexDirection: "row", justifyContent: "center",
     backgroundColor: colors.accent, borderRadius: radius.md,
-    paddingVertical: 14, alignItems: "center", marginTop: 12,
+    paddingVertical: 14, alignItems: "center", marginTop: 12, gap: 4,
   },
   accentBtnText: { color: "#fff", fontSize: 14, fontWeight: "700" },
 

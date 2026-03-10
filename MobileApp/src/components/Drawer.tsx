@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import {
-  View, Text, TouchableOpacity, FlatList, TextInput,
+  View, Text, TouchableOpacity, TextInput,
   StyleSheet, Alert, Platform, ScrollView,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -13,9 +13,9 @@ import {
 import { clearAuth, getUser } from "../lib/auth";
 import type { Conversation, Folder, User } from "../lib/types";
 import {
-  IconPlus, IconChat, IconFolder, IconSearch, IconSettings,
-  IconLogout, IconTrash, IconUser, IconX, IconWifi, IconWifiOff,
-  IconEdit, IconNewFolder, IconChevronDown, IconChevronRight,
+  IconPlus, IconFolder, IconSearch, IconSettings,
+  IconLogout, IconX, IconWifi, IconWifiOff,
+  IconNewFolder, IconChevronDown, IconChevronRight,
 } from "./Icons";
 
 interface Props {

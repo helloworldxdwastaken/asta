@@ -66,6 +66,33 @@ export const sendChat = (text: string, opts?: {
   image_mime?: string;
 }) => req("POST", "/api/chat", { text, channel: "mobile", ...opts });
 
+/** Parse SSE lines and dispatch chunks. Returns true if stream is done. */
+function processSSELines(
+  lines: string[],
+  eventType: { current: string },
+  onChunk: (chunk: StreamChunk) => void,
+  onDone: (conversationId?: string) => void,
+): boolean {
+  for (const line of lines) {
+    if (line.startsWith("event: ")) {
+      eventType.current = line.slice(7).trim();
+    } else if (line.startsWith("data: ")) {
+      const data = line.slice(6);
+      if (data === "[DONE]") { onDone(); return true; }
+      try {
+        const parsed = JSON.parse(data);
+        const type = eventType.current || parsed.type || "text";
+        const normalized = type === "reasoning" ? "thinking"
+          : type === "assistant" || type === "assistant_final" ? "assistant_final"
+          : type;
+        onChunk({ ...parsed, type: normalized as StreamChunk["type"] });
+        if (normalized === "done") { onDone(parsed.conversation_id); return true; }
+      } catch {}
+    }
+  }
+  return false;
+}
+
 export async function streamChat(
   opts: {
     text: string;
@@ -81,76 +108,120 @@ export async function streamChat(
 ): Promise<() => void> {
   const base = await getBackendUrl();
   const headers = await authHeaders();
+  const payload = JSON.stringify({
+    text: opts.text,
+    channel: "mobile",
+    ...(opts.conversation_id ? { conversation_id: opts.conversation_id } : {}),
+    ...(opts.provider ? { provider: opts.provider } : {}),
+    ...(opts.agent_id ? { agent_id: opts.agent_id } : {}),
+    ...(opts.image_base64 ? { image_base64: opts.image_base64, image_mime: opts.image_mime || "image/jpeg" } : {}),
+  });
+
   const controller = new AbortController();
 
   try {
     const res = await fetch(`${base}/api/chat/stream`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...headers },
-      body: JSON.stringify({
-        text: opts.text,
-        channel: "mobile",
-        ...(opts.conversation_id ? { conversation_id: opts.conversation_id } : {}),
-        ...(opts.provider ? { provider: opts.provider } : {}),
-        ...(opts.agent_id ? { agent_id: opts.agent_id } : {}),
-        ...(opts.image_base64 ? { image_base64: opts.image_base64, image_mime: opts.image_mime || "image/jpeg" } : {}),
-      }),
+      body: payload,
       signal: controller.signal,
     });
 
-    if (!res.ok || !res.body) {
-      onError(`Stream failed: ${res.status}`);
+    if (!res.ok) {
+      const errText = await res.text().catch(() => "");
+      onError(`Stream failed (${res.status})${errText ? ": " + errText.slice(0, 200) : ""}`);
       return () => {};
     }
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
+    // Use ReadableStream if available (modern RN / web)
+    if (res.body && typeof res.body.getReader === "function") {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      const eventType = { current: "" };
 
-    (async () => {
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-
-          let eventType = "";
-          for (const line of lines) {
-            if (line.startsWith("event: ")) {
-              eventType = line.slice(7).trim();
-            } else if (line.startsWith("data: ")) {
-              const data = line.slice(6);
-              if (data === "[DONE]") {
-                onDone();
-                return;
-              }
-              try {
-                const parsed = JSON.parse(data);
-                const type = eventType || parsed.type || "text";
-                const normalized = type === "reasoning" ? "thinking"
-                  : type === "assistant" || type === "assistant_final" ? "assistant_final"
-                  : type;
-                onChunk({ ...parsed, type: normalized as StreamChunk["type"] });
-                if (normalized === "done") {
-                  onDone(parsed.conversation_id);
-                  return;
-                }
-              } catch {}
-            }
+      (async () => {
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            if (processSSELines(lines, eventType, onChunk, onDone)) return;
           }
+          // Process any remaining buffer
+          if (buffer.trim()) {
+            const lines = buffer.split("\n");
+            if (processSSELines(lines, eventType, onChunk, onDone)) return;
+          }
+          onDone();
+        } catch (e: any) {
+          if (e.name !== "AbortError") onError(e.message || "Stream read error");
         }
-        onDone();
-      } catch (e: any) {
-        if (e.name !== "AbortError") onError(e.message);
-      }
-    })();
-  } catch (e: any) {
-    onError(e.message);
-  }
+      })();
 
-  return () => controller.abort();
+      return () => { try { reader.cancel(); } catch {} controller.abort(); };
+    }
+
+    // Fallback: read entire response as text (no streaming, but works everywhere)
+    const text = await res.text();
+    const lines = text.split("\n");
+    const eventType = { current: "" };
+    if (!processSSELines(lines, eventType, onChunk, onDone)) onDone();
+    return () => {};
+  } catch (e: any) {
+    if (e.name === "AbortError") return () => {};
+    // fetch threw — try XHR fallback for RN environments where fetch streaming fails
+    return streamChatXHR(base, headers, payload, onChunk, onDone, onError);
+  }
+}
+
+/** XHR-based SSE fallback for React Native environments */
+function streamChatXHR(
+  base: string,
+  headers: Record<string, string>,
+  payload: string,
+  onChunk: (chunk: StreamChunk) => void,
+  onDone: (conversationId?: string) => void,
+  onError: (err: string) => void,
+): () => void {
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", `${base}/api/chat/stream`);
+  xhr.setRequestHeader("Content-Type", "application/json");
+  for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+
+  let buffer = "";
+  let processed = 0;
+  let finished = false;
+  const eventType = { current: "" };
+
+  xhr.onprogress = () => {
+    if (finished) return;
+    const newData = xhr.responseText.slice(processed);
+    processed = xhr.responseText.length;
+    buffer += newData;
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    if (processSSELines(lines, eventType, onChunk, onDone)) { finished = true; }
+  };
+
+  xhr.onload = () => {
+    if (finished) return;
+    finished = true;
+    if (buffer.trim()) {
+      const lines = buffer.split("\n");
+      if (processSSELines(lines, eventType, onChunk, onDone)) return;
+    }
+    onDone();
+  };
+
+  xhr.onerror = () => { if (!finished) { finished = true; onError("Connection failed"); } };
+  xhr.ontimeout = () => { if (!finished) { finished = true; onError("Request timed out"); } };
+  xhr.timeout = 120000;
+  xhr.send(payload);
+
+  return () => { finished = true; xhr.abort(); };
 }
 
 // ── Conversations ───────────────────────────────────────────

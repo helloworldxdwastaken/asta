@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, Component, type ReactNode } from "react";
 import { View, Text, TouchableOpacity, Platform, StyleSheet, Linking } from "react-native";
 import Markdown from "react-native-markdown-display";
 import * as Clipboard from "expo-clipboard";
@@ -12,12 +12,26 @@ interface Props {
   isUser?: boolean;
 }
 
+/** Error boundary to prevent markdown crashes from taking down the chat */
+class MarkdownErrorBoundary extends Component<{ children: ReactNode; fallback: string }, { hasError: boolean }> {
+  state = { hasError: false };
+  static getDerivedStateFromError() { return { hasError: true }; }
+  render() {
+    if (this.state.hasError) {
+      return <Text style={{ fontSize: 15, lineHeight: 22, color: colors.label }}>{this.props.fallback}</Text>;
+    }
+    return this.props.children;
+  }
+}
+
 /**
  * Markdown renderer for chat messages.
  * Matches the desktop app's styling: GFM tables, code blocks with copy,
  * inline code, blockquotes, links, lists.
  */
 export default function MarkdownContent({ children, isUser }: Props) {
+  // Guard against empty/null content
+  if (!children || typeof children !== "string") return null;
   const [copiedBlock, setCopiedBlock] = useState<number | null>(null);
 
   const copyCode = useCallback(async (text: string, index: number) => {
@@ -169,13 +183,15 @@ export default function MarkdownContent({ children, isUser }: Props) {
   };
 
   return (
-    <Markdown
-      style={markdownStyles}
-      rules={rules}
-      mergeStyle
-    >
-      {children}
-    </Markdown>
+    <MarkdownErrorBoundary fallback={children}>
+      <Markdown
+        style={markdownStyles}
+        rules={rules}
+        mergeStyle
+      >
+        {children}
+      </Markdown>
+    </MarkdownErrorBoundary>
   );
 }
 
