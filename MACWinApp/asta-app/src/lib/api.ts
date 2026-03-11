@@ -7,13 +7,31 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 
 // Pick the right fetch: Tauri plugin (Rust-side, no CORS) or browser native.
 // Tauri v2: check for __TAURI_INTERNALS__ (v2 marker) or __TAURI__ (v1 compat).
-const _fetch: typeof globalThis.fetch = (() => {
+const _isTauri = (() => {
   try {
     // @ts-ignore — Tauri runtime check
-    if (window.__TAURI_INTERNALS__ || window.__TAURI__) return tauriFetch as unknown as typeof globalThis.fetch;
-  } catch {}
-  return globalThis.fetch;
+    return !!(window.__TAURI_INTERNALS__ || window.__TAURI__);
+  } catch { return false; }
 })();
+const _tauriFetch: typeof globalThis.fetch | null = _isTauri ? tauriFetch as unknown as typeof globalThis.fetch : null;
+
+// Wrapper: try Tauri fetch first, fall back to native fetch on failure.
+// This handles Windows WebView2 where tauri-plugin-http can silently fail.
+const _fetch: typeof globalThis.fetch = async (input, init?) => {
+  if (_tauriFetch) {
+    try {
+      return await _tauriFetch(input, init);
+    } catch (e) {
+      // Strip Tauri-specific options before falling back to native fetch
+      if (init) {
+        const { danger, ...nativeInit } = init as any;
+        return globalThis.fetch(input, nativeInit);
+      }
+      return globalThis.fetch(input, init);
+    }
+  }
+  return globalThis.fetch(input, init);
+};
 
 import { getJwt, clearAuth } from "./auth";
 
@@ -177,6 +195,83 @@ export interface StreamChunk {
   error?: string;
 }
 
+/** Parse SSE text buffer into events, returning leftover incomplete text. */
+function _parseSseBuffer(
+  buf: string,
+  onChunk: (data: StreamChunk) => void,
+  lastConvId: { value?: string },
+): string {
+  const blocks = buf.split("\n\n");
+  const leftover = blocks.pop() ?? "";
+
+  for (const block of blocks) {
+    const lines = block.split("\n");
+    let eventName: string | null = null;
+    let dataStr: string | null = null;
+
+    for (const line of lines) {
+      if (line.startsWith("event: ")) {
+        eventName = line.slice(7).trim();
+      } else if (line.startsWith("data: ")) {
+        dataStr = line.slice(6);
+      } else if (line.startsWith("data:")) {
+        dataStr = line.slice(5);
+      }
+    }
+
+    if (dataStr === null) continue;
+    const raw = dataStr.trim();
+    if (raw === "[DONE]") return "\n[DONE]\n";
+
+    try {
+      const parsed = JSON.parse(raw) as StreamChunk;
+      parsed.type = normaliseEventType(eventName ?? parsed.type ?? "");
+      if (parsed.conversation_id) lastConvId.value = parsed.conversation_id;
+      onChunk(parsed);
+    } catch {
+      onChunk({ type: "text", delta: raw });
+    }
+  }
+  return leftover;
+}
+
+/** XHR-based SSE fallback (works on Windows WebView2 where ReadableStream may fail). */
+function _streamChatXhr(
+  opts: SendMessageOpts,
+  onChunk: (data: StreamChunk) => void,
+  onDone: (conversationId?: string) => void,
+  onError: (err: Error) => void,
+): () => void {
+  let finished = false;
+  const safeOnDone = (convId?: string) => { if (!finished) { finished = true; onDone(convId); } };
+
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", `${_backendUrl}/api/chat/stream`);
+  xhr.setRequestHeader("Content-Type", "application/json");
+  const auth = _authHeaders();
+  if (auth["Authorization"]) xhr.setRequestHeader("Authorization", auth["Authorization"]);
+
+  let seen = 0;
+  let buf = "";
+  const lastConvId: { value?: string } = {};
+
+  xhr.onprogress = () => {
+    const newText = xhr.responseText.substring(seen);
+    seen = xhr.responseText.length;
+    buf += newText;
+    buf = _parseSseBuffer(buf, onChunk, lastConvId);
+    if (buf.includes("[DONE]")) { safeOnDone(lastConvId.value); xhr.abort(); }
+  };
+  xhr.onload = () => {
+    if (buf) _parseSseBuffer(buf + "\n\n", onChunk, lastConvId);
+    safeOnDone(lastConvId.value);
+  };
+  xhr.onerror = () => { if (!finished) onError(new Error("XHR stream failed")); };
+
+  xhr.send(JSON.stringify({ ...opts, channel: opts.channel ?? "web" }));
+  return () => { finished = true; xhr.abort(); };
+}
+
 export function streamChat(
   opts: SendMessageOpts,
   onChunk: (data: StreamChunk) => void,
@@ -199,6 +294,9 @@ export function streamChat(
   if (_backendUrl.startsWith("https://")) {
     fetchOpts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
   }
+
+  let cancelXhr: (() => void) | null = null;
+
   _fetch(`${_backendUrl}/api/chat/stream`, fetchOpts).then(async (res) => {
     if (!res.ok || !res.body) {
       if (res.status === 401 && getJwt()) {
@@ -210,52 +308,27 @@ export function streamChat(
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
-    let lastConvId: string | undefined;
+    const lastConvId: { value?: string } = {};
 
     while (true) {
       const { done, value } = await reader.read();
       if (done || aborted) break;
       buf += decoder.decode(value, { stream: true });
-
-      // SSE spec: blocks separated by blank lines
-      const blocks = buf.split("\n\n");
-      buf = blocks.pop() ?? "";
-
-      for (const block of blocks) {
-        const lines = block.split("\n");
-        let eventName: string | null = null;
-        let dataStr: string | null = null;
-
-        for (const line of lines) {
-          if (line.startsWith("event: ")) {
-            eventName = line.slice(7).trim();
-          } else if (line.startsWith("data: ")) {
-            dataStr = line.slice(6);
-          } else if (line.startsWith("data:")) {
-            dataStr = line.slice(5);
-          }
-        }
-
-        if (dataStr === null) continue;
-        const raw = dataStr.trim();
-        if (raw === "[DONE]") { safeOnDone(lastConvId); return; }
-
-        try {
-          const parsed = JSON.parse(raw) as StreamChunk;
-          parsed.type = normaliseEventType(eventName ?? parsed.type ?? "");
-          if (parsed.conversation_id) lastConvId = parsed.conversation_id;
-          onChunk(parsed);
-        } catch {
-          onChunk({ type: "text", delta: raw });
-        }
-      }
+      buf = _parseSseBuffer(buf, onChunk, lastConvId);
+      if (buf.includes("[DONE]")) { safeOnDone(lastConvId.value); return; }
     }
-    safeOnDone(lastConvId);
-  }).catch((err) => { if (!aborted) onError(err); });
+    safeOnDone(lastConvId.value);
+  }).catch((err) => {
+    if (aborted) return;
+    // Fallback to XHR streaming (Windows WebView2 compatibility)
+    console.warn("[Asta] fetch stream failed, falling back to XHR:", err.message);
+    cancelXhr = _streamChatXhr(opts, onChunk, safeOnDone, onError);
+  });
 
   return () => {
     aborted = true;
     controller.abort();
+    if (cancelXhr) cancelXhr();
     // Ensure UI resets even when abort races with reader
     setTimeout(() => safeOnDone(undefined), 0);
   };
