@@ -27,8 +27,8 @@ def _vision_settings_stub(**overrides):
     base = {
         "asta_subagents_auto_spawn": False,
         "asta_vision_preprocess": True,
-        "asta_vision_provider_order": "openrouter,ollama",
-        "asta_vision_openrouter_model": "nvidia/nemotron-nano-12b-v2-vl:free",
+        "asta_vision_provider_order": "openrouter",
+        "asta_vision_openrouter_model": "google/gemma-3-27b-it:free,nvidia/nemotron-nano-12b-v2-vl:free,google/gemma-3-12b-it:free,openrouter/auto",
         "exec_security": "deny",
         "workspace_path": None,
     }
@@ -181,7 +181,7 @@ async def test_handle_message_routes_image_to_vision_provider_when_needed():
     await db.connect()
     user_id = f"vision-route-{uuid.uuid4().hex[:8]}"
     cid = await db.get_or_create_conversation(user_id, "web")
-    await db.set_user_default_ai(user_id, "google")
+    await db.set_user_default_ai(user_id, "groq")
 
     observed: dict[str, str] = {}
 
@@ -224,9 +224,7 @@ async def test_handle_message_routes_image_to_vision_provider_when_needed():
     def _fake_get_provider(name: str):
         if name == "openrouter":
             return _Provider(name, allow_chat=True)
-        if name == "ollama":
-            return _Provider(name)
-        if name == "google":
+        if name == "groq":
             return _TextProvider(name)
         return None
 
@@ -262,38 +260,40 @@ async def test_handle_message_routes_image_to_vision_provider_when_needed():
     assert observed["vision_provider"] == "openrouter"
     assert observed["vision_has_image"] == "True"
     assert observed["vision_mime"] == "image/jpeg"
-    assert observed["vision_model"] == "nvidia/nemotron-nano-12b-v2-vl:free"
+    assert observed["vision_model"] == "google/gemma-3-27b-it:free"
     assert observed["vision_skip_model_policy"] == "True"
-    assert observed["provider"] == "google"
+    assert observed["provider"] == "groq"
     assert observed["has_image"] == "False"
     assert observed["mime"] == ""
     assert "[VISION_ANALYSIS source=openrouter/" in observed["user_content"]
 
 
 @pytest.mark.asyncio
-async def test_handle_message_falls_back_to_ollama_for_vision_preprocessing():
+async def test_handle_message_falls_back_to_next_openrouter_model():
+    """When the first OpenRouter vision model fails, the preprocessor tries the next model in the list."""
     db = get_db()
     await db.connect()
-    user_id = f"vision-ollama-fallback-{uuid.uuid4().hex[:8]}"
+    user_id = f"vision-or-fallback-{uuid.uuid4().hex[:8]}"
     cid = await db.get_or_create_conversation(user_id, "web")
-    await db.set_user_default_ai(user_id, "google")
+    await db.set_user_default_ai(user_id, "groq")
 
-    observed: dict[str, str] = {}
+    observed: dict[str, list] = {"models_tried": []}
 
     class _VisionProvider:
         def __init__(self, name: str):
             self.name = name
 
         async def chat(self, messages, **kwargs):
-            observed[f"{self.name}_has_image"] = str(bool(kwargs.get("image_bytes")))
-            observed[f"{self.name}_model"] = str(kwargs.get("model") or "")
-            if self.name == "openrouter":
+            model = kwargs.get("model") or ""
+            observed["models_tried"].append(model)
+            # First model fails, second succeeds
+            if model == "google/gemma-3-27b-it:free":
                 return ProviderResponse(
                     content="",
                     error=ProviderError.TRANSIENT,
-                    error_message="openrouter failed",
+                    error_message="model unavailable",
                 )
-            return ProviderResponse(content="scene: fallback ollama vision")
+            return ProviderResponse(content="scene: desk and laptop")
 
     class _TextProvider:
         def __init__(self, name: str):
@@ -302,14 +302,12 @@ async def test_handle_message_falls_back_to_ollama_for_vision_preprocessing():
         async def chat(self, messages, **kwargs):
             observed["provider"] = self.name
             observed["has_image"] = str(bool(kwargs.get("image_bytes")))
-            observed["mime"] = str(kwargs.get("image_mime") or "")
             observed["user_content"] = str(messages[-1].get("content") or "")
             return ProviderResponse(content="vision ok")
 
     async def _fake_fallback(primary, messages, fallback_names, **kwargs):
         observed["provider"] = primary.name
         observed["has_image"] = str(bool(kwargs.get("image_bytes")))
-        observed["mime"] = str(kwargs.get("image_mime") or "")
         observed["user_content"] = str(messages[-1].get("content") or "")
         return ProviderResponse(content="vision ok"), primary
 
@@ -317,14 +315,18 @@ async def test_handle_message_falls_back_to_ollama_for_vision_preprocessing():
         return messages
 
     def _fake_get_provider(name: str):
-        if name in {"openrouter", "ollama"}:
+        if name == "openrouter":
             return _VisionProvider(name)
-        if name == "google":
+        if name == "groq":
             return _TextProvider(name)
         return None
 
     async def _fake_get_api_key(key_name: str):
         return "openrouter-key" if key_name == "openrouter_api_key" else None
+
+    two_model_stub = _vision_settings_stub(
+        asta_vision_openrouter_model="google/gemma-3-27b-it:free,nvidia/nemotron-nano-12b-v2-vl:free",
+    )
 
     with (
         patch.dict(os.environ, {"DEBUG": "false"}, clear=False),
@@ -335,8 +337,8 @@ async def test_handle_message_falls_back_to_ollama_for_vision_preprocessing():
         patch("app.handler._get_trace_settings", return_value=SimpleNamespace(asta_show_tool_trace=False, tool_trace_channels=set())),
         patch("app.skills.registry.get_all_skills", return_value=[]),
         patch("app.exec_tool.get_effective_exec_bins", new=AsyncMock(return_value=[])),
-        patch("app.config.get_settings", return_value=_vision_settings_stub()),
-        patch("app.workspace.get_settings", return_value=_vision_settings_stub()),
+        patch("app.config.get_settings", return_value=two_model_stub),
+        patch("app.workspace.get_settings", return_value=two_model_stub),
         patch("app.compaction.compact_history", side_effect=_fake_compact),
         patch("app.keys.get_api_key", side_effect=_fake_get_api_key),
     ):
@@ -352,14 +354,12 @@ async def test_handle_message_falls_back_to_ollama_for_vision_preprocessing():
         )
 
     assert "vision ok" in reply
-    assert observed["openrouter_has_image"] == "True"
-    assert observed["openrouter_model"] == "nvidia/nemotron-nano-12b-v2-vl:free"
-    assert observed["ollama_has_image"] == "True"
-    assert observed["ollama_model"] == "minimax-m2.5:cloud"
-    assert observed["provider"] == "google"
+    # First model was tried and failed, second succeeded
+    assert "google/gemma-3-27b-it:free" in observed["models_tried"]
+    assert "nvidia/nemotron-nano-12b-v2-vl:free" in observed["models_tried"]
+    assert observed["provider"] == "groq"
     assert observed["has_image"] == "False"
-    assert observed["mime"] == ""
-    assert "[VISION_ANALYSIS source=ollama/minimax-m2.5:cloud]" in observed["user_content"]
+    assert "[VISION_ANALYSIS source=openrouter/nvidia/nemotron-nano-12b-v2-vl:free]" in observed["user_content"]
 
 
 @pytest.mark.asyncio

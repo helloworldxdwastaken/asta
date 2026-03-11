@@ -429,6 +429,10 @@ export default function ChatView({ conversationId, onConversationCreated, agents
     while ((m = imgRe.exec(c)) !== null) {
       files.push({ name: m[1] || "image", type: "image" });
     }
+    // Backend-stored image tag: [Image: image/jpeg]
+    if (/\[Image:\s*image\/\w+\]/.test(c)) {
+      files.push({ name: "image", type: "image" });
+    }
     return files;
   }
 
@@ -437,6 +441,8 @@ export default function ChatView({ conversationId, onConversationCreated, agents
     let s = c;
     s = s.replace(/<document\s+name="([^"]+)"[^>]*>[\s\S]*?<\/document>/g, "");
     s = s.replace(/!\[([^\]]*)\]\(data:[^)]+\)/g, "");
+    // Backend-stored image tag: " [Image: image/jpeg] "
+    s = s.replace(/\s*\[Image:\s*image\/\w+\]\s*/g, " ");
     s = s.replace(/\n{3,}/g, "\n\n");
     return s.trim();
   }

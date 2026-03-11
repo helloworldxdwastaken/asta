@@ -14,8 +14,10 @@ fn get_backend_url() -> String {
 
 #[tauri::command]
 fn download_to_file(url: String, filename: String, auth_header: Option<String>) -> Result<String, String> {
-    // Resolve ~/Downloads, fall back to ~/.asta-downloads
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    // Resolve ~/Downloads cross-platform, fall back to ~/.asta-downloads
+    let home = std::env::var("USERPROFILE")  // Windows
+        .or_else(|_| std::env::var("HOME"))  // macOS/Linux
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().to_string());
     let downloads = std::path::PathBuf::from(&home).join("Downloads");
     let dir = if downloads.is_dir() {
         downloads

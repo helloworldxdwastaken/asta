@@ -341,7 +341,17 @@ export default function ChatScreen({
                 </View>
               </View>
             ) : isUser ? (
-              <Text style={[styles.msgText, styles.msgTextUser]} selectable>{item.content}</Text>
+              <>
+                {!item.imageUri && /\[Image:\s*image\/\w+\]/.test(item.content) && (
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                    <Text style={{ fontSize: 14 }}>{"\u{1F5BC}"}</Text>
+                    <Text style={{ fontSize: 12, color: colors.labelSecondary }}>image</Text>
+                  </View>
+                )}
+                <Text style={[styles.msgText, styles.msgTextUser]} selectable>
+                  {item.content.replace(/\s*\[Image:\s*image\/\w+\]\s*/g, " ").trim()}
+                </Text>
+              </>
             ) : (
               <MarkdownContent>{item.content}</MarkdownContent>
             )}

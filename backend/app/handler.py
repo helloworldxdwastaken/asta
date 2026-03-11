@@ -943,7 +943,6 @@ async def _run_vision_preprocessor(
             api_key = await get_api_key(key_name)
             if not api_key:
                 continue
-            # openrouter/free auto-routes to best available free vision model
             models = [m.strip() for m in openrouter_model.split(",") if m.strip()] if openrouter_model else []
             for model in models:
                 attempts.append((candidate, model, provider))
