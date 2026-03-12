@@ -1,6 +1,6 @@
 [package]
 name = "asta-app"
-version = "1.4.6"
+version = "1.4.7"
 description = "Asta — AI assistant desktop app"
 authors = ["Asta"]
 edition = "2021"
