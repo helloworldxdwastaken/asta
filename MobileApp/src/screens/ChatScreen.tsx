@@ -1,24 +1,23 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
-  View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet,
-  KeyboardAvoidingView, Platform, ActivityIndicator, Image,
-  ScrollView, Alert, Linking,
+  View, Text, TouchableOpacity, FlatList, StyleSheet,
+  KeyboardAvoidingView, Platform, ScrollView, Alert,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, spacing, radius } from "../theme/colors";
-import { streamChat, loadMessages, setDefaultAI, setThinking, truncateConversation, downloadFile } from "../lib/api";
+import { streamChat, loadMessages, setDefaultAI, setThinking, truncateConversation } from "../lib/api";
 import type { Message, StreamChunk, Agent } from "../lib/types";
 import {
-  IconSend, IconStop, IconMenu, IconBrain, IconCopy, IconCheck,
-  IconAttach, IconX, IconChevronDown, IconAgents, IconEdit,
-  IconTrash, resolveAgentIcon,
+  IconBrain, IconCheck, IconChevronDown, resolveAgentIcon,
 } from "../components/Icons";
-import { ProviderBadge, ProviderDot, ProviderLogo } from "../components/ProviderIcon";
-import { ThinkingWordAnimation, ThinkingDots } from "../components/ThinkingIndicator";
+import { ProviderLogo } from "../components/ProviderIcon";
+import { IconX } from "../components/Icons";
 import * as Clipboard from "expo-clipboard";
 import * as ImagePicker from "expo-image-picker";
-import { PixelSprites } from "../components/PixelSprites";
-import MarkdownContent from "../components/MarkdownContent";
+import ChatHeader from "../components/chat/ChatHeader";
+import ChatEmptyState from "../components/chat/ChatEmptyState";
+import MessageBubble, { StreamingBubble } from "../components/chat/MessageBubble";
+import ChatInput from "../components/chat/ChatInput";
 
 const PROVIDERS = [
   { key: "claude", label: "Claude" },
@@ -63,7 +62,6 @@ export default function ChatScreen({
   const [editText, setEditText] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
   const [loadingMsgs, setLoadingMsgs] = useState(false);
-  // Dropdown state: which menu is open (anchored to input bar)
   const [dropdown, setDropdown] = useState<"provider" | "thinking" | "agent" | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const stopRef = useRef<(() => void) | null>(null);
@@ -296,147 +294,30 @@ export default function ChatScreen({
   const showThinking = thinkingLevel !== "off";
   const activeAgent = agents.find(a => a.id === selectedAgent);
 
-  const DOWNLOAD_RE = /Download:\s*(\/api\/files\/download-(?:pdf|office|video)\/([^\s\n]+))/gi;
-
-  function extractDownloadLinks(content: string): { path: string; name: string }[] {
-    const links: { path: string; name: string }[] = [];
-    let m: RegExpExecArray | null;
-    const re = new RegExp(DOWNLOAD_RE.source, DOWNLOAD_RE.flags);
-    while ((m = re.exec(content)) !== null) {
-      const path = m[1];
-      const name = decodeURIComponent(m[2].split("/").pop() || "file");
-      links.push({ path, name });
-    }
-    return links;
-  }
-
-  async function handleDownload(path: string) {
-    try {
-      const url = await downloadFile(path);
-      await Linking.openURL(url);
-    } catch {
-      Alert.alert("Download Error", "Could not open download link");
-    }
-  }
-
-  function renderMessage({ item }: { item: Message }) {
-    const isUser = item.role === "user";
-    const isEditing = editingId === item.id;
-    return (
-      <View style={[styles.msgRow, isUser && styles.msgRowUser]}>
-        {!isUser && (
-          <View style={styles.avatarAssistant}>
-            <Text style={styles.avatarText}>A</Text>
-          </View>
-        )}
-        <View style={{ maxWidth: "82%", gap: 4 }}>
-          <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
-            {item.imageUri && (
-              <Image source={{ uri: item.imageUri }} style={styles.msgImage} resizeMode="cover" />
-            )}
-            {item.thinking && showThinking && (
-              <View style={styles.thinkingBlock}>
-                <View style={styles.thinkingHeader}>
-                  <IconBrain size={11} color={colors.violet} />
-                  <Text style={styles.thinkingLabel}>Thought</Text>
-                </View>
-                <Text style={styles.thinkingText} numberOfLines={8}>{item.thinking}</Text>
-              </View>
-            )}
-            {item.completedTools.length > 0 && (
-              <View style={styles.toolRow}>
-                {item.completedTools.map((t, i) => (
-                  <View key={`${t}-${i}`} style={styles.toolPillDone}>
-                    <View style={styles.toolDot} />
-                    <Text style={styles.toolPillDoneText}>{t}</Text>
-                  </View>
-                ))}
-              </View>
-            )}
-            {isUser && isEditing ? (
-              <View style={styles.editBlock}>
-                <TextInput
-                  style={styles.editInput}
-                  value={editText}
-                  onChangeText={setEditText}
-                  multiline
-                  autoFocus
-                />
-                <View style={styles.editActions}>
-                  <TouchableOpacity onPress={cancelEdit} activeOpacity={0.7}>
-                    <Text style={styles.editCancelText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.editSaveBtn} onPress={submitEdit} activeOpacity={0.7}>
-                    <Text style={styles.editSaveText}>Save & Send</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ) : isUser ? (
-              <>
-                {!item.imageUri && /\[Image:\s*image\/\w+\]/.test(item.content) && (
-                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                    <Text style={{ fontSize: 14 }}>{"\u{1F5BC}"}</Text>
-                    <Text style={{ fontSize: 12, color: colors.labelSecondary }}>image</Text>
-                  </View>
-                )}
-                <Text style={[styles.msgText, styles.msgTextUser]} selectable>
-                  {item.content.replace(/\s*\[Image:\s*image\/\w+\]\s*/g, " ").trim()}
-                </Text>
-              </>
-            ) : (
-              <>
-                <MarkdownContent>{item.content}</MarkdownContent>
-                {extractDownloadLinks(item.content).map((dl, i) => (
-                  <TouchableOpacity key={i} style={styles.downloadBtn}
-                    onPress={() => handleDownload(dl.path)} activeOpacity={0.7}>
-                    <Text style={styles.downloadIcon}>{dl.name.match(/\.(mp4|mov|webm)$/i) ? "\u{1F3AC}" : "\u{1F4C4}"}</Text>
-                    <Text style={styles.downloadText} numberOfLines={1}>{dl.name}</Text>
-                    <Text style={styles.downloadArrow}>{"\u2193"}</Text>
-                  </TouchableOpacity>
-                ))}
-              </>
-            )}
-          </View>
-          {isUser && !isEditing && !streaming && (
-            <View style={styles.msgFooter}>
-              <TouchableOpacity style={styles.copyBtn} onPress={() => startEdit(item)}>
-                <IconEdit size={12} color={colors.labelTertiary} />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.copyBtn} onPress={() => copyText(item.id, item.content)}>
-                {copiedId === item.id
-                  ? <IconCheck size={12} color={colors.success} />
-                  : <IconCopy size={12} color={colors.labelTertiary} />
-                }
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.copyBtn} onPress={() => confirmDeleteMessage(item.id)}>
-                <IconTrash size={12} color={colors.labelTertiary} />
-              </TouchableOpacity>
-            </View>
-          )}
-          {!isUser && (
-            <View style={styles.msgFooter}>
-              {item.provider && <ProviderBadge provider={item.provider} size="sm" />}
-              <TouchableOpacity style={styles.copyBtn} onPress={() => copyText(item.id, item.content)}>
-                {copiedId === item.id
-                  ? <IconCheck size={12} color={colors.success} />
-                  : <IconCopy size={12} color={colors.labelTertiary} />
-                }
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.copyBtn} onPress={() => confirmDeleteMessage(item.id)}>
-                <IconTrash size={12} color={colors.labelTertiary} />
-              </TouchableOpacity>
-            </View>
-          )}
-        </View>
-      </View>
-    );
-  }
-
-  // Track if user is near bottom for scroll-to-bottom FAB
   function handleScroll(e: any) {
     const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
     const distanceFromBottom = contentSize.height - layoutMeasurement.height - contentOffset.y;
     setShowScrollBtn(distanceFromBottom > 200);
+  }
+
+  function renderMessage({ item }: { item: Message }) {
+    return (
+      <MessageBubble
+        message={item}
+        isUser={item.role === "user"}
+        showThinking={showThinking}
+        copiedId={copiedId}
+        isEditing={editingId === item.id}
+        editText={editText}
+        streaming={streaming}
+        onEditTextChange={setEditText}
+        onStartEdit={startEdit}
+        onCancelEdit={cancelEdit}
+        onSubmitEdit={submitEdit}
+        onCopy={copyText}
+        onDelete={confirmDeleteMessage}
+      />
+    );
   }
 
   return (
@@ -446,29 +327,13 @@ export default function ChatScreen({
       keyboardVerticalOffset={0}
     >
       {/* ── Header ── */}
-      <View style={[styles.header, { paddingTop: insets.top + 4 }]}>
-        <TouchableOpacity style={styles.menuBtn} onPress={onOpenDrawer} activeOpacity={0.7}>
-          <IconMenu size={18} color={colors.label} />
-        </TouchableOpacity>
-
-        {/* Centered thinking level selector */}
-        <View style={{ flex: 1, alignItems: "center" }}>
-          <TouchableOpacity
-            style={[styles.thinkingSelector, dropdown === "thinking" && { borderColor: "rgba(139,92,246,0.3)" }]}
-            onPress={() => setDropdown(dropdown === "thinking" ? null : "thinking")}
-            activeOpacity={0.7}
-          >
-            <IconBrain size={14} color={thinkingLevel !== "off" ? colors.violet : colors.labelTertiary} />
-            <Text style={[styles.thinkingSelectorText, thinkingLevel !== "off" && { color: colors.violet }]}>
-              {thinkingLevel === "off" ? "Thinking" : thinkingLevel === "xhigh" ? "Maximum" : thinkingLevel.charAt(0).toUpperCase() + thinkingLevel.slice(1)}
-            </Text>
-            <IconChevronDown size={10} color={thinkingLevel !== "off" ? colors.violet : colors.labelTertiary} />
-          </TouchableOpacity>
-        </View>
-
-        {/* Spacer to balance menu button */}
-        <View style={{ width: 36 }} />
-      </View>
+      <ChatHeader
+        topInset={insets.top}
+        thinkingLevel={thinkingLevel}
+        isThinkingDropdownOpen={dropdown === "thinking"}
+        onOpenDrawer={onOpenDrawer}
+        onToggleThinkingDropdown={() => setDropdown(dropdown === "thinking" ? null : "thinking")}
+      />
 
       {/* ── Error banner ── */}
       {errorMsg ? (
@@ -489,109 +354,23 @@ export default function ChatScreen({
         onScroll={handleScroll}
         scrollEventThrottle={100}
         ListEmptyComponent={
-          loadingMsgs ? (
-            <View style={styles.loadingCenter}>
-              <ActivityIndicator size="small" color={colors.accent} />
-              <Text style={styles.loadingText}>Loading messages...</Text>
-            </View>
-          ) : (
-          <View style={styles.empty}>
-            <PixelSprites />
-            <View style={styles.emptyContent}>
-              <Image source={require("../../assets/appicon.png")} style={styles.emptyLogo} />
-              <Text style={styles.emptyTitle}>What can I help with?</Text>
-              <Text style={styles.emptySubtitle}>Ask anything, or try a suggestion</Text>
-              <View style={styles.suggestions}>
-                {agents.slice(0, 4).map((a) => {
-                  const ai = resolveAgentIcon(a);
-                  return (
-                    <TouchableOpacity key={a.id} style={styles.agentCard}
-                      onPress={() => { setSelectedAgent(a.id); }}
-                      activeOpacity={0.7}>
-                      <View style={[styles.agentCardIcon, { backgroundColor: ai.bg }]}>
-                        <ai.Icon size={15} color={ai.color} />
-                      </View>
-                      <Text style={styles.agentCardName} numberOfLines={1}>{a.name}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-                {agents.length === 0 && (
-                  <>
-                    <TouchableOpacity style={styles.suggestionChip} onPress={() => send("What's on my schedule today?")} activeOpacity={0.7}>
-                      <Text style={styles.suggestionText}>My schedule today</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.suggestionChip} onPress={() => send("Summarize my recent notes")} activeOpacity={0.7}>
-                      <Text style={styles.suggestionText}>Summarize notes</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.suggestionChip} onPress={() => send("What's the weather like?")} activeOpacity={0.7}>
-                      <Text style={styles.suggestionText}>Check the weather</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.suggestionChip} onPress={() => send("Write a quick email draft")} activeOpacity={0.7}>
-                      <Text style={styles.suggestionText}>Draft an email</Text>
-                    </TouchableOpacity>
-                  </>
-                )}
-              </View>
-            </View>
-          </View>
-          )
+          <ChatEmptyState
+            agents={agents}
+            loadingMsgs={loadingMsgs}
+            onAgentSelect={(id) => setSelectedAgent(id)}
+            onSuggestionClick={(text) => send(text)}
+          />
         }
         ListFooterComponent={
           streaming ? (
-            <View style={styles.msgRow}>
-              <View style={styles.avatarAssistant}>
-                <Text style={styles.avatarText}>A</Text>
-              </View>
-              <View style={{ maxWidth: "82%", gap: 4 }}>
-                <View style={[styles.bubble, styles.bubbleAssistant]}>
-                  {streamThinking && showThinking ? (
-                    <View style={styles.thinkingBlock}>
-                      <View style={styles.thinkingHeader}>
-                        <IconBrain size={11} color={colors.violet} />
-                        <Text style={styles.thinkingLabel}>Thinking</Text>
-                        <ThinkingDots color={colors.violet} />
-                      </View>
-                      <Text style={styles.thinkingText}>{streamThinking}</Text>
-                    </View>
-                  ) : null}
-                  {completedTools.length > 0 && (
-                    <View style={styles.toolRow}>
-                      {completedTools.map((t, i) => (
-                        <View key={`${t}-${i}`} style={styles.toolPillDone}>
-                          <View style={styles.toolDot} />
-                          <Text style={styles.toolPillDoneText}>{t}</Text>
-                        </View>
-                      ))}
-                    </View>
-                  )}
-                  {activeTools.length > 0 && (
-                    <View style={styles.toolRow}>
-                      {activeTools.map((t) => (
-                        <View key={t} style={styles.toolPillActive}>
-                          <View style={{ transform: [{ scale: 0.5 }], width: 10, height: 10 }}>
-                            <ActivityIndicator size="small" color={colors.accent} />
-                          </View>
-                          <Text style={styles.toolPillActiveText}>{t}</Text>
-                        </View>
-                      ))}
-                    </View>
-                  )}
-                  {statusText && !streamContent ? (
-                    <View style={styles.statusLine}>
-                      <View style={{ transform: [{ scale: 0.5 }], width: 10, height: 10 }}>
-                        <ActivityIndicator size="small" color={colors.labelTertiary} />
-                      </View>
-                      <Text style={styles.statusLineText}>{statusText}</Text>
-                    </View>
-                  ) : null}
-                  {streamContent ? (
-                    <MarkdownContent>{streamContent}</MarkdownContent>
-                  ) : !streamThinking && activeTools.length === 0 && !statusText ? (
-                    <ThinkingWordAnimation />
-                  ) : null}
-                </View>
-              </View>
-            </View>
+            <StreamingBubble
+              streamContent={streamContent}
+              streamThinking={streamThinking}
+              showThinking={showThinking}
+              activeTools={activeTools}
+              completedTools={completedTools}
+              statusText={statusText}
+            />
           ) : null
         }
       />
@@ -604,77 +383,28 @@ export default function ChatScreen({
       )}
 
       {/* ── Input bar ── */}
-      <View style={[styles.inputBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
-        {/* Pending image preview */}
-        {pendingImage && (
-          <View style={styles.pendingImageRow}>
-            <View style={styles.pendingImageWrap}>
-              <Image source={{ uri: pendingImage.uri }} style={styles.pendingImageThumb} />
-              <TouchableOpacity style={styles.pendingImageRemove} onPress={() => setPendingImage(null)} activeOpacity={0.7}>
-                <IconX size={10} color="#fff" />
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
-        {/* Main input container (matches desktop rounded-2xl wrapper) */}
-        <View style={[styles.inputContainer, inputFocused && styles.inputContainerFocused]}>
-          <TextInput
-            style={styles.textInput}
-            value={input}
-            onChangeText={setInput}
-            placeholder={activeAgent ? `Message @${activeAgent.name}...` : "Ask anything..."}
-            placeholderTextColor={colors.labelTertiary}
-            multiline
-            maxLength={10000}
-            editable={!streaming}
-            onSubmitEditing={() => send()}
-            blurOnSubmit={false}
-            onFocus={() => setInputFocused(true)}
-            onBlur={() => setInputFocused(false)}
-          />
-          {/* Bottom toolbar row inside input container */}
-          <View style={styles.inputToolbar}>
-            {/* Left: attach + agent */}
-            <View style={styles.inputToolbarLeft}>
-              <TouchableOpacity style={styles.inputToolBtn} onPress={pickImage} disabled={streaming} activeOpacity={0.7}>
-                <IconAttach size={18} color={pendingImage ? colors.accent : colors.labelTertiary} />
-              </TouchableOpacity>
-              {agents.length > 0 && (
-                <TouchableOpacity
-                  style={[styles.inputToolBtn, selectedAgent ? { backgroundColor: colors.accentSubtle } : {}]}
-                  onPress={() => setDropdown(dropdown === "agent" ? null : "agent")}
-                  activeOpacity={0.7}>
-                  <IconAgents size={16} color={selectedAgent ? colors.accent : colors.labelTertiary} />
-                </TouchableOpacity>
-              )}
-            </View>
-            {/* Right: provider selector + send */}
-            <View style={styles.inputToolbarRight}>
-              <View style={{ position: "relative" }}>
-                <TouchableOpacity
-                  style={styles.providerSelector}
-                  onPress={() => setDropdown(dropdown === "provider" ? null : "provider")}
-                  activeOpacity={0.7}>
-                  <ProviderLogo provider={provider} size={14} />
-                  <Text style={styles.providerSelectorText}>
-                    {PROVIDERS.find(p => p.key === provider)?.label || provider}
-                  </Text>
-                  <IconChevronDown size={8} color={colors.labelTertiary} />
-                </TouchableOpacity>
-
-{/* Provider dropdown rendered as top-level overlay */}
-              </View>
-              <TouchableOpacity
-                style={[styles.sendBtn, streaming ? styles.stopBtn : (!input.trim() && !pendingImage ? styles.sendBtnDisabled : {})]}
-                onPress={streaming ? () => stopRef.current?.() : () => send()}
-                disabled={!input.trim() && !pendingImage && !streaming}
-                activeOpacity={0.7}>
-                {streaming ? <IconStop size={16} color={colors.danger} /> : <IconSend size={16} color="#fff" />}
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </View>
+      <ChatInput
+        input={input}
+        onInputChange={setInput}
+        onSend={() => send()}
+        onStop={() => stopRef.current?.()}
+        streaming={streaming}
+        pendingImage={pendingImage}
+        onAttach={pickImage}
+        onRemoveImage={() => setPendingImage(null)}
+        activeAgent={activeAgent}
+        selectedAgent={selectedAgent}
+        agents={agents}
+        provider={provider}
+        bottomInset={insets.bottom}
+        isProviderDropdownOpen={dropdown === "provider"}
+        isAgentDropdownOpen={dropdown === "agent"}
+        onToggleProviderDropdown={() => setDropdown(dropdown === "provider" ? null : "provider")}
+        onToggleAgentDropdown={() => setDropdown(dropdown === "agent" ? null : "agent")}
+        inputFocused={inputFocused}
+        onFocus={() => setInputFocused(true)}
+        onBlur={() => setInputFocused(false)}
+      />
 
       {/* ── All dropdowns rendered LAST so they float above header, chat & input ── */}
 
@@ -781,27 +511,6 @@ const styles = StyleSheet.create({
   },
   errorBannerText: { fontSize: 13, fontWeight: "500", color: colors.danger, flex: 1 },
 
-  // ── Header ──
-  header: {
-    flexDirection: "row", alignItems: "center",
-    paddingBottom: 8, paddingHorizontal: spacing.md,
-    zIndex: 5,
-  },
-  menuBtn: {
-    width: 36, height: 36, borderRadius: 18,
-    backgroundColor: colors.white05,
-    borderWidth: 1, borderColor: colors.separator,
-    alignItems: "center", justifyContent: "center",
-  },
-  thinkingSelector: {
-    flexDirection: "row", alignItems: "center", gap: 5,
-    backgroundColor: colors.white05,
-    borderRadius: radius.full,
-    paddingHorizontal: 12, paddingVertical: 6,
-    borderWidth: 1, borderColor: colors.separator,
-  },
-  thinkingSelectorText: { fontSize: 13, fontWeight: "600", color: colors.labelSecondary },
-
   // ── Scroll-to-bottom FAB ──
   scrollFab: {
     position: "absolute", right: spacing.lg, bottom: 100,
@@ -813,6 +522,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25, shadowRadius: 8, elevation: 10,
     zIndex: 5,
   },
+
+  // ── Messages ──
+  list: { padding: spacing.md, paddingBottom: spacing.xxl, flexGrow: 1 },
 
   // ── Dropdown (bottom-sheet style) ──
   dropdownOverlay: {
@@ -863,197 +575,6 @@ const styles = StyleSheet.create({
   dropdownItemText: { fontSize: 15, fontWeight: "500", color: colors.label, flex: 1 },
   dropdownItemTextActive: { color: colors.accent, fontWeight: "600" },
   dropdownItemDesc: { fontSize: 12, color: colors.labelTertiary, marginTop: 1 },
-
-  // ── Messages ──
-  list: { padding: spacing.md, paddingBottom: spacing.xxl, flexGrow: 1 },
-  empty: { flex: 1, minHeight: 400, justifyContent: "center", alignItems: "center" },
-  emptyContent: { alignItems: "center", zIndex: 1 },
-  emptyLogo: {
-    width: 56, height: 56, borderRadius: 14,
-    marginBottom: spacing.lg,
-    shadowColor: colors.accent,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 24,
-    elevation: 10,
-  },
-  emptyTitle: { fontSize: 24, fontWeight: "700", color: colors.label, marginBottom: spacing.xs },
-  emptySubtitle: { fontSize: 15, color: colors.labelTertiary, marginBottom: spacing.xl },
-  suggestions: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: spacing.sm, maxWidth: 320 },
-  suggestionChip: {
-    flexDirection: "row", alignItems: "center", gap: 6,
-    backgroundColor: colors.white05,
-    borderRadius: radius.md,
-    paddingHorizontal: 14, paddingVertical: 10,
-    borderWidth: 1, borderColor: colors.separator,
-  },
-  suggestionText: { fontSize: 13, fontWeight: "500", color: colors.labelSecondary },
-
-  msgRow: { flexDirection: "row", alignItems: "flex-start", marginBottom: spacing.md, gap: 8 },
-  msgRowUser: { justifyContent: "flex-end" },
-  avatarAssistant: {
-    width: 28, height: 28, borderRadius: 8,
-    backgroundColor: colors.accentSubtle,
-    alignItems: "center", justifyContent: "center",
-    marginTop: 2,
-  },
-  avatarText: { fontSize: 12, fontWeight: "700", color: colors.accent },
-  bubble: { borderRadius: radius.lg, padding: spacing.md },
-  bubbleUser: { backgroundColor: colors.userBubble, borderBottomRightRadius: 4 },
-  bubbleAssistant: {
-    backgroundColor: colors.surfaceRaised,
-    borderBottomLeftRadius: 4,
-    borderWidth: 1, borderColor: colors.separator,
-  },
-  msgImage: {
-    width: "100%", height: 180,
-    borderRadius: radius.md,
-    marginBottom: spacing.sm,
-  },
-  msgText: { fontSize: 15, lineHeight: 22, color: colors.label },
-  downloadBtn: {
-    flexDirection: "row", alignItems: "center", gap: 8,
-    backgroundColor: colors.accentSubtle,
-    borderRadius: radius.sm,
-    paddingHorizontal: 12, paddingVertical: 10,
-    marginTop: spacing.sm,
-    borderWidth: 1, borderColor: "rgba(255,107,44,0.2)",
-  },
-  downloadIcon: { fontSize: 16 },
-  downloadText: { flex: 1, fontSize: 13, fontWeight: "600", color: colors.accent },
-  downloadArrow: { fontSize: 16, fontWeight: "700", color: colors.accent },
-  msgTextUser: { color: colors.userBubbleText },
-
-  msgFooter: { flexDirection: "row", alignItems: "center", gap: 8, paddingLeft: 4, marginTop: 2 },
-  copyBtn: { padding: 4 },
-
-  // ── Thinking ──
-  thinkingBlock: {
-    backgroundColor: colors.violetSubtle,
-    borderRadius: radius.sm,
-    padding: spacing.sm,
-    marginBottom: spacing.sm,
-    borderWidth: 1, borderColor: "rgba(139,92,246,0.15)",
-  },
-  thinkingHeader: { flexDirection: "row", alignItems: "center", gap: 4, marginBottom: 4 },
-  thinkingLabel: { fontSize: 10, fontWeight: "700", color: colors.violet, textTransform: "uppercase", letterSpacing: 0.5 },
-  thinkingText: { fontSize: 12, lineHeight: 18, color: colors.violetText },
-
-  // ── Tools ──
-  toolRow: { flexDirection: "row", flexWrap: "wrap", gap: 4, marginBottom: spacing.sm },
-  toolPillDone: {
-    flexDirection: "row", alignItems: "center", gap: 4,
-    backgroundColor: colors.white04,
-    borderWidth: 1, borderColor: colors.separator,
-    borderRadius: radius.full, paddingHorizontal: 10, paddingVertical: 3,
-  },
-  toolDot: { width: 5, height: 5, borderRadius: 2.5, backgroundColor: colors.success },
-  toolPillDoneText: { fontSize: 10, color: colors.labelSecondary, fontWeight: "500" },
-  toolPillActive: {
-    flexDirection: "row", alignItems: "center", gap: 4,
-    backgroundColor: colors.accentGlow,
-    borderWidth: 1, borderColor: "rgba(255,107,44,0.2)",
-    borderRadius: radius.full, paddingHorizontal: 10, paddingVertical: 3,
-  },
-  toolPillActiveText: { fontSize: 10, color: colors.accent, fontWeight: "600" },
-
-  statusLine: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 2 },
-  statusLineText: { fontSize: 11, color: colors.labelTertiary, fontStyle: "italic" },
-
-  // ── Input bar ──
-  inputBar: {
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.sm,
-    zIndex: 5,
-  },
-  pendingImageRow: { flexDirection: "row", paddingBottom: spacing.sm },
-  pendingImageWrap: { position: "relative" },
-  pendingImageThumb: {
-    width: 64, height: 64, borderRadius: radius.md,
-    borderWidth: 1, borderColor: colors.separator,
-  },
-  pendingImageRemove: {
-    position: "absolute", top: -6, right: -6,
-    width: 20, height: 20, borderRadius: 10,
-    backgroundColor: colors.danger,
-    alignItems: "center", justifyContent: "center",
-  },
-  inputContainer: {
-    backgroundColor: colors.white05,
-    borderRadius: 20,
-    borderWidth: 1, borderColor: colors.separator,
-    overflow: "hidden",
-  },
-  inputContainerFocused: { borderColor: "rgba(255,107,44,0.3)" },
-  textInput: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: 10, paddingBottom: 6,
-    fontSize: 15, color: colors.label,
-    maxHeight: 120, minHeight: 40,
-  },
-  inputToolbar: {
-    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    paddingHorizontal: 8, paddingBottom: 6, paddingTop: 0,
-  },
-  inputToolbarLeft: { flexDirection: "row", alignItems: "center", gap: 2 },
-  inputToolbarRight: { flexDirection: "row", alignItems: "center", gap: 6 },
-  inputToolBtn: {
-    width: 32, height: 32, borderRadius: 8,
-    alignItems: "center", justifyContent: "center",
-  },
-  providerSelector: {
-    flexDirection: "row", alignItems: "center", gap: 4,
-    paddingHorizontal: 8, height: 30, borderRadius: 8,
-  },
-  providerSelectorText: { fontSize: 11, fontWeight: "600", color: colors.labelTertiary },
-  sendBtn: {
-    width: 34, height: 34, borderRadius: 10,
-    backgroundColor: colors.accent,
-    alignItems: "center", justifyContent: "center",
-  },
-  stopBtn: { backgroundColor: colors.dangerSubtle },
-  sendBtnDisabled: { opacity: 0.3 },
-
-  // ── Edit message ──
-  editBlock: { gap: 8 },
-  editInput: {
-    fontSize: 15, lineHeight: 22, color: colors.label,
-    backgroundColor: colors.white05,
-    borderRadius: radius.sm,
-    padding: spacing.sm,
-    minHeight: 60, maxHeight: 160,
-    borderWidth: 1, borderColor: "rgba(255,107,44,0.3)",
-  },
-  editActions: { flexDirection: "row", justifyContent: "flex-end", gap: 10, alignItems: "center" },
-  editCancelText: { fontSize: 13, fontWeight: "500", color: colors.labelTertiary },
-  editSaveBtn: {
-    backgroundColor: colors.accent,
-    borderRadius: radius.sm,
-    paddingHorizontal: 12, paddingVertical: 6,
-  },
-  editSaveText: { fontSize: 13, fontWeight: "600", color: "#fff" },
-
-  // ── Loading state ──
-  loadingCenter: {
-    flex: 1, minHeight: 300,
-    justifyContent: "center", alignItems: "center", gap: 12,
-  },
-  loadingText: { fontSize: 13, color: colors.labelTertiary },
-
-  // ── Agent cards (empty state, matches desktop grid) ──
-  agentCard: {
-    flexDirection: "row", alignItems: "center", gap: 10,
-    backgroundColor: colors.white04,
-    borderRadius: radius.lg,
-    paddingHorizontal: 14, paddingVertical: 12,
-    borderWidth: 1, borderColor: colors.separator,
-    width: "48%",
-  },
-  agentCardIcon: {
-    width: 28, height: 28, borderRadius: 8,
-    alignItems: "center", justifyContent: "center",
-  },
-  agentCardName: { fontSize: 13, fontWeight: "600", color: colors.labelSecondary, flex: 1 },
 
   // ── Agent icon in dropdown ──
   agentIconSmall: {
