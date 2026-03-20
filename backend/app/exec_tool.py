@@ -17,10 +17,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Default command timeout; long enough for curl/pip but short enough to catch hangs.
 EXEC_TIMEOUT_SECONDS = 30
+# Hard ceiling even when the model requests a longer timeout (e.g. video encoding).
 MAX_TIMEOUT_SECONDS = 120
-# OpenClaw-style: cap combined stdout+stderr size we retain; tail truncation for model payload
+# Cap combined stdout+stderr to prevent huge tool output from blowing up the context window.
+# 200k chars ≈ 50-60k tokens — well within model limits after compaction.
 OUTPUT_CAP_CHARS = 200_000
+# Tail cap for streaming event payloads sent to the frontend (smaller for responsiveness).
 OUTPUT_EVENT_TAIL_CHARS = 20_000
 
 DB_API_KEY_ENV_MAP: dict[str, str] = {

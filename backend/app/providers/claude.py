@@ -10,6 +10,9 @@ from app.providers.base import (
 )
 from app.keys import get_api_key
 
+# Token budget for Claude's extended thinking feature per thinking level.
+# Higher budgets allow deeper reasoning but cost more tokens and increase latency.
+# Values chosen to roughly double at each step; xhigh is capped at Anthropic's 16k limit.
 _THINKING_BUDGET: dict[str, int] = {
     "minimal": 1024,
     "low":     2048,

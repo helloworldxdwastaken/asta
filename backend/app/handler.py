@@ -1065,7 +1065,11 @@ async def handle_message(
         logger.info("Provider %s returned tool_calls=%s (count=%s)", provider_used.name, has_tc, len(response.tool_calls or []))
 
     # Tool-call loop: if model requested exec (or other tools), run and re-call same provider until done
+    # Safety cap: maximum tool-call iterations per request to prevent infinite loops.
+    # 100 allows complex multi-step tasks (e.g. YouTube pipeline) while bounding runaway agents.
     MAX_TOOL_ROUNDS = 100
+    # Compress older messages every N rounds to keep the context window from overflowing.
+    # 15 balances memory retention vs. token budget (~60k tokens per compaction window).
     COMPACT_EVERY_N_ROUNDS = 15
     current_messages = list(messages)
 
