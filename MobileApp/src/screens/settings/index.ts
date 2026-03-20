@@ -1,0 +1,15 @@
+export { default as TabGeneral } from "./TabGeneral";
+export { default as TabKeys } from "./TabKeys";
+export { default as TabModels } from "./TabModels";
+export { default as TabAgents } from "./TabAgents";
+export { default as TabSkills } from "./TabSkills";
+export { default as TabPersona } from "./TabPersona";
+export { default as TabChannels } from "./TabChannels";
+export { default as TabCron } from "./TabCron";
+export { default as TabUsers } from "./TabUsers";
+export { default as TabKnowledge } from "./TabKnowledge";
+export { default as TabPermissions } from "./TabPermissions";
+export { default as TabConnection } from "./TabConnection";
+export { default as TabGoogle } from "./TabGoogle";
+export { default as TabSpotify } from "./TabSpotify";
+export { default as TabAbout } from "./TabAbout";
