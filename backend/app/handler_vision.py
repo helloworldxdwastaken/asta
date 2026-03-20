@@ -7,7 +7,6 @@ import base64
 
 from PIL import Image
 from app.providers.registry import get_provider
-from app.db import get_db
 
 logger = logging.getLogger(__name__)
 

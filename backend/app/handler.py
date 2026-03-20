@@ -9,8 +9,7 @@ from PIL import Image
 from app.context import build_context
 from app.db import get_db
 from app.providers.registry import get_provider
-from app.providers.base import ProviderResponse, ProviderError
-from app.reminders import send_skill_status, send_notification
+from app.reminders import send_skill_status
 from app.time_weather import geocode, parse_location_from_message
 
 # Services
