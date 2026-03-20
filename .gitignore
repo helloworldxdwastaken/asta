@@ -117,5 +117,8 @@ workspace/scripts/tmp/
 # Backend workspace (generated pipeline data)
 backend/workspace/
 
+# Studio assets (uploaded video clips)
+backend/app/workspace/studio/
+
 # Old/backup assets
 MobileApp/assets/icon_old.png
