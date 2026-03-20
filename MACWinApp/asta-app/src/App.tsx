@@ -6,6 +6,7 @@ import ChatView from "./components/Chat/ChatView";
 import ProjectView from "./components/Projects/ProjectView";
 import SettingsSheet from "./components/Settings/SettingsSheet";
 import UpdateToast from "./components/UpdateToast";
+import Toast from "./components/Toast";
 import AgentsSheet from "./components/Agents/AgentsSheet";
 import AutomationDashboard from "./components/Dashboard/AutomationDashboard";
 import StudioView from "./components/Studio/StudioView";
@@ -218,6 +219,7 @@ export default function App() {
       {showSettings && <SettingsSheet onClose={() => setShowSettings(false)} />}
       {showAgents && <AgentsSheet onClose={() => setShowAgents(false)} onAgentsChange={setAgents} />}
       <UpdateToast />
+      <Toast />
     </div>
   );
 }

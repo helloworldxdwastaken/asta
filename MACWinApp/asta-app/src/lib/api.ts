@@ -34,12 +34,9 @@ const _fetch: typeof globalThis.fetch = async (input, init?) => {
 };
 
 import { getJwt, clearAuth } from "./auth";
+import { showToast } from "../components/Toast";
 
-// Migrate: clear old localhost URL so it falls back to the hardcoded remote
-if (localStorage.getItem("backendURL") === "http://localhost:8010") {
-  localStorage.removeItem("backendURL");
-}
-let _backendUrl = localStorage.getItem("backendURL") ?? "https://asta.noxamusic.com";
+let _backendUrl = localStorage.getItem("backendURL") ?? "http://localhost:8010";
 // Legacy auth token (for backward compat when no users exist)
 let _authToken = localStorage.getItem("authToken") ?? "";
 
@@ -107,7 +104,9 @@ async function req<T>(method: string, path: string, body?: unknown, query?: Reco
       clearAuth();
       window.dispatchEvent(new Event("auth-expired"));
     }
-    throw new Error(`${method} ${path} → ${res.status}`);
+    const errMsg = `Request failed: ${method} ${path} (${res.status})`;
+    showToast(errMsg, "error");
+    throw new Error(errMsg);
   }
   const text = await res.text();
   return text ? JSON.parse(text) : ({} as T);
@@ -168,7 +167,10 @@ export async function uploadProjectFile(folderId: string, file: File): Promise<{
     opts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
   }
   const res = await _fetch(url, opts);
-  if (!res.ok) throw new Error(`uploadProjectFile → ${res.status}`);
+  if (!res.ok) {
+    showToast(`File upload failed (${res.status})`, "error");
+    throw new Error(`uploadProjectFile → ${res.status}`);
+  }
   return res.json();
 }
 
@@ -491,7 +493,10 @@ export async function uploadSkill(file: File): Promise<any> {
     uploadOpts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
   }
   const res = await _fetch(`${_backendUrl}/api/skills/upload`, uploadOpts);
-  if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+  if (!res.ok) {
+    showToast(`Skill upload failed (${res.status})`, "error");
+    throw new Error(`Upload failed: ${res.status}`);
+  }
   return res.json();
 }
 
@@ -549,7 +554,10 @@ export async function uploadStudioAsset(file: File, name: string, assetType: str
     uploadOpts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
   }
   const res = await _fetch(`${_backendUrl}/api/studio/assets`, uploadOpts);
-  if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+  if (!res.ok) {
+    showToast(`Asset upload failed (${res.status})`, "error");
+    throw new Error(`Upload failed: ${res.status}`);
+  }
   return res.json();
 }
 

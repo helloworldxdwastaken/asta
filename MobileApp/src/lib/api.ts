@@ -2,9 +2,10 @@
 import { getJwt, clearAuth } from "./auth";
 import type { StreamChunk, Conversation, Folder, Message, Agent } from "./types";
 import { getItem, setItem } from "./storage";
+import { showToast } from "../components/Toast";
 
 const BACKEND_KEY = "asta_backend_url";
-const DEFAULT_BACKEND = "https://asta.noxamusic.com";
+const DEFAULT_BACKEND = "http://localhost:8010";
 
 let _backendUrl: string | null = null;
 
@@ -42,6 +43,8 @@ async function req<T = any>(method: string, path: string, body?: any): Promise<T
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
+    const errMsg = `Request failed: ${method} ${path} (${res.status})`;
+    showToast(errMsg, "error");
     throw new Error(`${res.status}: ${text}`);
   }
   return res.json();
@@ -255,7 +258,10 @@ export async function uploadProjectFile(folderId: string, fileUri: string, fileN
     headers: { ...headers },
     body: formData,
   });
-  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
+  if (!res.ok) {
+    showToast(`File upload failed (${res.status})`, "error");
+    throw new Error(`Upload failed (${res.status})`);
+  }
   return res.json();
 }
 

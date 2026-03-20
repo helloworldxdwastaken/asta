@@ -16,6 +16,7 @@ import ChatScreen from "./src/screens/ChatScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
 import AutomationsScreen from "./src/screens/AutomationsScreen";
 import Drawer from "./src/components/Drawer";
+import Toast from "./src/components/Toast";
 
 const DRAWER_WIDTH = Math.min(Dimensions.get("window").width * 0.82, 320);
 const SCREEN_HEIGHT = Dimensions.get("window").height;
@@ -209,6 +210,7 @@ export default function App() {
           </Animated.View>
         )}
       </View>
+      <Toast />
       <StatusBar style="light" />
     </SafeAreaProvider>
   );
