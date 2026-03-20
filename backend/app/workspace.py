@@ -354,14 +354,20 @@ def get_workspace_context_section(user_id: str | None = None, role: str = "admin
     root = get_workspace_dir()
     if not root:
         return None
+    # Non-admin users only see USER.md and USER_SOUL.md — no self-knowledge
+    _NON_ADMIN_ALLOWED = {"USER.md", "SOUL.md"}
     parts: list[str] = []
     for filename in WORKSPACE_CONTEXT_FILES:
+        if role != "admin" and filename not in _NON_ADMIN_ALLOWED:
+            continue
         if filename == "USER.md":
             path = _get_user_md_path(root, user_id)
         elif filename == "SOUL.md" and role != "admin":
-            # Non-admin users get USER_SOUL.md; fall back to SOUL.md if it doesn't exist
+            # Non-admin users get USER_SOUL.md only; skip entirely if it doesn't exist
             user_soul = root / "USER_SOUL.md"
-            path = user_soul if user_soul.is_file() else root / "SOUL.md"
+            if not user_soul.is_file():
+                continue
+            path = user_soul
         else:
             path = root / filename
         if path.is_file():

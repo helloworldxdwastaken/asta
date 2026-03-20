@@ -1,7 +1,8 @@
 fastapi
 uvicorn
+sse-starlette
 python-multipart
-pydantic<2.12
+pydantic
 pydantic-settings
 python-dotenv
 aiosqlite
@@ -13,7 +14,6 @@ selenium
 webdriver-manager
 beautifulsoup4
 duckduckgo-search
-ddgs
 pillow
 # AI Providers
 groq
@@ -37,10 +37,20 @@ pymupdf
 # Office documents
 python-pptx
 python-docx
+openpyxl
 psutil
+# Fuzzy matching
+rapidfuzz
 # Auth
 bcrypt
 PyJWT
+passlib
+# Google APIs
+google-auth
+# MCP
+mcp
+# SSE
+httpx-sse
 # Timezone from coordinates (local time, reminders)
 timezonefinder
 # Testing

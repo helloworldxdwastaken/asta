@@ -6,7 +6,7 @@ import {
 } from "../../lib/icons";
 import type { User } from "../../lib/auth";
 import {
-  listConversations, listFolders, renameFolder,
+  listConversations, listFolders, createFolder, renameFolder,
   deleteFolder, deleteConversation, assignConversationFolder,
   truncateConversation,
 } from "../../lib/api";
@@ -22,6 +22,8 @@ interface Props {
   onSelect: (id: string) => void;
   onNewChat: () => void;
   onOpenSettings?: () => void;
+  onOpenDashboard?: () => void;
+  onOpenAgents?: () => void;
   onSelectProject?: (id: string | null) => void;
   isOnline: boolean;
   refreshTrigger?: number;
@@ -30,7 +32,7 @@ interface Props {
 }
 
 export default function Sidebar({
-  selectedId, onSelect, onNewChat, onOpenSettings, onSelectProject,
+  selectedId, onSelect, onNewChat, onOpenSettings, onOpenDashboard: _onOpenDashboard, onOpenAgents, onSelectProject,
   isOnline, refreshTrigger,
   user, onLogout,
 }: Props) {
@@ -46,6 +48,8 @@ export default function Sidebar({
     type: "conv" | "folder"; id: string; x: number; y: number; folderId?: string;
   } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
 
   const refresh = useCallback(async () => {
     try {
@@ -136,6 +140,17 @@ export default function Sidebar({
           <IconNewChat size={14} className="text-label-secondary" />
           <span>New chat</span>
         </button>
+        {onOpenAgents && (
+          <button
+            onClick={onOpenAgents}
+            className="w-full flex items-center gap-3 px-3 py-2 rounded-mac hover:bg-white/[.07] text-label-secondary text-13 font-medium transition-all duration-200 active:scale-[0.98] group"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-label-secondary">
+              <circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
+            </svg>
+            <span>Agents</span>
+          </button>
+        )}
 
       </div>
 
@@ -145,12 +160,38 @@ export default function Sidebar({
       <div className="px-3 py-0.5 space-y-0.5 shrink-0">
         <div className="flex items-center justify-between px-3 pt-1.5 pb-0.5">
           <p className="text-[10px] font-semibold text-label-tertiary uppercase tracking-widest">Projects</p>
-          {onSelectProject && (
-            <button onClick={() => onSelectProject(null)} className="text-[10px] text-label-tertiary hover:text-accent transition-colors">View all</button>
-          )}
+          <div className="flex items-center gap-2">
+            <button onClick={() => { setCreatingFolder(true); setNewFolderName(""); }}
+              className="text-label-tertiary hover:text-accent transition-colors" title="New project">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+            </button>
+            {onSelectProject && (
+              <button onClick={() => onSelectProject(null)} className="text-[10px] text-label-tertiary hover:text-accent transition-colors">View all</button>
+            )}
+          </div>
         </div>
-        {folders.length === 0 && onSelectProject && (
-          <button onClick={() => onSelectProject(null)}
+        {creatingFolder && (
+          <div className="flex items-center gap-2 px-3 py-1.5">
+            <IconNewFolder size={13} className="text-accent shrink-0" />
+            <input autoFocus value={newFolderName}
+              onChange={e => setNewFolderName(e.target.value)}
+              onKeyDown={async e => {
+                if (e.key === "Enter" && newFolderName.trim()) {
+                  await createFolder(newFolderName.trim());
+                  setCreatingFolder(false); setNewFolderName(""); refresh();
+                }
+                if (e.key === "Escape") { setCreatingFolder(false); setNewFolderName(""); }
+              }}
+              onBlur={() => { setCreatingFolder(false); setNewFolderName(""); }}
+              placeholder="Project name..."
+              className="flex-1 bg-transparent text-12 font-semibold text-label outline-none border-b border-accent placeholder:text-label-tertiary"
+            />
+          </div>
+        )}
+        {folders.length === 0 && !creatingFolder && onSelectProject && (
+          <button onClick={() => { setCreatingFolder(true); setNewFolderName(""); }}
             className="w-full flex items-center gap-2 px-3 py-2 rounded-mac hover:bg-white/[.05] text-label-tertiary text-12 transition-colors">
             <IconNewFolder size={12} />
             <span>Create a project</span>

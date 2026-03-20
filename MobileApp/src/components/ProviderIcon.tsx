@@ -1,6 +1,6 @@
 import React from "react";
-import { View, Text, StyleSheet } from "react-native";
-import Svg, { Path, Circle, G, Defs, ClipPath, Rect } from "react-native-svg";
+import { View, Text, Image, StyleSheet } from "react-native";
+import Svg, { Path, Circle as SvgCircle, G, ClipPath, Defs, Rect } from "react-native-svg";
 
 // Provider brand colors
 const PROVIDER_COLORS: Record<string, string> = {
@@ -29,6 +29,84 @@ const PROVIDER_LABELS: Record<string, string> = {
   local: "Local",
 };
 
+// Static requires for provider logos (React Native Image only supports PNG/JPG, not SVG)
+const PROVIDER_IMAGES: Record<string, any> = {
+  claude: require("../../assets/providers/calude_anthropic.png"),
+  anthropic: require("../../assets/providers/calude_anthropic.png"),
+  pingram: require("../../assets/providers/pingramlogo.png"),
+};
+
+// ── Inline SVG provider icons (RN Image can't render SVG) ─────────────────
+
+function OpenAIIcon({ size }: { size: number }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="#10A37F">
+      <Path d="M22.282 9.821a5.985 5.985 0 00-.516-4.91 6.046 6.046 0 00-6.51-2.9A6.065 6.065 0 0011.735.5a6.046 6.046 0 00-5.77 4.17 6.046 6.046 0 00-4.043 2.927 6.065 6.065 0 00.745 7.1 5.985 5.985 0 00.516 4.91 6.046 6.046 0 006.51 2.9A6.065 6.065 0 0013.214 24a6.046 6.046 0 005.77-4.17 6.046 6.046 0 004.043-2.927 6.065 6.065 0 00-.745-7.082zM13.214 22.584a4.543 4.543 0 01-2.916-1.054l.145-.082 4.844-2.798a.788.788 0 00.398-.685v-6.826l2.047 1.182a.073.073 0 01.04.057v5.658a4.568 4.568 0 01-4.558 4.548zM3.68 18.419a4.536 4.536 0 01-.543-3.043l.145.087 4.844 2.797a.792.792 0 00.795 0l5.914-3.415v2.365a.073.073 0 01-.03.063L9.912 19.88a4.568 4.568 0 01-6.232-1.461zM2.458 7.86a4.536 4.536 0 012.373-1.993v5.765a.788.788 0 00.398.686l5.914 3.415-2.047 1.182a.073.073 0 01-.069.006l-4.893-2.604A4.568 4.568 0 012.458 7.86zm17.124 3.996l-5.914-3.415 2.047-1.182a.073.073 0 01.069-.006l4.893 2.604a4.558 4.558 0 01-1.692 8.18v-5.496a.788.788 0 00-.403-.685zm2.038-3.06l-.144-.087-4.845-2.797a.792.792 0 00-.795 0l-5.914 3.415V6.962a.073.073 0 01.03-.063l4.893-2.604a4.558 4.558 0 016.775 4.502zM9.063 12.835L7.016 11.653a.073.073 0 01-.04-.057V5.938a4.558 4.558 0 017.474-3.5l-.145.082-4.844 2.797a.788.788 0 00-.398.686v6.832zm1.112-2.394l2.634-1.521 2.634 1.521v3.043l-2.634 1.521-2.634-1.521V10.44z" />
+    </Svg>
+  );
+}
+
+function GeminiIcon({ size }: { size: number }) {
+  // Simplified Gemini sparkle/star
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <Path
+        d="M12 2c.25 0 .47.17.53.41a14.3 14.3 0 003.99 7.07 14.3 14.3 0 007.07 3.99c.24.06.41.28.41.53s-.17.47-.41.53a14.3 14.3 0 00-7.07 3.99 14.3 14.3 0 00-3.99 7.07.55.55 0 01-.53.41.55.55 0 01-.53-.41 14.3 14.3 0 00-3.99-7.07 14.3 14.3 0 00-7.07-3.99A.55.55 0 010 12c0-.25.17-.47.41-.53a14.3 14.3 0 007.07-3.99A14.3 14.3 0 0011.47 2.41.55.55 0 0112 2z"
+        fill="#4285F4"
+      />
+    </Svg>
+  );
+}
+
+function GroqIcon({ size }: { size: number }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 26.3 26.3" fill="none">
+      <SvgCircle cx="13.15" cy="13.15" r="13.15" fill="#F55036" />
+      <Path
+        d="M13.17 6.88a4.43 4.43 0 000 8.85h1.45v-1.66h-1.45a2.77 2.77 0 112.77-2.76v4.07a2.74 2.74 0 01-4.67 2l-1.17 1.13a4.37 4.37 0 003.07 1.29h.06a4.42 4.42 0 004.36-4.4v-4.2a4.43 4.43 0 00-4.42-4.32"
+        fill="#fff"
+      />
+    </Svg>
+  );
+}
+
+function OpenRouterIcon({ size }: { size: number }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 512 512" fill="#6366F1">
+      <Path
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M358.5 41.8l154 87.5v1.9l-155.6 86.6.4-45.2-17.5-.6c-22.6-.6-34.4 0-48.4 2.3-22.7 3.7-43.5 12.3-67.1 28.8l-46.2 32.1c-6.1 4.2-10.6 7.2-14.5 9.7l-11 6.9-8.5 5 8.2 4.9 11.3 7.2c10.2 6.7 25 17 57.6 39.8 23.7 16.5 44.4 25.1 67.1 28.8l6.4 1c14.8 1.9 29.3 2 60.3.7l.5-46.1 154 87.6v1.8l-155.6 86.7.3-39.7-13.5.5c-29.6.9-45.6 0-66.9-3.5-36.1-6-69.5-19.8-104.1-43.9l-46-32a467 467 0 00-16.1-10.6l-10-6c-5.4-3.1-10.8-6.2-16.2-9.2C62 314.2 12 301.1 0 301.1v-90.2l3 .1c12-.2 62.1-13.3 81.3-24l21.7-12.4 9.3-5.8c9.1-6 22.9-15.5 57.3-39.5 34.6-24.2 68-38 104.1-43.9 24.6-4.1 42.1-4.5 81.4-3l.4-40.7z"
+      />
+    </Svg>
+  );
+}
+
+function OllamaIcon({ size }: { size: number }) {
+  // Simplified llama silhouette
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <SvgCircle cx="12" cy="12" r="11" fill="#1a1a2e" stroke="#fff" strokeWidth="0.5" />
+      <Path
+        d="M8 18v-3c0-1.5.5-2.8 1.5-3.8S11.5 10 13 10h1V7.5c0-.5.2-1 .5-1.3.3-.4.7-.5 1.2-.5s.8.2 1.1.5c.3.3.5.7.5 1.3v4c0 1.5-.5 2.8-1.5 3.8s-2 1.5-3.5 1.5H8z"
+        fill="#fff"
+      />
+      <SvgCircle cx="15.5" cy="9" r="0.8" fill="#1a1a2e" />
+    </Svg>
+  );
+}
+
+// Map of inline SVG icon components
+const PROVIDER_SVG_ICONS: Record<string, React.FC<{ size: number }>> = {
+  openai: OpenAIIcon,
+  google: GeminiIcon,
+  gemini: GeminiIcon,
+  groq: GroqIcon,
+  openrouter: OpenRouterIcon,
+  ollama: OllamaIcon,
+  local: OllamaIcon,
+};
+
 function hashColor(name: string): string {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = ((h << 5) - h + name.charCodeAt(i)) | 0;
@@ -45,95 +123,36 @@ export function getProviderLabel(provider?: string): string {
   return PROVIDER_LABELS[provider.toLowerCase()] || provider;
 }
 
-// ── SVG Provider Logos ──────────────────────────────────────────────
-
-interface LogoProps { size?: number }
-
-/** Claude / Anthropic — simplified sparkle mark */
-function ClaudeLogo({ size = 20 }: LogoProps) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <Path d="M16.344 7.158L10.382 22h-3.56L12.93 7.158h3.414zM17.178 22l-6.108-14.842h3.56L20.737 22h-3.56z" fill="#D97757" />
-    </Svg>
-  );
-}
-
-/** OpenAI — hexagonal flower shape */
-function OpenAILogo({ size = 20 }: LogoProps) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <Path d="M22.282 9.821a5.985 5.985 0 00-.516-4.91 6.046 6.046 0 00-6.51-2.9A6.065 6.065 0 0011.81.417a6.043 6.043 0 00-5.77 4.223 6.048 6.048 0 00-4.038 2.929 6.073 6.073 0 00.744 7.11 5.985 5.985 0 00.516 4.911 6.048 6.048 0 006.51 2.9A6.065 6.065 0 0013.218 23.6a6.043 6.043 0 005.77-4.223 6.048 6.048 0 004.038-2.929 6.073 6.073 0 00-.744-7.11v-.517zM13.218 22.1a4.533 4.533 0 01-2.913-1.058l.145-.083 4.838-2.793a.788.788 0 00.396-.685v-6.818l2.044 1.181a.073.073 0 01.04.055v5.649a4.554 4.554 0 01-4.55 4.552zM3.612 18.138a4.524 4.524 0 01-.542-3.044l.145.087 4.838 2.793a.784.784 0 00.788 0l5.908-3.412v2.362a.073.073 0 01-.029.062l-4.892 2.826a4.553 4.553 0 01-6.216-1.674zM2.389 7.96a4.525 4.525 0 012.371-1.99v5.748a.784.784 0 00.392.681l5.908 3.407-2.044 1.18a.073.073 0 01-.069.006l-4.893-2.83A4.554 4.554 0 012.39 7.96zm17.274 4.025l-5.907-3.412 2.044-1.18a.073.073 0 01.069-.006l4.893 2.826a4.55 4.55 0 01-1.65 8.342v-5.89a.784.784 0 00-.393-.68h-.056zm2.036-3.053l-.145-.087-4.838-2.793a.784.784 0 00-.788 0L9.92 9.464V7.103a.073.073 0 01.029-.062l4.892-2.822a4.55 4.55 0 016.757 4.713zM8.727 12.87l-2.045-1.18a.073.073 0 01-.04-.056V5.984a4.551 4.551 0 017.462-3.492l-.144.083-4.839 2.793a.788.788 0 00-.396.685l.002 6.818zm1.11-2.394l2.632-1.52 2.632 1.52v3.04l-2.632 1.52-2.632-1.52v-3.04z" fill="#10A37F" />
-    </Svg>
-  );
-}
-
-/** Gemini — four-pointed star */
-function GeminiLogo({ size = 20 }: LogoProps) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <Path d="M12 2C12 7.523 7.523 12 2 12c5.523 0 10 4.477 10 10 0-5.523 4.477-10 10-10-5.523 0-10-4.477-10-10z" fill="#4285F4" />
-    </Svg>
-  );
-}
-
-/** Groq — circle with stylized G */
-function GroqLogo({ size = 20 }: LogoProps) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 26.3 26.3" fill="none">
-      <Circle cx="13.15" cy="13.15" r="13.15" fill="#F55036" />
-      <Path d="M13.17 6.88a4.43 4.43 0 000 8.85h1.45v-1.66h-1.45a2.77 2.77 0 112.77-2.76v4.07a2.74 2.74 0 01-4.67 2l-1.17 1.13a4.37 4.37 0 003.07 1.29h.06a4.42 4.42 0 004.36-4.4v-4.2a4.43 4.43 0 00-4.42-4.32" fill="#fff" />
-    </Svg>
-  );
-}
-
-/** OpenRouter — stylized OR arrows */
-function OpenRouterLogo({ size = 20 }: LogoProps) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <Path d="M16.7 2l7.2 4.1v.09L16.5 10.2l.02-2.1-.82-.03c-1.06-.03-1.61 0-2.27.11-1.06.18-2.04.58-3.15 1.35L8.12 11c-.28.2-.5.34-.68.46l-.51.32-.4.23.39.23.53.34c.48.31 1.17.8 2.7 1.87 1.11.77 2.08 1.18 3.15 1.35l.3.04c.7.1 1.38.1 2.83.03l.02-2.16 7.22 4.11v.09L16.5 21.9l.01-1.86-.64.02c-1.39.04-2.14 0-3.14-.16-1.7-.28-3.26-.93-4.88-2.06l-2.16-1.5a21.879 21.879 0 00-.76-.5l-.47-.28a39.73 39.73 0 00-.76-.43c-1.48-.82-3.83-1.43-4.4-1.43v-4.23l.14.004c.57-.007 2.91-.62 3.81-1.12l1.02-.58.44-.27c.43-.28 1.07-.73 2.69-1.86 1.62-1.13 3.19-1.78 4.88-2.06 1.15-.19 1.98-.21 3.82-.14l.02-1.91z" fill="#6366F1" />
-    </Svg>
-  );
-}
-
-/** Ollama — llama silhouette */
-function OllamaLogo({ size = 20 }: LogoProps) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <Path d="M12 3C9.24 3 7 5.24 7 8c0 1.57.73 2.97 1.87 3.88C7.2 12.9 6 14.83 6 17v4h3v-4c0-1.66 1.34-3 3-3s3 1.34 3 3v4h3v-4c0-2.17-1.2-4.1-2.87-5.12A5 5 0 0017 8c0-2.76-2.24-5-5-5zm-1.5 6a1 1 0 110-2 1 1 0 010 2zm3 0a1 1 0 110-2 1 1 0 010 2z" fill="#FFFFFF" />
-    </Svg>
-  );
-}
-
-/** Render the correct provider logo SVG */
+/** Render the correct provider logo */
 export function ProviderLogo({ provider, size = 20 }: { provider?: string; size?: number }) {
   const key = (provider || "").toLowerCase();
-  switch (key) {
-    case "claude":
-    case "anthropic":
-      return <ClaudeLogo size={size} />;
-    case "openai":
-      return <OpenAILogo size={size} />;
-    case "google":
-    case "gemini":
-      return <GeminiLogo size={size} />;
-    case "groq":
-      return <GroqLogo size={size} />;
-    case "openrouter":
-      return <OpenRouterLogo size={size} />;
-    case "ollama":
-    case "local":
-      return <OllamaLogo size={size} />;
-    default: {
-      // Fallback: colored circle with first letter
-      const color = getProviderColor(provider);
-      const letter = (provider || "?")[0].toUpperCase();
-      return (
-        <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: color + "20", alignItems: "center", justifyContent: "center" }}>
-          <Text style={{ fontSize: size * 0.5, fontWeight: "700", color }}>{letter}</Text>
-        </View>
-      );
-    }
+
+  // PNG images (Claude, Pingram)
+  const imgSource = PROVIDER_IMAGES[key];
+  if (imgSource) {
+    return (
+      <Image
+        source={imgSource}
+        style={{ width: size, height: size }}
+        resizeMode="contain"
+      />
+    );
   }
+
+  // Inline SVG icons (OpenAI, Gemini, Groq, OpenRouter, Ollama)
+  const SvgIcon = PROVIDER_SVG_ICONS[key];
+  if (SvgIcon) {
+    return <SvgIcon size={size} />;
+  }
+
+  // Fallback: colored circle with first letter
+  const color = getProviderColor(provider);
+  const letter = (provider || "?")[0].toUpperCase();
+  return (
+    <View style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: color + "20", alignItems: "center", justifyContent: "center" }}>
+      <Text style={{ fontSize: size * 0.5, fontWeight: "700", color }}>{letter}</Text>
+    </View>
+  );
 }
 
 // ── Dot & Badge (now using logos) ──────────────────────────────────
@@ -169,6 +188,5 @@ const styles = StyleSheet.create({
     borderRadius: 9999,
     borderWidth: 1,
   },
-  badgeDot: {},
   badgeText: { fontWeight: "600" },
 });

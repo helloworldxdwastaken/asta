@@ -207,6 +207,40 @@ code {
 .light .bg-accent\/\[\.12\] { background-color: rgba(232,88,26,0.06); }
 .light .bg-accent\/\[\.15\] { background-color: rgba(232,88,26,0.08); }
 
+/* ── Studio environment — cool-shifted palette ──────────────────────────── */
+
+.studio-env {
+  --surface:         #0F1017;
+  --surface-raised:  #15161E;
+  --surface-overlay: #1C1D27;
+  --surface-glass:   rgba(21,22,30,0.82);
+  --label:           #E8EAF0;
+  --label-secondary: rgba(232,234,240,0.52);
+  --label-tertiary:  rgba(232,234,240,0.26);
+  --separator:       rgba(124,58,237,0.06);
+  --separator-bold:  rgba(124,58,237,0.12);
+  --sidebar:         rgba(18,18,28,0.90);
+  --sidebar-hover:   rgba(124,58,237,0.04);
+  --code-bg:         rgba(124,58,237,0.03);
+  --code-border:     rgba(124,58,237,0.08);
+  --scrollbar-thumb: rgba(124,58,237,0.12);
+  --scrollbar-thumb-hover: rgba(124,58,237,0.22);
+  --select-bg:       rgba(124,58,237,0.06);
+  --select-option-bg:#151620;
+  --user-bubble:     #262838;
+  --user-bubble-text:#E8EAF0;
+  --accent:          #7C3AED;
+  --accent-end:      #A855F7;
+  --accent-glow:     rgba(124,58,237,0.18);
+  --accent-dim:      rgba(124,58,237,0.08);
+  --ring-color:      rgba(124,58,237,0.35);
+}
+
+/* Studio grain: cooler tint */
+.studio-env.grain::before {
+  opacity: 0.015;
+}
+
 /* ── Glass morphism ──────────────────────────────────────────────────────── */
 
 .glass {

@@ -1,12 +1,11 @@
 {
   "expo": {
     "name": "Asta",
-    "slug": "asta-mobile",
+    "slug": "asta",
     "version": "1.4.5",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
-    "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -20,13 +19,15 @@
           "photosPermission": "Allow Asta to access your photos to share images in chat.",
           "cameraPermission": "Allow Asta to use the camera to take photos for chat."
         }
-      ]
+      ],
+      "expo-document-picker"
     ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.asta.mobile",
       "infoPlist": {
-        "NSPhotoLibraryUsageDescription": "Allow Asta to access your photos to share images in chat."
+        "NSPhotoLibraryUsageDescription": "Allow Asta to access your photos to share images in chat.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -36,10 +37,19 @@
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
-      }
+      },
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "75e83b20-5268-4804-920c-9a641a345fad"
+      }
+    },
+    "owner": "tokyo_houseparty"
   }
 }

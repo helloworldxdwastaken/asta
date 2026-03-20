@@ -641,7 +641,7 @@ All notable changes to Asta are documented here.
   - `sessions_send`
   - `sessions_stop`
 - **Subagent runtime registry** — Added persisted run lifecycle tracking in `subagent_runs` (status/result/error/timestamps, parent/child conversation mapping).
-- **Subagent announce flow** — Completed/failed/timed-out subagent runs now post an assistant update back to the parent conversation and notify Telegram/WhatsApp when applicable.
+- **Subagent announce flow** — Completed/failed/timed-out subagent runs now post an assistant update back to the parent conversation and notify Telegram when applicable.
 - **Startup recovery for unfinished runs** — Backend startup now marks previously running subagent runs as `interrupted` after restart.
 - **Tests for orchestration flow** — Added coverage for spawn completion + announce, list/history tools, stop behavior, and restart recovery.
 
@@ -675,7 +675,7 @@ All notable changes to Asta are documented here.
 ### Changed
 
 - **Settings: Ollama model picker reliability** — Replaced browser-dependent Ollama datalist suggestions with explicit dropdown selectors for both default AI model and fallback-provider model configuration, while keeping manual custom tag input.
-- **Dashboard channels polish** — Channels card now uses clearer connected/disconnected badges, softer consistent card borders, and only shows WhatsApp when the bridge is actually connected.
+- **Dashboard channels polish** — Channels card now uses clearer connected/disconnected badges and softer consistent card borders.
 - **Docs consistency pass** — Updated README/SPEC wording to match the current dashboard structure and release version.
 
 ---
@@ -689,7 +689,6 @@ All notable changes to Asta are documented here.
 - **Workspace docs corrected** — Removed outdated wording that implied all selected skill bodies are pre-injected;
   docs now reflect the on-demand `read` flow for workspace skills.
 - **`TOOLS.md` clarified** — Documented as user/local context notes (hosts, device names, preferences), not executable tools.
-- **WhatsApp labeling** — User-facing labels now mark WhatsApp as **Beta** in panel/CLI/docs.
 
 ---
 
@@ -791,7 +790,7 @@ All notable changes to Asta are documented here.
 ### Added
 
 - **Claw-style exec tool** — Asta can run allowlisted shell commands (e.g. `memo`, `things`) when the model outputs `[ASTA_EXEC: command][/ASTA_EXEC]`. Commands run on the server; output is fed back to the model so it can answer (e.g. "check my Apple Notes about Eli"). Configure via `ASTA_EXEC_ALLOWED_BINS=memo,things` in `backend/.env`.
-- **Claw-style cron** — Recurring jobs with 5-field cron expressions. The model can schedule cron via `[ASTA_CRON_ADD: name|cron_expr|tz|message][/ASTA_CRON_ADD]` and remove via `[ASTA_CRON_REMOVE: name][/ASTA_CRON_REMOVE]`. When a cron fires, the message is sent through the handler and the reply is delivered to the user (Telegram/WhatsApp). API: `GET/POST/DELETE /api/cron`. Skills (e.g. auto-updater) can rely on cron.
+- **Claw-style cron** — Recurring jobs with 5-field cron expressions. The model can schedule cron via `[ASTA_CRON_ADD: name|cron_expr|tz|message][/ASTA_CRON_ADD]` and remove via `[ASTA_CRON_REMOVE: name][/ASTA_CRON_REMOVE]`. When a cron fires, the message is sent through the handler and the reply is delivered to the user (Telegram). API: `GET/POST/DELETE /api/cron`. Skills (e.g. auto-updater) can rely on cron.
 - **Workspace & OpenClaw-style skills** — Default `workspace/` folder (auto-created). Skills loaded from `workspace/skills/*/SKILL.md` (name + description). Bundled workspace skills: notes, apple-notes, things-mac, weather, skill-creator, auto-updater-100. User context from `workspace/USER.md` only.
 - **Mac skills from OpenClaw** — `apple-notes` (memo CLI for Apple Notes) and `things-mac` (things CLI for Things 3), marked Mac-only in descriptions.
 - **Notes skill** — Save quick notes and lists to `workspace/notes/` via the same file-creation convention as the files skill.

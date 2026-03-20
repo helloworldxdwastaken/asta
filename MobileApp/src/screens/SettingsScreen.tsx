@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, Platform,
-  Switch, TextInput, Image,
+  TextInput, Image, Linking,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, spacing, radius } from "../theme/colors";
@@ -20,6 +20,7 @@ import {
   getReasoning, setReasoning as setReasoningApi,
   getFinalMode, setFinalMode as setFinalModeApi,
   getVision, setVision as setVisionApi,
+  spotifyStatus, spotifyDevices, spotifyConnectUrl, spotifyDisconnect,
 } from "../lib/api";
 import { clearAuth, getUser, isAdmin } from "../lib/auth";
 import type { User, Agent } from "../lib/types";
@@ -27,13 +28,15 @@ import {
   IconChevronLeft, IconChevronRight, IconBrain, IconUser, IconServer,
   IconKey, IconWifi, IconWifiOff, IconPuzzle, IconAgents, IconSend,
   IconInfo, IconSettings, IconPerson, IconClock, IconPlus, IconTrash,
-  IconWarning, IconCheck, IconEdit, IconLink,
+  IconWarning, IconCheck, IconEdit, IconLink, IconMusic, IconGlobe,
   resolveAgentIcon,
 } from "../components/Icons";
+import { ProviderLogo } from "../components/ProviderIcon";
+import Toggle from "../components/Toggle";
 
 /* ── Tab definitions ──────────────────────────────── */
 
-type TabId = "general" | "keys" | "models" | "skills" | "agents" | "persona" | "channels" | "cron" | "users" | "knowledge" | "permissions" | "connection" | "about";
+type TabId = "general" | "keys" | "models" | "skills" | "agents" | "persona" | "channels" | "cron" | "users" | "knowledge" | "permissions" | "connection" | "google" | "spotify" | "about";
 
 interface TabDef {
   id: TabId;
@@ -55,6 +58,8 @@ const TABS: TabDef[] = [
   { id: "knowledge",  label: "Knowledge",  Icon: IconBrain,     adminOnly: true },
   { id: "permissions", label: "Permissions", Icon: IconWarning, adminOnly: true },
   { id: "connection", label: "Connection", Icon: IconServer,    adminOnly: true },
+  { id: "google",     label: "Google",     Icon: IconGlobe,     adminOnly: true },
+  { id: "spotify",    label: "Spotify",    Icon: IconMusic,     adminOnly: true },
   { id: "about",      label: "About",      Icon: IconInfo,      adminOnly: false },
 ];
 
@@ -78,6 +83,10 @@ const KEY_FIELDS = [
   { key: "huggingface_api_key", label: "HuggingFace",        ph: "hf_..." },
   { key: "giphy_api_key",       label: "Giphy",              ph: "" },
   { key: "notion_api_key",      label: "Notion",             ph: "ntn_..." },
+  { key: "pexels_api_key",     label: "Pexels",             ph: "" },
+  { key: "pixabay_api_key",    label: "Pixabay",            ph: "" },
+  { key: "youtube_api_key",    label: "YouTube",            ph: "AIza..." },
+  { key: "github_token",       label: "GitHub",             ph: "ghp_..." },
 ];
 
 /* ── Props ────────────────────────────────────────── */
@@ -159,6 +168,12 @@ export default function SettingsScreen({
   const [ragTopics, setRagTopics] = useState<any[]>([]);
   const [memHealth, setMemHealth] = useState<any>(null);
 
+  // Spotify state
+  const [spotifyConnected, setSpotifyConnected] = useState(false);
+  const [spotifyUser, setSpotifyUser] = useState("");
+  const [spotifyDeviceList, setSpotifyDeviceList] = useState<any[]>([]);
+  const [spotifyLoading, setSpotifyLoading] = useState(false);
+
   useEffect(() => {
     getUser().then(setUserState);
     isAdmin().then(setAdmin);
@@ -181,6 +196,16 @@ export default function SettingsScreen({
     getFinalMode().then((r) => setFinalMode(r.final_mode || "off")).catch(() => {});
     getVision().then((r) => setVisionEnabled(r.preprocess !== false)).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== "spotify") return;
+    setSpotifyLoading(true);
+    spotifyStatus().then((r) => {
+      setSpotifyConnected(!!r.connected);
+      setSpotifyUser(r.display_name || r.user || "");
+    }).catch(() => {}).finally(() => setSpotifyLoading(false));
+    spotifyDevices().then((r) => setSpotifyDeviceList(r.devices || [])).catch(() => {});
+  }, [activeTab]);
 
   const visibleTabs = TABS.filter((t) => !t.adminOnly || admin);
 
@@ -219,7 +244,8 @@ export default function SettingsScreen({
 
   if (activeTab === null) {
     return (
-      <View style={[st.container, { paddingTop: insets.top }]}>
+      <View style={st.container}>
+        <View style={st.dragHandle} />
         <View style={st.header}>
           <TouchableOpacity onPress={onBack} activeOpacity={0.7} style={st.headerBack}>
             <IconChevronLeft size={22} color={colors.accent} />
@@ -283,7 +309,8 @@ export default function SettingsScreen({
   const currentTab = TABS.find((t) => t.id === activeTab)!;
 
   return (
-    <View style={[st.container, { paddingTop: insets.top }]}>
+    <View style={st.container}>
+      <View style={st.dragHandle} />
       {/* Header with back to tab list */}
       <View style={st.header}>
         <TouchableOpacity onPress={() => setActiveTab(null)} activeOpacity={0.7} style={st.headerBack}>
@@ -310,6 +337,8 @@ export default function SettingsScreen({
         {activeTab === "knowledge" && <TabKnowledge />}
         {activeTab === "permissions" && <TabPermissions />}
         {activeTab === "connection" && <TabConnection />}
+        {activeTab === "google" && <TabGoogle />}
+        {activeTab === "spotify" && <TabSpotify />}
         {activeTab === "about" && <TabAbout />}
       </ScrollView>
     </View>
@@ -328,7 +357,7 @@ export default function SettingsScreen({
             activeOpacity={0.7}
           >
             <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-              <View style={[st.provDot, { backgroundColor: p.color }]} />
+              <ProviderLogo provider={p.key} size={20} />
               <Text style={[st.radioText, provider === p.key && st.radioTextActive]}>{p.label}</Text>
             </View>
             <View style={[st.radio, provider === p.key && st.radioActive]}>
@@ -379,11 +408,9 @@ export default function SettingsScreen({
             <Label text="Vision / Image Understanding" />
             <View style={st.switchRow}>
               <Text style={st.switchLabel}>{visionEnabled ? "Enabled" : "Disabled"}</Text>
-              <Switch
+              <Toggle
                 value={visionEnabled}
                 onValueChange={(v) => { setVisionEnabled(v); setVisionApi({ preprocess: v }).catch(() => {}); }}
-                trackColor={{ false: colors.white10, true: colors.accent }}
-                thumbColor="#fff"
               />
             </View>
           </>
@@ -457,7 +484,7 @@ export default function SettingsScreen({
           return (
             <View key={prov} style={{ marginBottom: 16 }}>
               <View style={{ flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                <View style={[st.provDot, { backgroundColor: provColor }]} />
+                <ProviderLogo provider={prov} size={20} />
                 <Text style={{ fontSize: 14, fontWeight: "600", color: colors.label }}>{provLabel}</Text>
                 {modelSaving === prov && <Text style={{ fontSize: 11, color: colors.accent }}>Saving...</Text>}
               </View>
@@ -729,10 +756,9 @@ export default function SettingsScreen({
                   {a.description ? <Text style={st.toggleDesc} numberOfLines={2}>{a.description}</Text> : null}
                 </TouchableOpacity>
                 {/* Toggle — outside TouchableOpacity so it captures its own events */}
-                <Switch value={a.enabled}
+                <Toggle value={!!a.enabled}
                   onValueChange={(v) => { setAgents(prev => prev.map(x => x.id === a.id ? { ...x, enabled: v } : x)); toggleAgent(a.id, v).catch(() => {}); }}
-                  trackColor={{ false: colors.white08, true: colors.accent }} thumbColor="#fff"
-                  style={{ transform: [{ scaleX: 0.8 }, { scaleY: 0.8 }] }} />
+                />
               </View>
               {/* Footer badges + actions */}
               <View style={st.agentCardFooter}>
@@ -772,20 +798,72 @@ export default function SettingsScreen({
   }
 
   /* ─────── Tab: Skills ─────── */
+  const SKILL_COLORS: Record<string, string> = {
+    "after-effects-assistant": "#00005b", "apple-notes": "#f5c518", "competitor": "#e74c3c",
+    "docx": "#2b579a", "esimo-copywriter": "#8e44ad", "index-crawl": "#27ae60",
+    "index-manager": "#2980b9", "index-status": "#16a085", "index-submit": "#e67e22",
+    "knowledge-curator": "#9b59b6", "librarian": "#8d6e63", "math": "#3498db",
+    "notes": "#f39c12", "notion": "#000", "notion-operator": "#1a1a2e",
+    "pdf": "#c0392b", "pptx": "#d04423", "seo-strategist": "#2ecc71",
+    "skill-creator": "#7f8c8d", "things-mac": "#4a90d9", "xlsx": "#217346",
+    "youtube-creator": "#c4302b", "youtube-edit": "#c4302b", "youtube-script": "#c4302b",
+    "youtube-source": "#c4302b", "youtube-trends": "#c4302b", "youtube-upload": "#c4302b",
+  };
+  const SKILL_LABELS: Record<string, string> = {
+    "after-effects-assistant": "Ae", "apple-notes": "N", "competitor": "C",
+    "docx": "W", "esimo-copywriter": "E", "index-crawl": "IC",
+    "index-manager": "IM", "index-status": "IS", "index-submit": "IS",
+    "knowledge-curator": "K", "librarian": "L", "math": "M",
+    "notes": "N", "notion": "N", "notion-operator": "NO",
+    "pdf": "P", "pptx": "P", "seo-strategist": "SE",
+    "skill-creator": "SC", "things-mac": "T", "xlsx": "X",
+    "youtube-creator": "YT", "youtube-edit": "YE", "youtube-script": "YS",
+    "youtube-source": "YS", "youtube-trends": "YT", "youtube-upload": "YU",
+  };
+  function skillHashColor(name: string): string {
+    let h = 0;
+    for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
+    return `hsl(${Math.abs(h) % 360}, 45%, 40%)`;
+  }
   function TabSkills() {
+    const pairs: any[][] = [];
+    for (let i = 0; i < skills.length; i += 2) {
+      pairs.push(skills.slice(i, i + 2));
+    }
     return (
       <>
         <Text style={st.desc}>Enable or disable workspace skills.</Text>
         {skills.length === 0 && <Text style={st.emptyText}>No skills found</Text>}
-        {skills.map((sk: any) => (
-          <View key={sk.id || sk.name} style={st.toggleRow}>
-            <View style={{ flex: 1, marginRight: 12 }}>
-              <Text style={st.toggleName}>{sk.name || sk.id}</Text>
-              {sk.description ? <Text style={st.toggleDesc} numberOfLines={2}>{sk.description}</Text> : null}
-            </View>
-            <Switch value={sk.enabled}
-              onValueChange={(v) => { setSkills(prev => prev.map((x: any) => (x.id || x.name) === (sk.id || sk.name) ? { ...x, enabled: v } : x)); toggleSkill(sk.id || sk.name, v).catch(() => {}); }}
-              trackColor={{ false: colors.white08, true: colors.accent }} thumbColor="#fff" />
+        {pairs.map((pair, pi) => (
+          <View key={pi} style={{ flexDirection: "row", gap: 8, marginBottom: 8 }}>
+            {pair.map((sk: any) => {
+              const sid = sk.id || sk.name;
+              const bg = SKILL_COLORS[sid] || skillHashColor(sid);
+              const lbl = SKILL_LABELS[sid] || sid.charAt(0).toUpperCase();
+              return (
+                <View key={sid} style={{
+                  flex: 1, flexDirection: "row", alignItems: "center", gap: 10,
+                  backgroundColor: "rgba(255,255,255,0.04)",
+                  borderWidth: 1, borderColor: sk.enabled ? colors.accent + "33" : colors.separator,
+                  borderRadius: 12, paddingHorizontal: 10, paddingVertical: 10,
+                }}>
+                  <View style={{
+                    width: 30, height: 30, borderRadius: 8, backgroundColor: bg,
+                    alignItems: "center", justifyContent: "center",
+                  }}>
+                    <Text style={{ color: "#fff", fontWeight: "700", fontSize: 11 }}>{lbl}</Text>
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text numberOfLines={1} style={{ color: colors.label, fontSize: 12, fontWeight: "600" }}>{sk.name || sid}</Text>
+                    {sk.description ? <Text numberOfLines={1} style={{ color: colors.labelTertiary, fontSize: 9, marginTop: 1 }}>{sk.description}</Text> : null}
+                  </View>
+                  <Toggle value={sk.enabled}
+                    onValueChange={(v) => { setSkills(prev => prev.map((x: any) => (x.id || x.name) === sid ? { ...x, enabled: v } : x)); toggleSkill(sid, v).catch(() => {}); }}
+                  />
+                </View>
+              );
+            })}
+            {pair.length === 1 && <View style={{ flex: 1 }} />}
           </View>
         ))}
       </>
@@ -1336,11 +1414,9 @@ export default function SettingsScreen({
                   </TouchableOpacity>
                 </View>
               </View>
-              <Switch
+              <Toggle
                 value={!!job.enabled}
                 onValueChange={(v) => toggleCronJob(String(job.id), v)}
-                trackColor={{ false: colors.white08, true: colors.accent }}
-                thumbColor="#fff"
               />
             </View>
           );
@@ -1652,6 +1728,155 @@ export default function SettingsScreen({
     );
   }
 
+  /* ─────── Tab: Google ─────── */
+  function TabGoogle() {
+    const [saJson, setSaJson] = useState("");
+    const [savingSa, setSavingSa] = useState(false);
+    const [savedSa, setSavedSa] = useState(false);
+    const [saError, setSaError] = useState("");
+    const hasSa = !!keyStatus.google_service_account;
+    const hasGemini = !!keyStatus.gemini_api_key;
+
+    async function saveSa() {
+      const raw = saJson.trim();
+      if (!raw) return;
+      try {
+        const parsed = JSON.parse(raw);
+        if (!parsed.client_email || !parsed.private_key) {
+          setSaError("JSON must contain client_email and private_key."); return;
+        }
+      } catch {
+        setSaError("Invalid JSON."); return;
+      }
+      setSaError("");
+      setSavingSa(true);
+      await setKeys({ google_service_account: raw } as any).catch(() => {});
+      setSavingSa(false); setSavedSa(true);
+      getKeyStatus().then(setKeyStatusState).catch(() => {});
+      setTimeout(() => setSavedSa(false), 2000);
+    }
+
+    return (
+      <>
+        <Text style={st.desc}>Connect Google services — Gemini AI, Search Console, Calendar, and more.</Text>
+
+        {/* Gemini key status */}
+        <View style={st.keyBlock}>
+          <View style={st.keyHead}>
+            <Text style={st.keyName}>Gemini API Key</Text>
+            <View style={[st.keyDot, { backgroundColor: hasGemini ? colors.success : "rgba(255,255,255,0.12)" }]} />
+            <Text style={{ fontSize: 11, fontWeight: "600", color: hasGemini ? colors.success : colors.labelTertiary }}>
+              {hasGemini ? "Active" : "Set in API Keys tab"}
+            </Text>
+          </View>
+        </View>
+
+        {/* Service Account JSON */}
+        <View style={st.keyBlock}>
+          <View style={st.keyHead}>
+            <Text style={st.keyName}>Service Account JSON</Text>
+            <View style={[st.keyDot, { backgroundColor: hasSa ? colors.success : "rgba(255,255,255,0.12)" }]} />
+            <Text style={{ fontSize: 11, fontWeight: "600", color: hasSa ? colors.success : colors.labelTertiary }}>
+              {hasSa ? "Active" : "Not set"}
+            </Text>
+          </View>
+          <Text style={[st.desc, { marginBottom: 8 }]}>
+            Enables Indexing API, Calendar, Search Console, and Drive access.
+          </Text>
+          <TextInput
+            style={[st.keyInput, { height: 120, textAlignVertical: "top", paddingTop: 10 }]}
+            value={saJson}
+            onChangeText={(v) => { setSaJson(v); setSaError(""); }}
+            placeholder='Paste service account JSON...'
+            placeholderTextColor={colors.labelTertiary}
+            multiline
+            autoCapitalize="none"
+            autoCorrect={false}
+          />
+          {saError ? <Text style={{ color: "#ef4444", fontSize: 12, marginTop: 4 }}>{saError}</Text> : null}
+          <TouchableOpacity style={[st.accentBtn, { marginTop: 8 }]} onPress={saveSa} disabled={savingSa || !saJson.trim()} activeOpacity={0.7}>
+            <Text style={st.accentBtnText}>{savedSa ? "Saved!" : savingSa ? "Saving..." : "Save"}</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Setup instructions */}
+        <View style={{ marginTop: 12 }}>
+          <Text style={[st.keyName, { marginBottom: 8 }]}>Setup Guide</Text>
+          <Text style={[st.desc, { lineHeight: 20 }]}>
+            1. Go to console.cloud.google.com and create a project{"\n\n"}
+            2. Enable the APIs you need (Indexing API, Calendar API, Drive API, Search Console API){"\n\n"}
+            3. Go to IAM & Admin {">"} Service Accounts, create one, then Keys {">"} Add Key {">"} JSON — a .json file downloads{"\n\n"}
+            4. Paste the JSON contents above{"\n\n"}
+            5. For Search Console: add the service account email as Owner in search.google.com/search-console{"\n\n"}
+            6. For Calendar: share your calendar with the service account email{"\n\n"}
+            The service account email looks like: name@project.iam.gserviceaccount.com
+          </Text>
+        </View>
+      </>
+    );
+  }
+
+  /* ─────── Tab: Spotify ─────── */
+  function TabSpotify() {
+    return (
+      <>
+        <Text style={st.desc}>Connect your Spotify account to control playback.</Text>
+
+        {/* Connection status */}
+        <View style={st.card}>
+          <CardRow label="Status" value={spotifyConnected ? "Connected" : "Not connected"}
+            valueColor={spotifyConnected ? colors.success : colors.labelTertiary} />
+          {spotifyUser ? <CardRow label="Account" value={spotifyUser} /> : null}
+        </View>
+
+        {/* Connect / Disconnect */}
+        {spotifyConnected ? (
+          <TouchableOpacity style={[st.accentBtn, { backgroundColor: colors.dangerSubtle }]}
+            onPress={async () => {
+              await spotifyDisconnect().catch(() => {});
+              setSpotifyConnected(false);
+              setSpotifyUser("");
+              setSpotifyDeviceList([]);
+            }}
+            activeOpacity={0.7}>
+            <Text style={[st.accentBtnText, { color: colors.danger }]}>Disconnect</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity style={st.accentBtn}
+            onPress={async () => {
+              const url = await spotifyConnectUrl();
+              Linking.openURL(url).catch(() => {});
+            }}
+            disabled={spotifyLoading}
+            activeOpacity={0.7}>
+            <Text style={st.accentBtnText}>{spotifyLoading ? "Loading..." : "Connect Spotify"}</Text>
+          </TouchableOpacity>
+        )}
+
+        {/* Devices */}
+        {spotifyConnected && spotifyDeviceList.length > 0 && (
+          <>
+            <Label text="Devices" />
+            {spotifyDeviceList.map((d: any, i: number) => (
+              <View key={d.id || i} style={st.toggleRow}>
+                <View style={{ flex: 1 }}>
+                  <Text style={st.toggleName}>{d.name}</Text>
+                  <Text style={st.toggleDesc}>{d.type}{d.is_active ? " • Active" : ""}</Text>
+                </View>
+                {d.is_active && <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: colors.success }} />}
+              </View>
+            ))}
+            <TouchableOpacity style={[st.accentBtn, { backgroundColor: colors.white08, marginTop: 8 }]}
+              onPress={() => { spotifyDevices().then((r) => setSpotifyDeviceList(r.devices || [])).catch(() => {}); }}
+              activeOpacity={0.7}>
+              <Text style={[st.accentBtnText, { color: colors.label }]}>Refresh Devices</Text>
+            </TouchableOpacity>
+          </>
+        )}
+      </>
+    );
+  }
+
   /* ─────── Tab: About ─────── */
   function TabAbout() {
     return (
@@ -1717,13 +1942,16 @@ function CardRow({ label, value, valueColor }: { label: string; value: string; v
 
 const st = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.surface },
+  dragHandle: {
+    width: 36, height: 4, borderRadius: 2,
+    backgroundColor: colors.white10,
+    alignSelf: "center", marginTop: 8, marginBottom: 4,
+  },
 
   /* Header */
   header: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: spacing.md, paddingVertical: 12,
-    backgroundColor: colors.surfaceRaised,
-    borderBottomWidth: 1, borderBottomColor: colors.separator,
   },
   headerBack: { width: 32, alignItems: "flex-start" },
   headerTitle: { fontSize: 17, fontWeight: "700", color: colors.label },

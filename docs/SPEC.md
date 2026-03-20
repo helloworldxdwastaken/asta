@@ -6,9 +6,9 @@
 
 ## 1. Vision
 
-Asta is a **personal control plane**: one place to talk to AI (Google, Claude, Ollama, etc.), automate tasks, manage files and cloud storage, and communicate via Telegram and the desktop app. It has a **cross-platform desktop app** (`MACWinApp/`) built with Tauri as its primary UI, and can **learn** topics over time (RAG) so you can ask it to become an "expert" on a subject and answer from that knowledge.
+Asta is a **personal control plane** (v1.4.7): one place to talk to AI (Google, Claude, Ollama, etc.), automate tasks, manage files and cloud storage, and communicate via Telegram, the desktop app, and the mobile app. It has a **cross-platform desktop app** (`MACWinApp/`) built with Tauri as its primary UI, a **mobile app** (`MobileApp/`) for iOS and Android, and can **learn** topics over time (RAG) so you can ask it to become an "expert" on a subject and answer from that knowledge.
 
-**Core idea:** You control things by chatting (Telegram or the desktop app). The bot reads your messages, runs tasks (files, Drive, learning, scheduled jobs), and uses the right AI backend to reply.
+**Core idea:** You control things by chatting (Telegram, desktop, or mobile). The bot reads your messages, runs tasks (files, Drive, learning, scheduled jobs, YouTube automation, document generation), and uses the right AI backend to reply.
 
 ---
 
@@ -19,7 +19,12 @@ Use this as the source of truth. When you implement a feature, move it to "Imple
 ### 2.1 Implemented
 
 - **Multi-user authentication** — JWT-based login with admin/user roles. `backend/app/auth_middleware.py` handles JWT validation; `backend/app/routers/auth.py` provides login, register, and user management endpoints. Role-based access control: admin has full access; user role restricted to chat with safe tools (web search, weather, math, GIFs, PDF, time). Per-user memory files at `workspace/users/{user_id}/USER.md` with structured fields (Name, Location, About me, Preferences, Notes). Self-registration via `POST /api/auth/register`. Falls back to legacy Bearer token auth when no users exist (single-user mode).
-- **Desktop app** — `MACWinApp/asta-app/`: Tauri v2 + React/TypeScript. Login page with Sign In / Register toggle. Dashboard, Chat, Files, Drive, Learning (RAG), Audio notes, Skills, Channels, **Cron**, Settings. Dashboard: Brain (AI providers), Body (CPU/RAM/disk, CPU model), Eyes (vision), Channels, Notes (latest `workspace/notes/*.md`), Schedule (pending reminders + recurring cron jobs), Capabilities (active skills count). Cron tab: list/delete/update recurring jobs (plus scheduler-backed run actions via tool); auto-updater creates "Daily Auto-Update" on startup when skill present. Settings → Auto-updater for schedule/timezone. Role-based UI: non-admin users see only General (limited), Memories, and About tabs.
+- **Desktop app** — `MACWinApp/asta-app/`: Tauri v2 + React/TypeScript. Login page with Sign In / Register toggle. Dashboard, Chat, Files, Drive, Learning (RAG), Audio notes, Skills, Channels, **Cron**, Settings. Dashboard: Brain (AI providers), Body (CPU/RAM/disk, CPU model), Eyes (vision), Channels, Notes (latest `workspace/notes/*.md`), Schedule (pending reminders + recurring cron jobs), Capabilities (active skills count). Cron tab: list/delete/update recurring jobs (plus scheduler-backed run actions via tool); auto-updater creates "Daily Auto-Update" on startup when skill present. Settings → Auto-updater for schedule/timezone. Role-based UI: non-admin users see only General (limited), Memories, and About tabs. **Sidebar**: New chat at top; **Agents** button below it (admin-only) opens AgentsSheet for CRUD on agents; bottom bar has monitor icon (Automations Dashboard) + gear (Settings). External links use `openUrl()` from `@tauri-apps/plugin-opener`.
+- **Mobile app** — `MobileApp/`: Expo SDK 55 + React Native + TypeScript. Full feature parity with desktop. Auth via JWT + expo-secure-store. API base: `https://asta.noxamusic.com`. Complete settings tabs: General, Keys, Models, Agents CRUD, Skills, Persona, Channels, Schedule/Cron, Users, Knowledge, Permissions, Connection, About. Chat header with dropdown selectors for Provider, Thinking, Agent. Drawer sidebar with Recents/Projects tabs, collapsible folders, folder CRUD, conversation move-to-folder, search.
+- **Automations Dashboard** — Balena-style control panel (monitor icon in desktop sidebar). View, create, toggle, and schedule cron jobs. YouTube Growth preset creates 4 Shorts + 2 Standard videos/week automatically. Backend endpoints: `GET /api/cron/dashboard`, `GET /api/cron/{id}/runs`, `POST /api/cron/youtube-schedule`.
+- **YouTube Automation Pipeline** — `workspace/scripts/youtube/pipeline.py` with sub-skills: `youtube-creator` (orchestrating agent), `youtube-trends`, `youtube-source`, `youtube-script`, `youtube-edit`, `youtube-upload`. Features: trend discovery, smart footage sourcing (Pexels/Pixabay photos + videos), AI script writing, FFmpeg video editing (Ken Burns effect on photos, crossfades, color grading, ASS captions, voiceover with loudnorm, background music, subscribe CTA, vertical crop for Shorts). Format presets: short (45 s, 9:16), standard (3 min, 16:9), long (8 min+, 16:9). API keys: `PEXELS_API_KEY`, `PIXABAY_API_KEY`, `YOUTUBE_API_KEY` (stored in DB, injected via exec_tool.py). Model outputs `Download: /api/files/download-video/YYYY-MM-DD/output/output.mp4` in chat.
+- **Document generation** — PDF (`generate_pdf`), DOCX (`generate_docx`), PPTX (`generate_pptx`), XLSX (`generate_xlsx`) tools. Output to `workspace/office_docs/`. Download via `/api/files/download-office/` and `/api/files/download-pdf/`.
+- **Video download** — `GET /api/files/download-video/{path}` serves produced videos from `workspace/youtube/`.
 - **AI providers** — `backend/app/providers/`: Groq, Google (Gemini), Claude, OpenAI, OpenRouter, Ollama. Main runtime chain is fixed (OpenClaw-style) to `Claude -> Google -> OpenRouter -> Ollama`; users pick default + per-provider models in Settings. Set keys in Settings or `backend/.env`.
 - **Hybrid vision pipeline** — Native vision providers (Claude, Google, OpenAI) receive images/PDFs directly. Non-vision providers (Ollama, Groq) use an OpenRouter vision preprocessor fallback chain: `google/gemma-3-27b-it:free` → `nvidia/nemotron-nano-12b-v2-vl:free` → `google/gemma-3-12b-it:free` → `openrouter/auto`. Claude receives raw PDFs as native `document` content blocks for full-fidelity reading.
 - **Unified context** — AI receives recent conversation, connected channels, ground-truth state (pending reminders count, location), allowed file paths, Google Workspace summary (Gmail, Calendar, Drive via gog), RAG snippets, time/weather/Spotify context, and tool instructions. Workspace `SKILL.md` bodies are not pre-injected; they are read on demand via tool call. `backend/app/context.py`, `handler.py`.
@@ -73,17 +78,19 @@ Use this as the source of truth. When you implement a feature, move it to "Imple
 
 ```
 [ User ]
-   | Telegram / Desktop app
+   | Telegram / Desktop app (macOS/Windows) / Mobile app (iOS/Android)
    v
 [ Asta Backend (FastAPI) ]
    | - Message router (which channel, which provider)
-   | - Task queue (learn, schedule, file ops)
+   | - Task queue (learn, schedule, file ops, YouTube pipeline)
    | - RAG service (vector store + retrieval)
    v
 [ External services ]
    - Google AI, Claude, Ollama
    - Google Drive, local filesystem
    - Telegram API
+   - Pexels, Pixabay, YouTube Data API
+   - FFmpeg (video editing)
 ```
 
 ### 3.2 Components
@@ -91,7 +98,8 @@ Use this as the source of truth. When you implement a feature, move it to "Imple
 | Component | Tech | Responsibility |
 |-----------|------|----------------|
 | **API** | FastAPI (Python 3.12/3.13) | REST + WebSocket; auth; route to providers and tasks. |
-| **Desktop App** | Tauri v2 (Rust + React/TypeScript) | Cross-platform UI (macOS/Windows): Dashboard, Chat, Files, Drive, Learning, Skills, Settings, Agents. |
+| **Desktop App** | Tauri v2 (Rust + React/TypeScript) | Cross-platform UI (macOS/Windows): Dashboard, Chat, Files, Drive, Learning, Skills, Settings, Agents, Automations Dashboard. |
+| **Mobile App** | Expo SDK 55 (React Native/TypeScript) | iOS and Android: full feature parity with desktop, JWT auth via expo-secure-store, API base `https://asta.noxamusic.com`. |
 | **AI adapters** | Python modules | One module per provider (Groq, Google, Claude, OpenAI, OpenRouter, Ollama); same interface: `chat(messages) -> response`. |
 | **Telegram** | python-telegram-bot | Webhook or long polling; forward to core message handler. |
 | **Files** | Python (pathlib, aiofiles) | Local file ops in allowed dirs; list, read, search. |
@@ -172,6 +180,7 @@ is_agent: true
 **Current Agents:**
 - **Research** (`competitor`): Industry research report writer coordinating `researcher`, `report_writer`, `fact_checker` subagents
 - **Excel Processor** (`excel-processor`): Spreadsheet expert delegating to `xlsx` agent
+- **YouTube Creator** (`youtube-creator`): End-to-end YouTube video production agent orchestrating trend discovery, footage sourcing, script writing, FFmpeg editing, and upload
 
 **API:** `GET/POST/PATCH/DELETE /api/agents` - managed by `routers/agents.py`
 
@@ -221,7 +230,7 @@ asta/
 │   │   ├── search_web.py   # DuckDuckGo search
 │   │   ├── providers/   # AI adapters
 │   │   ├── channels/    # Telegram bot adapter
-│   │   ├── routers/     # chat, files, drive, rag, settings, spotify
+│   │   ├── routers/     # chat, files, drive, rag, settings, spotify, cron
 │   │   ├── rag/         # Ingest, embed, retrieve
 │   │   └── tasks/       # Scheduler (learning, reminders)
 │   └── requirements.txt
@@ -229,6 +238,24 @@ asta/
 │   └── asta-app/
 │       ├── src/         # React/TypeScript frontend
 │       └── src-tauri/   # Rust backend (Tauri commands)
+├── MobileApp/           # iOS/Android mobile app (Expo SDK 55 + React Native)
+│   ├── src/
+│   │   ├── components/  # Shared components (Drawer, Icons, ProviderIcon, Toggle, …)
+│   │   ├── screens/     # ChatScreen, SettingsScreen, …
+│   │   └── lib/         # api.ts, auth helpers
+│   └── assets/          # Provider logos, fonts
+├── workspace/
+│   ├── skills/          # SKILL.md workspace skills
+│   │   ├── youtube-creator/
+│   │   ├── youtube-trends/
+│   │   ├── youtube-source/
+│   │   ├── youtube-script/
+│   │   ├── youtube-edit/
+│   │   └── youtube-upload/
+│   ├── scripts/
+│   │   └── youtube/     # pipeline.py and helpers
+│   ├── youtube/         # Pipeline output (dated folders with output videos)
+│   └── office_docs/     # Generated PDF/DOCX/PPTX/XLSX files
 ├── asta.sh              # Start/stop/restart backend
 ├── .env.example         # Template; copy to backend/.env
 └── README.md
@@ -238,7 +265,8 @@ asta/
 
 ## 6. Changelog (spec)
 
-- **Current (1.4.2):** Multi-user JWT authentication with admin/user roles, self-registration, per-user structured memories, role-based UI and tool/skill/agent gating, redesigned login page with 8-bit pixel art, stop button fix, dark mode background adjustment, admin guards on all sensitive endpoints. See `CHANGELOG.md` for full details.
+- **Current (1.4.7):** Windows firewall rules added on install. YouTube Automation Pipeline (`workspace/scripts/youtube/pipeline.py`) with six sub-skills (youtube-creator, youtube-trends, youtube-source, youtube-script, youtube-edit, youtube-upload). Automations Dashboard (monitor icon in sidebar): Balena-style cron control panel with YouTube Growth preset. Mobile App (Expo SDK 55/React Native) with full feature parity, JWT auth, and complete settings tabs. Document generation tools (PDF/DOCX/PPTX/XLSX). Video download endpoint (`/api/files/download-video/`). Agents button in sidebar (admin-only). New API keys: `pexels_api_key`, `pixabay_api_key`, `youtube_api_key`. Provider SVG logos for Pexels, Pixabay, YouTube. External link handling via `@tauri-apps/plugin-opener`. Auto-updater with Tauri updater plugin + GitHub Releases endpoint. WhatsApp integration removed entirely. Windows connection fix (fetch fallback + XHR streaming fallback). See `CHANGELOG.md` for full details.
+- **Previous (1.4.2):** Multi-user JWT authentication with admin/user roles, self-registration, per-user structured memories, role-based UI and tool/skill/agent gating, redesigned login page with 8-bit pixel art, stop button fix, dark mode background adjustment, admin guards on all sensitive endpoints. See `CHANGELOG.md` for full details.
 - **Previous (1.3.57):** Cloudflare Tunnel support, Bearer token auth middleware, auth token UI.
 - **Previous (1.3.56):** Simplified global shortcut to `Alt+Space`, larger default window (1100×780), unified chat input card, category-based agent icons, PDF download in chat, synthwave grid background, hero entrance animation, backend error fixes (compaction import, PDF fitz, Notion skill collision + caching). GitHub Actions releases macOS DMG + Windows MSI on version tags.
 - **Previous (1.3.48):** Chat UI polish (suggestion chips, code copy, scroll FAB), streaming provider fix, Tauri v2 detection, GitHub Actions CI/CD.

@@ -15,6 +15,11 @@ const ICON_MAP: Record<string, { file: string; ext: string }> = {
   giphy:       { file: "giphylogo",        ext: "svg" },
   spotify:     { file: "Spotify_icon",     ext: "svg" },
   pingram:     { file: "pingramlogo",      ext: "png" },
+  pexels:      { file: "pexels",           ext: "svg" },
+  pixabay:     { file: "pixabay",          ext: "svg" },
+  youtube:     { file: "youtube",          ext: "svg" },
+  github:      { file: "github",          ext: "svg" },
+  huggingface: { file: "huggingface",    ext: "svg" },
 };
 
 // Hash-based HSV colour for unknown providers (matches Swift DefaultProviderLogo)

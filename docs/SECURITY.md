@@ -22,15 +22,20 @@ All sensitive data lives in **one place**: `backend/.env`. That file is **gitign
    - `ASTA_OWNER_PHONE_NUMBER=+15551234567` (if using Pingram voice calls)
    - `ASTA_ALLOWED_PATHS=/home/me/docs,/home/me/notes`
    - `SPOTIFY_CLIENT_ID=...` and `SPOTIFY_CLIENT_SECRET=...` (optional; can also be set in Settings → Spotify)
+   - `PEXELS_API_KEY=...` (YouTube pipeline footage sourcing)
+   - `PIXABAY_API_KEY=...` (YouTube pipeline footage sourcing)
+   - `YOUTUBE_API_KEY=...` (YouTube Data API v3 for trend discovery + upload)
 
    **Alternatively,** you can store API keys in the panel under **Settings**. They are saved in `backend/asta.db`. The backend reads stored keys first, then falls back to `.env`. Do not commit `asta.db` if it contains keys.
 
 3. **Never add these to the repo:**
-   - API keys (Groq, Gemini, Anthropic, OpenAI, OpenRouter, Spotify)
+   - API keys (Groq, Gemini, Anthropic, OpenAI, OpenRouter, Spotify, Pexels, Pixabay, YouTube)
    - Telegram bot token
    - Phone numbers (e.g., owner reminder/call target numbers)
    - Paths that include your username or sensitive dirs (use generic docs in `.env.example`)
    - The file `backend/asta.db` (it may contain stored API keys and chat/reminder data)
+   - `workspace/youtube/youtube_tokens.json` — OAuth tokens from YouTube Data API auth flow
+   - `workspace/youtube/client_secret.json` — Google OAuth client secret for YouTube upload
 
 ## Authentication
 
@@ -48,6 +53,8 @@ Asta supports **multi-user JWT authentication**. When users exist in the databas
 - `backend/asta.db` — DB with chat, reminders, stored API keys (Settings), Spotify tokens, **user accounts and password hashes**
 - `backend/chroma_db/` — RAG vectors
 - `workspace/users/` — per-user memory files
+- `workspace/youtube/youtube_tokens.json` — YouTube OAuth access/refresh tokens
+- `workspace/youtube/client_secret.json` — Google OAuth client secret for YouTube upload
 - Any file named `.env`, `.env.local`, or under `secrets/`
 
 See the project root **`.gitignore`** for the full list.

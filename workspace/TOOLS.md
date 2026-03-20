@@ -26,7 +26,7 @@ Skills define _how_ tools work. This file is for _your_ specifics — the stuff 
 
 ## Notion
 
-API key is configured in backend/.env as NOTION_API_KEY.
+API key is stored in the database (add via Settings > Keys as `notion_api_key`).
 
 Fill in the page/database IDs below so Asta knows where to save things.
 To find an ID: open the page in Notion → copy the URL → the ID is the last 32 characters.
@@ -66,9 +66,11 @@ The script handles all items in one shot. After execution, delete the script fil
 
 ## Architecture
 
-- **Frontend / UI**: The cross-platform desktop app (`MACWinApp/asta-app/`) built with Tauri v2 + React/TypeScript — this is what the user interacts with. Builds for macOS (DMG) and Windows (MSI).
-- **Backend**: FastAPI server at `backend/` — handles chat, tools, skills, Telegram bot.
-- When asked to make UI or frontend changes, the target is always the Tauri desktop app (`MACWinApp/asta-app/src/`).
+- **Desktop App**: Tauri v2 + React/TypeScript (`MACWinApp/asta-app/`) — builds for macOS (DMG) and Windows (MSI).
+- **Mobile App**: React Native / Expo (`MobileApp/`) — iOS and Android. Same backend, full feature parity.
+- **Backend**: FastAPI server at `backend/` — handles chat, tools, skills, cron, Telegram bot. Port 8010.
+- **YouTube Pipeline**: `workspace/scripts/youtube/` — automated video production (trends, source, script, edit, upload).
+- When asked to make UI or frontend changes, the target is the Tauri desktop app unless mobile is specified.
 
 ---
 

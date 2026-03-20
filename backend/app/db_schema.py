@@ -246,6 +246,81 @@ async def init_schema(conn: "aiosqlite.Connection", logger: logging.Logger) -> N
             role TEXT NOT NULL DEFAULT 'user',
             created_at TEXT NOT NULL
         );
+
+        -- Studio: YouTube channels
+        CREATE TABLE IF NOT EXISTS studio_channels (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            channel_name TEXT NOT NULL,
+            channel_youtube_id TEXT,
+            avatar_url TEXT,
+            oauth_tokens_json TEXT,
+            default_voice TEXT NOT NULL DEFAULT 'male',
+            default_caption_preset TEXT NOT NULL DEFAULT 'standard',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_studio_channels_user ON studio_channels(user_id);
+
+        -- Studio: video projects
+        CREATE TABLE IF NOT EXISTS studio_projects (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            channel_id TEXT,
+            title TEXT NOT NULL,
+            topic TEXT,
+            status TEXT NOT NULL DEFAULT 'draft',
+            format TEXT NOT NULL DEFAULT 'standard',
+            script_md TEXT,
+            metadata_json TEXT,
+            voice TEXT,
+            work_dir TEXT,
+            scheduled_at TEXT,
+            cron_job_id INTEGER,
+            render_progress INTEGER NOT NULL DEFAULT 0,
+            render_error TEXT,
+            video_path TEXT,
+            upload_result_json TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_studio_projects_user ON studio_projects(user_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_studio_projects_channel ON studio_projects(channel_id);
+        CREATE INDEX IF NOT EXISTS idx_studio_projects_status ON studio_projects(status);
+
+        -- Studio: reusable assets (intros, outros, subscribe, watermarks, music)
+        CREATE TABLE IF NOT EXISTS studio_assets (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            asset_type TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            duration_seconds REAL,
+            thumbnail_path TEXT,
+            channel_id TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_studio_assets_user ON studio_assets(user_id, asset_type);
+
+        -- Studio: render queue
+        CREATE TABLE IF NOT EXISTS studio_renders (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'queued',
+            step TEXT,
+            progress INTEGER NOT NULL DEFAULT 0,
+            output_path TEXT,
+            error TEXT,
+            started_at TEXT,
+            finished_at TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_studio_renders_project ON studio_renders(project_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_studio_renders_status ON studio_renders(status);
     """)
     await conn.commit()
 
@@ -406,6 +481,7 @@ async def _migrate_default_to_admin(conn: "aiosqlite.Connection", logger: loggin
         "saved_audio_notes", "pending_learn_about", "exec_approvals",
         "allowed_paths", "cron_jobs", "cron_job_runs", "subagent_runs",
         "usage_stats", "conversation_folders",
+        "studio_channels", "studio_projects", "studio_assets", "studio_renders",
     ]
     for table in _tables_with_user_id:
         try:

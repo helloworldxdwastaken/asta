@@ -11,7 +11,7 @@ import {
   getDefaultAI, getThinking, getMoodSetting, truncateConversation,
 } from "../../lib/api";
 import type { StreamChunk } from "../../lib/api";
-import { downloadPdf, downloadOfficeDoc } from "../../lib/api";
+import { downloadPdf, downloadOfficeDoc, downloadVideo } from "../../lib/api";
 import ProviderLogo from "../ProviderLogo";
 
 const STATUS_PREFIX = "[[ASTA_STATUS]]";
@@ -450,7 +450,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
   /** Extract generated PDF references from assistant message content (legacy path format) */
   const PDF_PATH_RE = /PDF generated:\s*(.*?[/\\]workspace[/\\]pdfs[/\\](.+?\.pdf))/gi;
   /** Extract download links emitted by generate_pdf / generate_pptx / generate_docx */
-  const DOWNLOAD_LINK_RE = /Download:\s*(\/api\/files\/download-(?:pdf|office)\/([^\s\n]+))/gi;
+  const DOWNLOAD_LINK_RE = /Download:\s*(\/api\/files\/download-(?:pdf|office|video)\/([^\s\n]+))/gi;
 
   interface DownloadLink { url: string; name: string; }
 
@@ -491,10 +491,15 @@ export default function ChatView({ conversationId, onConversationCreated, agents
         e.preventDefault();
         e.stopPropagation();
         if (!href) return;
-        if (href.includes("/api/files/download-pdf/") || href.includes("/api/files/download-office/")) {
-          const filename = decodeURIComponent(href.split("/").pop() ?? "download");
-          const fn = href.includes("/download-pdf/") ? downloadPdf : downloadOfficeDoc;
-          fn(filename).catch(err => alert(`Download failed: ${err?.message ?? err}`));
+        if (href.includes("/api/files/download-pdf/") || href.includes("/api/files/download-office/") || href.includes("/api/files/download-video/")) {
+          if (href.includes("/download-video/")) {
+            const videoPath = decodeURIComponent(href.replace(/.*\/api\/files\/download-video\//, ""));
+            downloadVideo(videoPath).catch(err => alert(`Download failed: ${err?.message ?? err}`));
+          } else {
+            const filename = decodeURIComponent(href.split("/").pop() ?? "download");
+            const fn = href.includes("/download-pdf/") ? downloadPdf : downloadOfficeDoc;
+            fn(filename).catch(err => alert(`Download failed: ${err?.message ?? err}`));
+          }
         } else {
           // Open external links in system browser, not inside the webview
           import("@tauri-apps/plugin-opener").then(({ openUrl }) => openUrl(href)).catch(() => {
@@ -526,7 +531,7 @@ export default function ChatView({ conversationId, onConversationCreated, agents
   const closeMenus = () => { setShowProviderMenu(false); setShowThinkingMenu(false); setShowAgentMenu(false); };
 
   return (
-    <div className="relative flex flex-col h-full bg-surface"
+    <div className="relative flex flex-col flex-1 min-h-0 bg-surface"
       onClick={closeMenus}
       onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
 

@@ -83,3 +83,39 @@ cloudflared.log
 
 # Claude worktrees
 MACWinApp/.claude/
+
+# Build artifacts (DMG, IPA, staging dirs)
+*.dmg
+*.ipa
+dmg_staging/
+MACWinApp/asta-app/dmg_staging/
+
+# Debug / one-off scripts
+reproduce_*.py
+verify_*.py
+backend/all_notes.txt
+backend/holon_search.txt
+
+# Workspace generated data (personal, large, or transient)
+workspace/youtube/
+workspace/office_docs/
+workspace/research/
+workspace/memos/
+workspace/pdfs/
+workspace/indexing/
+workspace/notion_search.json
+workspace/*-summary.md
+workspace/*-pdf-summary.md
+
+# YouTube OAuth tokens
+workspace/youtube/youtube_tokens.json
+workspace/youtube/client_secret.json
+
+# Tmp scripts (generated one-offs)
+workspace/scripts/tmp/
+
+# Backend workspace (generated pipeline data)
+backend/workspace/
+
+# Old/backup assets
+MobileApp/assets/icon_old.png

@@ -10,13 +10,13 @@ import {
   createFolder, deleteFolder, renameFolder, assignConversationFolder,
   truncateConversation,
 } from "../lib/api";
-import { clearAuth, getUser } from "../lib/auth";
+import { getUser } from "../lib/auth";
 import type { Conversation, Folder, User } from "../lib/types";
 import {
-  IconPlus, IconFolder, IconSearch, IconSettings,
-  IconLogout, IconX, IconWifi, IconWifiOff,
-  IconNewFolder, IconChevronDown, IconChevronRight,
+  IconPlus, IconFolder, IconSearch, IconSettings, IconClock,
+  IconX, IconNewFolder, IconChevronDown, IconChevronRight, IconCheck,
 } from "./Icons";
+import ProjectFiles from "./ProjectFiles";
 
 interface Props {
   conversationId?: string;
@@ -24,14 +24,14 @@ interface Props {
   onSelectConversation: (id: string) => void;
   onNewChat: () => void;
   onOpenSettings: () => void;
-  onLogout: () => void;
+  onOpenAutomations: () => void;
   onClose: () => void;
   refreshTrigger: number;
 }
 
 export default function Drawer({
   conversationId, serverOk, onSelectConversation, onNewChat,
-  onOpenSettings, onLogout, onClose, refreshTrigger,
+  onOpenSettings, onOpenAutomations, onClose, refreshTrigger,
 }: Props) {
   const insets = useSafeAreaInsets();
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -43,6 +43,8 @@ export default function Drawer({
   const [showNewFolder, setShowNewFolder] = useState(false);
   const [moveConvId, setMoveConvId] = useState<string | null>(null);
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
+  const [renameFolderId, setRenameFolderId] = useState<string | null>(null);
+  const [renameFolderName, setRenameFolderName] = useState("");
 
   const load = useCallback(async () => {
     listConversations(80).then((r) => setConversations(r.conversations || [])).catch(() => {});
@@ -99,6 +101,30 @@ export default function Drawer({
     } catch {}
   }
 
+  function showFolderActions(f: Folder) {
+    if (Platform.OS === "web") {
+      const action = prompt("Type 'rename' or 'delete':");
+      if (action === "delete") confirmDeleteFolder(f);
+      else if (action === "rename") { setRenameFolderId(f.id); setRenameFolderName(f.name); }
+      return;
+    }
+    Alert.alert(f.name, undefined, [
+      { text: "Cancel", style: "cancel" },
+      { text: "Rename", onPress: () => { setRenameFolderId(f.id); setRenameFolderName(f.name); } },
+      { text: "Delete", style: "destructive", onPress: () => doDeleteFolder(f.id) },
+    ]);
+  }
+
+  async function handleRenameFolder() {
+    if (!renameFolderId || !renameFolderName.trim()) return;
+    try {
+      await renameFolder(renameFolderId, renameFolderName.trim());
+      setFolders(p => p.map(f => f.id === renameFolderId ? { ...f, name: renameFolderName.trim() } : f));
+    } catch {}
+    setRenameFolderId(null);
+    setRenameFolderName("");
+  }
+
   async function moveConversation(convId: string, folderId: string | null) {
     try {
       await assignConversationFolder(convId, folderId);
@@ -151,16 +177,6 @@ export default function Drawer({
     setConversations((p) => p.filter((c) => c.id !== id));
   }
 
-  function handleLogout() {
-    if (Platform.OS === "web") {
-      if (confirm("Sign out?")) { clearAuth().then(onLogout); }
-      return;
-    }
-    Alert.alert("Sign Out", "Are you sure?", [
-      { text: "Cancel", style: "cancel" },
-      { text: "Sign Out", style: "destructive", onPress: () => clearAuth().then(onLogout) },
-    ]);
-  }
 
   function fmtTime(d?: string): string {
     if (!d) return "";
@@ -207,10 +223,21 @@ export default function Drawer({
 
   return (
     <View style={[styles.container, { paddingTop: insets.top + 8, paddingBottom: insets.bottom + 8 }]}>
+      {/* Asta branding */}
+      <View style={styles.brandRow}>
+        <Text style={styles.brandTitle}>Asta</Text>
+      </View>
+
       {/* New Chat button */}
       <TouchableOpacity style={styles.newChatBtn} onPress={() => { onNewChat(); onClose(); }} activeOpacity={0.7}>
         <IconPlus size={16} color="#fff" />
         <Text style={styles.newChatText}>New Chat</Text>
+      </TouchableOpacity>
+
+      {/* Automations button */}
+      <TouchableOpacity style={styles.automationsBtn} onPress={() => { onOpenAutomations(); onClose(); }} activeOpacity={0.7}>
+        <IconClock size={16} color={colors.labelSecondary} />
+        <Text style={styles.automationsText}>Automations</Text>
       </TouchableOpacity>
 
       {/* Search toggle */}
@@ -260,21 +287,36 @@ export default function Drawer({
               const collapsed = collapsedFolders.has(f.id);
               return (
                 <View key={f.id} style={styles.folderBlock}>
-                  <TouchableOpacity
-                    style={styles.folderHeader}
-                    onPress={() => toggleFolderCollapse(f.id)}
-                    onLongPress={() => confirmDeleteFolder(f)}
-                    activeOpacity={0.7}
-                  >
-                    {collapsed
-                      ? <IconChevronRight size={12} color={colors.labelTertiary} />
-                      : <IconChevronDown size={12} color={colors.labelTertiary} />
-                    }
-                    <IconFolder size={14} color={f.color || colors.accent} />
-                    <Text style={styles.folderName}>{f.name}</Text>
-                    <Text style={styles.folderCount}>{chats.length}</Text>
-                  </TouchableOpacity>
+                  {renameFolderId === f.id ? (
+                    <View style={styles.newFolderRow}>
+                      <TextInput style={styles.newFolderInput} value={renameFolderName}
+                        onChangeText={setRenameFolderName} autoFocus
+                        onSubmitEditing={handleRenameFolder} />
+                      <TouchableOpacity onPress={handleRenameFolder} activeOpacity={0.7}>
+                        <IconCheck size={16} color={colors.accent} />
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => setRenameFolderId(null)} activeOpacity={0.7}>
+                        <IconX size={16} color={colors.labelTertiary} />
+                      </TouchableOpacity>
+                    </View>
+                  ) : (
+                    <TouchableOpacity
+                      style={styles.folderHeader}
+                      onPress={() => toggleFolderCollapse(f.id)}
+                      onLongPress={() => showFolderActions(f)}
+                      activeOpacity={0.7}
+                    >
+                      {collapsed
+                        ? <IconChevronRight size={12} color={colors.labelTertiary} />
+                        : <IconChevronDown size={12} color={colors.labelTertiary} />
+                      }
+                      <IconFolder size={14} color={f.color || colors.accent} />
+                      <Text style={styles.folderName}>{f.name}</Text>
+                      <Text style={styles.folderCount}>{chats.length}</Text>
+                    </TouchableOpacity>
+                  )}
                   {!collapsed && chats.map((c) => <ChatRow key={c.id} item={c} />)}
+                  {!collapsed && <ProjectFiles folderId={f.id} />}
                 </View>
               );
             })}
@@ -290,9 +332,16 @@ export default function Drawer({
             <Text style={styles.emptyText}>No conversations yet</Text>
           )}
         </View>
+      </ScrollView>
 
-        {/* Move to folder overlay */}
-        {moveConvId && (
+      {/* Move to folder overlay — outside ScrollView so absolute positioning works */}
+      {moveConvId && (
+        <>
+          <TouchableOpacity
+            style={styles.moveBackdrop}
+            onPress={() => setMoveConvId(null)}
+            activeOpacity={1}
+          />
           <View style={styles.moveOverlay}>
             <Text style={styles.moveTitle}>Move to folder</Text>
             <TouchableOpacity style={styles.moveOption} onPress={() => moveConversation(moveConvId, null)} activeOpacity={0.7}>
@@ -308,18 +357,11 @@ export default function Drawer({
               <Text style={{ fontSize: 13, color: colors.danger, fontWeight: "600" }}>Cancel</Text>
             </TouchableOpacity>
           </View>
-        )}
-      </ScrollView>
+        </>
+      )}
 
-      {/* Bottom: profile + settings */}
+      {/* Bottom: user + settings */}
       <View style={styles.bottomBar}>
-        <View style={styles.statusRow}>
-          {serverOk ? <IconWifi size={12} /> : <IconWifiOff size={12} />}
-          <Text style={[styles.statusText, { color: serverOk ? colors.success : colors.danger }]}>
-            {serverOk ? "Online" : "Offline"}
-          </Text>
-        </View>
-
         <View style={styles.profileRow}>
           <View style={styles.avatar}>
             <Text style={styles.avatarLetter}>
@@ -328,26 +370,21 @@ export default function Drawer({
           </View>
           <View style={styles.profileInfo}>
             <Text style={styles.profileName} numberOfLines={1}>{user?.username || "User"}</Text>
-            {user?.role && (
-              <View style={styles.roleBadge}>
-                <Text style={styles.roleBadgeText}>{user.role}</Text>
-              </View>
-            )}
+            <View style={styles.statusDotRow}>
+              <View style={[styles.statusDot, { backgroundColor: serverOk ? colors.success : colors.danger }]} />
+              {user?.role && (
+                <View style={styles.roleBadge}>
+                  <Text style={styles.roleBadgeText}>{user.role}</Text>
+                </View>
+              )}
+            </View>
           </View>
-        </View>
-
-        <View style={styles.bottomActions}>
           <TouchableOpacity
-            style={styles.bottomBtn}
+            style={styles.settingsCircle}
             onPress={() => { onOpenSettings(); onClose(); }}
             activeOpacity={0.7}
           >
             <IconSettings size={18} color={colors.labelSecondary} />
-            <Text style={styles.bottomBtnText}>Settings</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.bottomBtn} onPress={handleLogout} activeOpacity={0.7}>
-            <IconLogout size={18} color={colors.danger} />
-            <Text style={[styles.bottomBtnText, { color: colors.danger }]}>Sign Out</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -362,6 +399,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
 
+  // Brand
+  brandRow: {
+    paddingVertical: 8,
+    marginBottom: spacing.sm,
+  },
+  brandTitle: {
+    fontSize: 22, fontWeight: "800", color: colors.label,
+    letterSpacing: -0.5,
+  },
+
   // New Chat
   newChatBtn: {
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
@@ -371,6 +418,17 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   newChatText: { color: "#fff", fontSize: 14, fontWeight: "600" },
+
+  // Automations
+  automationsBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
+    backgroundColor: colors.white05,
+    borderWidth: 1, borderColor: colors.separator,
+    borderRadius: radius.md,
+    paddingVertical: 10,
+    marginBottom: spacing.md,
+  },
+  automationsText: { color: colors.labelSecondary, fontSize: 13, fontWeight: "600" },
 
   // Search toggle
   searchToggleRow: {
@@ -446,9 +504,14 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.separator,
   },
   // Move to folder
+  moveBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    zIndex: 99,
+  },
   moveOverlay: {
     position: "absolute", left: spacing.md, right: spacing.md,
-    top: 120, backgroundColor: colors.surfaceRaised,
+    top: "30%", backgroundColor: colors.surfaceRaised,
     borderRadius: radius.md, padding: spacing.md,
     borderWidth: 1, borderColor: colors.separator,
     shadowColor: "#000", shadowOffset: { width: 0, height: 4 },
@@ -474,15 +537,8 @@ const styles = StyleSheet.create({
     borderTopWidth: 1, borderTopColor: colors.separator,
     paddingTop: spacing.md,
   },
-  statusRow: {
-    flexDirection: "row", alignItems: "center", gap: 6,
-    marginBottom: spacing.sm,
-  },
-  statusText: { fontSize: 11, fontWeight: "600" },
-
   profileRow: {
     flexDirection: "row", alignItems: "center", gap: spacing.sm,
-    marginBottom: spacing.md,
   },
   avatar: {
     width: 32, height: 32, borderRadius: 16,
@@ -490,22 +546,22 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   avatarLetter: { color: "#fff", fontSize: 14, fontWeight: "700" },
-  profileInfo: { flex: 1, flexDirection: "row", alignItems: "center", gap: 6 },
+  profileInfo: { flex: 1, gap: 2 },
   profileName: { fontSize: 14, fontWeight: "600", color: colors.label },
+  statusDotRow: { flexDirection: "row", alignItems: "center", gap: 6 },
+  statusDot: {
+    width: 6, height: 6, borderRadius: 3,
+  },
   roleBadge: {
     backgroundColor: colors.accentSubtle,
     paddingHorizontal: 6, paddingVertical: 1,
     borderRadius: radius.full,
   },
   roleBadgeText: { fontSize: 9, color: colors.accent, fontWeight: "700", textTransform: "uppercase" },
-
-  bottomActions: { flexDirection: "row", gap: spacing.sm },
-  bottomBtn: {
-    flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6,
+  settingsCircle: {
+    width: 36, height: 36, borderRadius: 18,
     backgroundColor: colors.white05,
-    borderRadius: radius.sm,
-    paddingVertical: 10,
     borderWidth: 1, borderColor: colors.separator,
+    alignItems: "center", justifyContent: "center",
   },
-  bottomBtnText: { fontSize: 12, fontWeight: "600", color: colors.labelSecondary },
 });

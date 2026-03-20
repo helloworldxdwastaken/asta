@@ -1,0 +1,20 @@
+{
+  "servers": {
+    "notion": {
+      "command": "npx",
+      "args": ["--yes", "@notionhq/notion-mcp-server"],
+      "env": {
+        "NOTION_TOKEN": "${NOTION_API_KEY}"
+      },
+      "enabled": true
+    },
+    "github": {
+      "command": "github-mcp-server",
+      "args": ["stdio"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      },
+      "enabled": true
+    }
+  }
+}

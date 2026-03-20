@@ -1,6 +1,6 @@
 # Asta — Installation (macOS, Linux, Windows)
 
-**Native install only** (no Docker). You need **Python 3.12 or 3.13** (3.14 not yet supported by pydantic/ChromaDB). The primary UI is the **desktop app** (`MACWinApp/asta-app/`) — a cross-platform Tauri app that runs on macOS and Windows. Supports multi-user authentication with admin/user roles.
+**Native install only** (no Docker). You need **Python 3.12 or 3.13** (3.14 not yet supported by pydantic/ChromaDB). The primary UI is the **desktop app** (`MACWinApp/asta-app/`) — a cross-platform Tauri app that runs on macOS and Windows — plus a **mobile app** (`MobileApp/`) for iOS and Android (Expo SDK 55). Supports multi-user authentication with admin/user roles.
 
 ---
 
@@ -56,7 +56,34 @@ npx tauri build
 
 Connect the app to `http://localhost:8010` in Settings → Connection.
 
-### 4. Multi-user setup
+### 4. Mobile app
+
+The mobile app at `MobileApp/` is built with **Expo SDK 55** (React Native + TypeScript). It connects to `https://asta.noxamusic.com` by default (configurable in Settings → Connection).
+
+```bash
+cd MobileApp
+npm install
+npx expo start          # dev mode (scan QR with Expo Go)
+npx expo export --platform web   # verify build
+```
+
+To build a native IPA/APK:
+
+```bash
+npx eas build --platform ios     # requires EAS account + Apple Developer
+npx eas build --platform android
+```
+
+### 4a. YouTube pipeline prerequisites
+
+The YouTube automation pipeline (`workspace/scripts/youtube/pipeline.py`) requires:
+
+- **FFmpeg** — `brew install ffmpeg` (macOS) or `sudo apt install ffmpeg` (Linux)
+- **Whisper** (optional, for auto-captions) — `pip install openai-whisper` in the backend venv
+- **API keys**: set `pexels_api_key`, `pixabay_api_key`, `youtube_api_key` in **Settings → API keys** or `backend/.env`
+- `youtube-creator` and the five sub-skills must be present under `workspace/skills/`
+
+### 5. Multi-user setup
 
 On first run with no users in the database, Asta operates in **single-user mode** (open access, no login required). To enable multi-user authentication:
 
@@ -75,9 +102,9 @@ On first run with no users in the database, Asta operates in **single-user mode*
 
 **JWT secret:** Auto-generated on first login and stored in `backend/.env` as `ASTA_JWT_SECRET`. Tokens expire after 30 days.
 
-### 5. Optional
+### 6. Optional
 
-In the desktop app: **Settings** → add API keys (Groq, Gemini, Claude, OpenAI, OpenRouter, Hugging Face, Telegram, Spotify), set default AI (main runtime chain is fixed to `Claude -> Google -> OpenRouter -> Ollama`), choose **Thinking level** (`off/minimal/low/medium/high/xhigh`), **Reasoning visibility** (`off/on/stream`), and **Final tag mode** (`off/strict`), adjust **Vision controls** (preprocess toggle with fixed Nemotron model), and toggle skills. Set your **location** in Chat (e.g. "Holon, Israel") for time and weather.
+In the desktop app: **Settings** → add API keys (Groq, Gemini, Claude, OpenAI, OpenRouter, Hugging Face, Telegram, Spotify, Pexels, Pixabay, YouTube), set default AI (main runtime chain is fixed to `Claude -> Google -> OpenRouter -> Ollama`), choose **Thinking level** (`off/minimal/low/medium/high/xhigh`), **Reasoning visibility** (`off/on/stream`), and **Final tag mode** (`off/strict`), adjust **Vision controls** (preprocess toggle with fixed Nemotron model), and toggle skills. Set your **location** in Chat (e.g. "Holon, Israel") for time and weather.
 
 **Telegram commands:** `/status`, `/exec_mode`, `/allow`, `/allowlist`, `/approvals` (inline `Once/Always/Deny` actions, with automatic post-approval continuation), `/think` (aliases: `/thinking`, `/t`), `/reasoning`, `/subagents`.
 `/reasoning stream` emits live reasoning status on OpenAI/Groq/OpenRouter provider paths.
@@ -160,6 +187,9 @@ From the repo root, **`./asta.sh`** starts/stops the backend:
 | `ASTA_TOOL_TRACE_CHANNELS` | Trace footer channels, default `web` (Telegram footer suppressed; Telegram already gets skill-status pings) |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | Or set in Settings → Spotify |
 | `ASTA_BASE_URL` | Backend URL for Spotify OAuth redirect (optional) |
+| `PEXELS_API_KEY` | Pexels photo/video API for YouTube pipeline (or set in Settings → API keys) |
+| `PIXABAY_API_KEY` | Pixabay photo/video API for YouTube pipeline (or set in Settings → API keys) |
+| `YOUTUBE_API_KEY` | YouTube Data API v3 for trend discovery + upload (or set in Settings → API keys) |
 
 Many keys can also be set in **Settings → API keys** or **Settings → Spotify**; those are stored in the local DB and override `.env`. Restart the backend after changing the Telegram token.
 
@@ -198,13 +228,15 @@ See **docs/ERRORS.md** for a full list of common errors and fixes. Quick checks:
 
 ## Pre-built releases (recommended for end users)
 
-Download the latest release from [GitHub Releases](https://github.com/helloworldxdwastaken/asta/releases):
+Download the latest release from [GitHub Releases](https://github.com/helloworldxdwastaken/asta/releases) (current: **v1.4.7**):
 
 - **macOS (Apple Silicon):** `Asta_<version>_aarch64.dmg`
 - **macOS (Intel):** `Asta_<version>_x64.dmg`
 - **Windows:** `Asta_<version>_x64-setup.msi`
 
 Open the DMG/MSI, install, then start the backend separately (`./asta.sh start` or manually via Python).
+
+The desktop app includes an **auto-updater**: it checks GitHub Releases for newer versions and prompts you to install with a single click (Tauri updater plugin). The update endpoint is `https://github.com/helloworldxdwastaken/asta/releases/latest/download/latest.json`.
 
 ---
 

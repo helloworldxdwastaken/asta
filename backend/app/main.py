@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.auth_middleware import AuthMiddleware
 from app.config import get_settings
 from app.db import get_db, DB_PATH, _is_sqlite_locked_error
-from app.routers import chat, files, drive, rag, providers, tasks, settings as settings_router, spotify as spotify_router, audio as audio_router, cron as cron_router, agents as agents_router, auth as auth_router
+from app.routers import chat, files, drive, rag, providers, tasks, settings as settings_router, spotify as spotify_router, audio as audio_router, cron as cron_router, agents as agents_router, auth as auth_router, studio as studio_router
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +134,12 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.exception("Failed to start Telegram bot; continuing without it: %s", e)
     yield
+    # Shutdown: stop MCP servers
+    try:
+        from app import mcp_client
+        await mcp_client.shutdown()
+    except Exception as e:
+        logger.warning("MCP shutdown: %s", e)
     # Shutdown: stop Telegram bot
     if getattr(app.state, "telegram_app", None):
         tg = app.state.telegram_app
@@ -192,6 +198,7 @@ app.include_router(audio_router.router, prefix="/api", tags=["audio"])
 app.include_router(cron_router.router, prefix="/api", tags=["cron"])
 app.include_router(agents_router.router, tags=["agents"])
 app.include_router(auth_router.router, prefix="/api", tags=["auth"])
+app.include_router(studio_router.router, tags=["studio"])
 # Also mount at root so /settings/keys works if proxy strips /api
 app.include_router(settings_router.router, tags=["settings"])
 

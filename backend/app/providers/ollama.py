@@ -253,34 +253,6 @@ class OllamaProvider(BaseProvider):
         return "ollama"
 
     async def chat(self, messages: list[Message], **kwargs) -> ProviderResponse:
-        # Thinking injection: Kimi/Moonshot on Ollama requires strict system prompt to emit tokens.
-        thinking_level = kwargs.get("thinking_level")
-        if thinking_level and str(thinking_level).lower() not in ("off", "0", "false"):
-            think_instruction = (
-                "You are a deep thinking AI. "
-                "Always output your step-by-step reasoning process enclosed in <think> tags "
-                "before your final response."
-            )
-            # Add to context (system prompt)
-            ctx = kwargs.get("context") or ""
-            if think_instruction not in ctx:
-                kwargs["context"] = f"{ctx}\n\n{think_instruction}".strip()
-
-            # Compatibility path: some local reasoning models behave better with an explicit
-            # inline `/think <level>` directive on the final user turn.
-            injected_messages = [dict(m) for m in messages]
-            normalized_level = str(thinking_level).strip().lower()
-            for idx in range(len(injected_messages) - 1, -1, -1):
-                msg = injected_messages[idx]
-                if str(msg.get("role") or "").strip().lower() != "user":
-                    continue
-                content = str(msg.get("content") or "")
-                if content.strip().lower().startswith("/think"):
-                    break
-                msg["content"] = f"/think {normalized_level}\n\n{content}".strip()
-                break
-            messages = injected_messages
-
         base = get_ollama_base_url()
         tools = kwargs.get("tools")
         need_tools = bool(tools)
@@ -310,10 +282,6 @@ class OllamaProvider(BaseProvider):
             }
             if ollama_tools:
                 payload["tools"] = ollama_tools
-            
-            # Enable thinking for Qwen2.5/3 models
-            if "qwen" in model.lower():
-                payload["thinking"] = {"type": "enabled"}
 
             try:
                 async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT_SECONDS) as client:
@@ -362,19 +330,6 @@ class OllamaProvider(BaseProvider):
         on_text_delta: TextDeltaCallback | None = None,
         **kwargs,
     ) -> ProviderResponse:
-        # Thinking injection: Kimi/Moonshot on Ollama requires strict system prompt to emit tokens.
-        thinking_level = kwargs.get("thinking_level")
-        if thinking_level and str(thinking_level).lower() not in ("off", "0", "false"):
-            think_instruction = (
-                "You are a deep thinking AI. "
-                "Always output your step-by-step reasoning process enclosed in <think> tags "
-                "before your final response."
-            )
-            # Add to context (system prompt)
-            ctx = kwargs.get("context") or ""
-            if think_instruction not in ctx:
-                kwargs["context"] = f"{ctx}\n\n{think_instruction}".strip()
-
         base = get_ollama_base_url()
         tools = kwargs.get("tools")
         need_tools = bool(tools)
@@ -404,11 +359,7 @@ class OllamaProvider(BaseProvider):
             }
             if ollama_tools:
                 payload["tools"] = ollama_tools
-            
-            # Enable thinking for Qwen2.5/3 models
-            if "qwen" in model.lower():
-                payload["thinking"] = {"type": "enabled"}
-            
+
             content_parts: list[str] = []
             raw_tool_calls: list[Any] = []
             # Track if we're in a thinking block for streaming

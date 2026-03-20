@@ -26,10 +26,24 @@ OUTPUT_EVENT_TAIL_CHARS = 20_000
 DB_API_KEY_ENV_MAP: dict[str, str] = {
     "notion_api_key": "NOTION_API_KEY",
     "giphy_api_key": "GIPHY_API_KEY",
+    "youtube_api_key": "YOUTUBE_API_KEY",
+    "pexels_api_key": "PEXELS_API_KEY",
+    "pixabay_api_key": "PIXABAY_API_KEY",
+    "github_token": "GITHUB_TOKEN",
+}
+
+# Keys whose DB value is JSON content that should be written to a temp file;
+# the env var receives the file path (not the raw content).
+DB_JSON_FILE_ENV_MAP: dict[str, str] = {
+    "google_service_account": "GOOGLE_APPLICATION_CREDENTIALS",
 }
 ALWAYS_SENSITIVE_ENV_VARS = frozenset({
     "NOTION_API_KEY",
     "GIPHY_API_KEY",
+    "YOUTUBE_API_KEY",
+    "PEXELS_API_KEY",
+    "PIXABAY_API_KEY",
+    "GITHUB_TOKEN",
     "OPENAI_API_KEY",
     "OPENROUTER_API_KEY",
     "ANTHROPIC_API_KEY",
@@ -39,6 +53,7 @@ ALWAYS_SENSITIVE_ENV_VARS = frozenset({
     "HUGGINGFACE_API_KEY",
     "SPOTIFY_CLIENT_SECRET",
     "TELEGRAM_BOT_TOKEN",
+    "GOOGLE_APPLICATION_CREDENTIALS",
 })
 _REDACTED_SECRET = "[REDACTED_SECRET]"
 _REDACTED_NOTION_TOKEN = "[REDACTED_NOTION_TOKEN]"
@@ -402,6 +417,7 @@ async def run_allowlisted_command(
     # Inject keys from DB into environment (e.g. NOTION_API_KEY for curl)
     env = os.environ.copy()
     injected_secret_values: list[str] = []
+    _temp_files: list[str] = []
     try:
         from app.db import get_db
         db = get_db()
@@ -412,10 +428,24 @@ async def run_allowlisted_command(
             if val:
                 env[env_var] = val
                 injected_secret_values.append(val)
+        # JSON-content keys: write to temp file, inject path
+        import tempfile
+        for db_key, env_var in DB_JSON_FILE_ENV_MAP.items():
+            val = await db.get_stored_api_key(db_key)
+            if val:
+                tmp = tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".json", prefix=f"asta_{db_key}_", delete=False,
+                )
+                tmp.write(val)
+                tmp.close()
+                _temp_files.append(tmp.name)
+                env[env_var] = tmp.name
+                injected_secret_values.append(val)
     except Exception as e:
         logger.warning("Failed to inject DB keys into exec environment: %s", e)
 
-    sensitive_env_vars = _build_sensitive_env_set(set(DB_API_KEY_ENV_MAP.values()))
+    all_env_vars = set(DB_API_KEY_ENV_MAP.values()) | set(DB_JSON_FILE_ENV_MAP.values())
+    sensitive_env_vars = _build_sensitive_env_set(all_env_vars)
     block_reason = _maybe_block_secret_dump_command(cmd, sensitive_env_vars)
     if block_reason:
         logger.warning("Exec blocked for potential secret exposure: %s", cmd[:200])
@@ -459,6 +489,12 @@ async def run_allowlisted_command(
     except Exception as e:
         logger.warning("Exec failed for %s: %s", cmd[:80], e)
         return "", str(e), False
+    finally:
+        for tf in _temp_files:
+            try:
+                os.unlink(tf)
+            except OSError:
+                pass
 
 
 def get_exec_tool_openai_def(allowed_bins: set[str], security_mode: str | None = None) -> list[dict]:

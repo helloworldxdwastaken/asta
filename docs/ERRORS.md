@@ -133,6 +133,24 @@ Quick reference for errors you might see and how to fix them.
 | **Daily Auto-Update not created** | Auto-updater skill missing or backend not restarted | Ensure `workspace/skills/auto-updater-100` exists and restart backend. Or add a cron manually in the **Cron** tab or via `POST /api/cron`. |
 | **Cron job not firing** | Scheduler not loaded or job disabled | Restart backend (cron jobs reload on startup). In Cron tab, ensure the job is listed and enabled. |
 
+### YouTube pipeline
+
+| Symptom | Cause | Solution |
+|---------|-------|----------|
+| **`ffmpeg: command not found`** | FFmpeg not installed | `brew install ffmpeg` (macOS) or `sudo apt install ffmpeg` (Linux). Ensure it is on the PATH available to the backend process. |
+| **`PEXELS_API_KEY not set` / `PIXABAY_API_KEY not set` / `YOUTUBE_API_KEY not set`** | API keys missing | Set `pexels_api_key`, `pixabay_api_key`, or `youtube_api_key` in **Settings → API keys**. They are injected as env vars by exec_tool.py. |
+| **Ken Burns effect applied to video clips (should only apply to photos)** | Pipeline mis-classifies file type | Ensure `pipeline.py` is up to date. The Ken Burns zoompan filter should only run on still images (`.jpg`, `.jpeg`, `.png`, `.webp`), not `.mp4`/`.mov` clips. |
+| **ASS caption file path contains colons (`:`), causing FFmpeg filter parse error** | Windows-style paths or drive letters in subtitle path | Keep `workspace/` on a Unix-style path. On Windows use WSL or a path without drive-letter colons. Use the `ass` filter escape syntax if needed: `ass=filename\\=path`. |
+| **Upload fails: `quotaExceeded` or `403`** | YouTube Data API daily quota exhausted | Check quota usage in Google Cloud Console. Wait for daily reset (midnight Pacific) or request a quota increase. |
+| **Video download link returns 404** | Video not yet generated or wrong date folder | Check `workspace/youtube/YYYY-MM-DD/output/` on the backend host. The path in the chat link must match the actual output folder. |
+
+### Document generation
+
+| Symptom | Cause | Solution |
+|---------|-------|----------|
+| **`generate_pdf` / `generate_docx` / `generate_pptx` / `generate_xlsx` tool not found** | Tool not registered or skill not enabled | Ensure the relevant skill (pdf/docx/pptx/xlsx) is enabled in Settings → Skills and the backend is restarted. |
+| **Download link returns 404** | File not written to `workspace/office_docs/` or wrong endpoint | Check that `workspace/office_docs/` exists and is writable. Use `/api/files/download-office/` for DOCX/PPTX/XLSX and `/api/files/download-pdf/` for PDFs. |
+
 ### Apple Notes / Exec (memo)
 
 | Symptom | Cause | Solution |

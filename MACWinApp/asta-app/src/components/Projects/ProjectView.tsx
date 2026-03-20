@@ -1,8 +1,10 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { IconFolder, IconNewFolder } from "../../lib/icons";
 import {
   listConversations, listFolders, createFolder,
   assignConversationFolder, renameFolder,
+  uploadProjectFile, listProjectFiles, deleteProjectFile,
+  ProjectFile,
 } from "../../lib/api";
 
 interface Conversation {
@@ -26,6 +28,11 @@ export default function ProjectView({ folderId, onSelectChat, onBack }: Props) {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameText, setRenameText] = useState("");
 
+  // Project file management
+  const [projectFiles, setProjectFiles] = useState<ProjectFile[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const refresh = useCallback(async () => {
     try {
       const [c, f] = await Promise.all([listConversations(), listFolders()]);
@@ -35,7 +42,47 @@ export default function ProjectView({ folderId, onSelectChat, onBack }: Props) {
     setLoading(false);
   }, []);
 
+  const refreshFiles = useCallback(async () => {
+    if (!folderId) return;
+    try {
+      const result = await listProjectFiles(folderId);
+      setProjectFiles(result.files ?? []);
+    } catch {}
+  }, [folderId]);
+
   useEffect(() => { refresh(); }, [refresh]);
+  useEffect(() => { if (folderId) refreshFiles(); }, [folderId, refreshFiles]);
+
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !folderId) return;
+    setUploading(true);
+    try {
+      await uploadProjectFile(folderId, file);
+      await refreshFiles();
+    } catch (err) {
+      console.error("Upload failed:", err);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function handleDeleteFile(filename: string) {
+    if (!folderId) return;
+    try {
+      await deleteProjectFile(folderId, filename);
+      await refreshFiles();
+    } catch (err) {
+      console.error("Delete failed:", err);
+    }
+  }
+
+  function fmtFileSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
 
   const folder = folderId ? folders.find(f => f.id === folderId) : null;
   const chatsInFolder = folderId
@@ -105,7 +152,7 @@ export default function ProjectView({ folderId, onSelectChat, onBack }: Props) {
         {/* Chats in project */}
         <div className="flex-1 overflow-y-auto px-6 py-4">
           {chatsInFolder.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-20 text-center">
+            <div className="flex flex-col items-center justify-center py-12 text-center">
               <IconFolder size={40} className="text-label-tertiary mb-4 opacity-40" />
               <p className="text-15 text-label-secondary font-medium mb-2">No chats in this project</p>
               <p className="text-13 text-label-tertiary mb-6 max-w-xs">Drag chats from your sidebar into this project, or right-click a chat and select "Move to project".</p>
@@ -126,6 +173,45 @@ export default function ProjectView({ folderId, onSelectChat, onBack }: Props) {
               ))}
             </div>
           )}
+
+          {/* Project files section */}
+          <div className="mt-5">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-[10px] font-semibold text-label-tertiary uppercase tracking-widest">Project Files</p>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading}
+                className="flex items-center gap-1.5 px-2.5 py-1 text-11 text-accent hover:bg-accent/10 rounded-mac transition-colors font-medium disabled:opacity-50"
+              >
+                {uploading ? (
+                  <div className="w-3 h-3 border border-accent/40 border-t-accent rounded-full animate-spin" />
+                ) : (
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                )}
+                Upload
+              </button>
+              <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileUpload} />
+            </div>
+            {projectFiles.length === 0 ? (
+              <p className="text-12 text-label-tertiary py-2">No files uploaded. Upload documents to give Asta context for this project.</p>
+            ) : (
+              <div className="space-y-0.5">
+                {projectFiles.map(f => (
+                  <div key={f.name} className="flex items-center gap-2 px-3 py-2 rounded-mac hover:bg-white/[.04] group">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-label-tertiary shrink-0"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                    <span className="text-12 text-label flex-1 truncate">{f.name}</span>
+                    <span className="text-11 text-label-tertiary shrink-0">{fmtFileSize(f.size)}</span>
+                    <button
+                      onClick={() => handleDeleteFile(f.name)}
+                      className="opacity-0 group-hover:opacity-100 text-label-tertiary hover:text-red-400 transition-all ml-1"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* Quick-add unfiled chats */}
           {unfiledChats.length > 0 && (

@@ -7,6 +7,8 @@ import ProjectView from "./components/Projects/ProjectView";
 import SettingsSheet from "./components/Settings/SettingsSheet";
 import UpdateToast from "./components/UpdateToast";
 import AgentsSheet from "./components/Agents/AgentsSheet";
+import AutomationDashboard from "./components/Dashboard/AutomationDashboard";
+import StudioView from "./components/Studio/StudioView";
 import { getSetupDone } from "./lib/store";
 import { checkHealth, listAgents, autoResolveBackend, getMe } from "./lib/api";
 import { getJwt, getStoredUser, setAuth, clearAuth, User } from "./lib/auth";
@@ -24,6 +26,7 @@ export default function App() {
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showAgents, setShowAgents] = useState(false);
+  const [activeView, setActiveView] = useState<"chat" | "automations" | "studio">("chat");
   const [agents, setAgents] = useState<Agent[]>([]);
   const [sidebarRefresh, setSidebarRefresh] = useState(0);
   const [chatKey, setChatKey] = useState(0);
@@ -145,30 +148,62 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen bg-surface text-label overflow-hidden select-none grain">
-      {/* Sidebar — frosted glass */}
-      <div className="w-60 shrink-0 border-r border-separator relative glass-subtle">
-        <Sidebar
-          selectedId={conversationId}
-          onSelect={(id) => { setConversationId(id); setActiveProjectId(null); }}
-          onNewChat={handleNewChat}
-          onOpenSettings={userIsAdmin ? () => setShowSettings(true) : undefined}
-          onSelectProject={(id) => { setActiveProjectId(id); setConversationId(undefined); }}
-          isOnline={isOnline}
-          refreshTrigger={sidebarRefresh}
-          user={user || undefined}
-          onLogout={user ? handleLogout : undefined}
-        />
-      </div>
+    <div className={`flex h-screen bg-surface text-label overflow-hidden select-none grain ${activeView === "studio" ? "studio-env" : ""}`}>
+      {/* Sidebar — frosted glass (hidden in studio, which has its own nav) */}
+      {activeView !== "studio" && (
+        <div className="w-60 shrink-0 border-r border-separator relative glass-subtle">
+          <Sidebar
+            selectedId={conversationId}
+            onSelect={(id) => { setConversationId(id); setActiveProjectId(null); }}
+            onNewChat={handleNewChat}
+            onOpenSettings={userIsAdmin ? () => setShowSettings(true) : undefined}
+            onOpenDashboard={userIsAdmin ? () => setActiveView("automations") : undefined}
+            onOpenAgents={userIsAdmin ? () => setShowAgents(true) : undefined}
+            onSelectProject={(id) => { setActiveProjectId(id); setConversationId(undefined); }}
+            isOnline={isOnline}
+            refreshTrigger={sidebarRefresh}
+            user={user || undefined}
+            onLogout={user ? handleLogout : undefined}
+          />
+        </div>
+      )}
 
       {/* Main content */}
-      <div className="flex-1 min-w-0 relative">
+      <div className="flex-1 min-w-0 relative flex flex-col">
+        {/* Floating tab selector — overlays content, no banner */}
+        {activeProjectId === null && (
+          <div className="absolute top-2 left-1/2 -translate-x-1/2 z-20 pointer-events-none"
+               style={{ WebkitAppRegion: "drag" } as React.CSSProperties}>
+            <div className="flex bg-white/[.06] backdrop-blur-md rounded-lg p-0.5 shadow-lg pointer-events-auto"
+                 style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
+              {(["chat", ...(userIsAdmin ? ["automations", "studio"] as const : [])] as const).map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setActiveView(tab as any)}
+                  className={`px-4 py-1 text-12 font-medium rounded-md transition-all ${
+                    activeView === tab
+                      ? "bg-white/[.10] text-label shadow-sm"
+                      : "text-label-secondary hover:text-label"
+                  }`}
+                >
+                  {tab === "chat" ? "Chat" : tab === "automations" ? "Automations" : "Studio"}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* View content */}
         {activeProjectId !== null ? (
           <ProjectView
             folderId={activeProjectId}
             onSelectChat={(id) => { setConversationId(id); setActiveProjectId(null); }}
             onBack={() => setActiveProjectId(null)}
           />
+        ) : activeView === "studio" ? (
+          <StudioView />
+        ) : activeView === "automations" ? (
+          <AutomationDashboard onClose={() => setActiveView("chat")} />
         ) : (
           <ChatView
             key={chatKey}

@@ -2,7 +2,10 @@
 import asyncio
 import base64
 import json
-from fastapi import APIRouter, HTTPException, Query, Request
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -19,7 +22,7 @@ router = APIRouter()
 @router.get("/chat/conversations")
 async def list_conversations(
     request: Request,
-    channel: str = Query("web"),
+    channel: str | None = Query(None),
     limit: int = Query(50, ge=1, le=100),
 ):
     """Return list of conversations for the sidebar."""
@@ -114,6 +117,76 @@ async def delete_folder(request: Request, folder_id: str):
     db = get_db(); await db.connect()
     await db.delete_folder(folder_id, user_id)
     return {"ok": True}
+
+
+_WORKSPACE_ROOT = Path(__file__).resolve().parent.parent.parent.parent / "workspace"
+
+
+def _project_dir(folder_id: str) -> Path:
+    return _WORKSPACE_ROOT / "projects" / folder_id
+
+
+async def _verify_folder_owner(request: Request, folder_id: str):
+    """Verify the current user owns the folder. Raises 403 if not."""
+    user_id = get_current_user_id(request)
+    db = get_db()
+    await db.connect()
+    owner = await db.get_folder_owner(folder_id)
+    if not owner or owner != user_id:
+        raise HTTPException(status_code=403, detail="Folder not found or access denied")
+    return user_id
+
+
+@router.post("/chat/folders/{folder_id}/files")
+async def upload_project_file(
+    request: Request,
+    folder_id: str,
+    file: UploadFile = File(...),
+):
+    """Upload a file to a project folder."""
+    await _verify_folder_owner(request, folder_id)
+    project_dir = _project_dir(folder_id)
+    project_dir.mkdir(parents=True, exist_ok=True)
+    filename = os.path.basename(file.filename or "upload")
+    dest = project_dir / filename
+    content = await file.read()
+    dest.write_bytes(content)
+    return {"ok": True, "path": str(dest), "filename": filename}
+
+
+@router.get("/chat/folders/{folder_id}/files")
+async def list_project_files(request: Request, folder_id: str):
+    """List files in a project folder."""
+    await _verify_folder_owner(request, folder_id)
+    project_dir = _project_dir(folder_id)
+    if not project_dir.exists():
+        return {"files": []}
+    files = []
+    for p in sorted(project_dir.iterdir()):
+        if p.is_file() and p.name != "project.md":
+            stat = p.stat()
+            mtime = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            files.append({"name": p.name, "size": stat.st_size, "modified": mtime})
+    return {"files": files}
+
+
+@router.delete("/chat/folders/{folder_id}/files/{filename}")
+async def delete_project_file(request: Request, folder_id: str, filename: str):
+    """Delete a specific file from a project folder."""
+    await _verify_folder_owner(request, folder_id)
+    dest = _project_dir(folder_id) / os.path.basename(filename)
+    if dest.exists() and dest.is_file():
+        dest.unlink()
+    return {"ok": True}
+
+
+@router.get("/chat/folders/{folder_id}/context")
+async def get_project_context(request: Request, folder_id: str):
+    """Return the content of project.md for a project folder."""
+    await _verify_folder_owner(request, folder_id)
+    project_md = _project_dir(folder_id) / "project.md"
+    content = project_md.read_text(encoding="utf-8") if project_md.exists() else ""
+    return {"content": content}
 
 
 @router.put("/chat/conversations/{conversation_id}/folder")

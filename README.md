@@ -1,22 +1,21 @@
 # Asta
 
-A personal AI workspace that runs on **desktop (macOS/Windows)** and **Telegram** with one shared context, persistent chat history, and multi-user support.
+Your own AI workspace — one backend, every screen. Asta lets you bring your own API keys (Claude, Gemini, OpenAI, Groq, OpenRouter, Ollama), wire up skills that the model picks automatically, and talk to the same persistent context from a desktop app, a mobile app, or Telegram. Think of it as a self-hosted alternative to ChatGPT that you fully control: your keys, your data, your automations. Current version: **v1.4.7**.
 
 ## Preview
 
 ![Asta UI preview](./preview.png)
 
-## Why Asta
+## Features
 
-- **Cross-platform desktop app** — Tauri-based app (macOS + Windows) with sidebar conversation history, agent picker, PDF generation, and Tailscale remote access. Global shortcut `Alt+Space` to toggle.
-- **Multi-user authentication** — JWT-based login with admin/user roles, self-registration, and per-user memories. Role-based access control across all endpoints and tools.
-- Multi-provider AI: Groq, Google Gemini, Claude, OpenAI, OpenRouter, and Ollama.
-- OpenClaw-style skill flow: model selects the best workspace skill and reads its `SKILL.md` on demand.
-- Built-in skills: time/weather, web search, Spotify, reminders, audio notes, PDF generation, background learning, and Google Workspace (Gmail, Calendar, Drive via gog CLI).
-- Clear split between **built-in Python skills** (core/reliable) and **workspace `SKILL.md` skills** (import/custom).
-- Unified memory: persistent chat history (per-session), allowed local files, learned knowledge (RAG), and channel history.
-- **Automated releases**: GitHub Actions builds macOS (DMG) and Windows (MSI) on version tags, published to GitHub Releases.
-- Native setup: no Docker required.
+- **Cross-platform** — Tauri desktop app (macOS + Windows), Expo mobile app (iOS + Android), and Telegram bot, all sharing one backend.
+- **Multi-provider AI** — Groq, Google Gemini, Claude, OpenAI, OpenRouter, and Ollama with automatic fallback chain.
+- **Multi-user auth** — JWT login with admin/user roles, self-registration, per-user memories, and role-based access control.
+- **Skills** — the model selects the best workspace skill on demand. Built-in: web search, Spotify, reminders, document generation (PDF/DOCX/PPTX/XLSX), Google Workspace, and more. Drop a `SKILL.md` file to add your own.
+- **YouTube Automation** — end-to-end video pipeline: trend discovery, footage sourcing, AI scripting, FFmpeg editing, and YouTube upload. Schedule recurring content from the Automations Dashboard.
+- **Learning / RAG** — "learn about X for Y minutes" with retrievable context powered by Ollama embeddings.
+- **Auto-updater** — GitHub Actions builds macOS DMG and Windows MSI on version tags; the desktop app self-updates.
+- **No Docker required** — native setup with a single control script.
 
 ## Requirements
 
@@ -76,27 +75,43 @@ If the panel shows "API off", start the backend first or use **Settings -> Run t
 | `./asta.sh doc` | Run safe diagnostics (setup + service checks) |
 | `./asta.sh doc --fix` | Run diagnostics + auto-fix common setup/dependency issues |
 
-## Core Features
+## More Details
 
-- **Dashboard**: system overview — Brain (AI providers), Body (CPU/RAM/disk + model), Eyes (vision), Channels, Notes, Schedule (reminders + cron), Capabilities (skills count).
-- **Responsive dashboard layout**: medium/smaller screens now use adaptive card/vitals breakpoints for readable panel cards and metrics.
-- **Chat**: provider routing + automatic skill execution.
-- **Chat UX**: inline copy actions for user/assistant messages and editable past user turns that rewind conversation history from the edit point before re-running.
-- **Reasoning controls**: per-user **Thinking level** (`off/minimal/low/medium/high/xhigh`) and **Reasoning visibility** (`off/on/stream`) in Settings and Telegram commands. Now supports **OpenRouter Kimi/Trinity** (via `reasoning_effort` + auto-injected `<think>` tags) and Ollama. Stream mode now uses a dedicated message event state machine for chunk-time reasoning/assistant updates (with post-generation fallback when providers do not stream).
-- **Strict final mode**: optional `final_mode=strict` in Settings to show only text inside `<final>...</final>` blocks (OpenClaw-style enforcement).
-- **Web live streaming**: Chat UI uses `POST /api/chat/stream` (SSE) for real-time `assistant` and `reasoning` updates powered by OpenClaw-style stream lifecycle events (`message_start/text_delta/text_end/message_end`).
-- **OpenClaw-style main provider flow**: fixed priority chain `Claude -> Google -> OpenRouter -> Ollama`, with per-provider runtime enable/disable controls and auto-disable on billing/auth failures.
-- **Hybrid vision pipeline**: Telegram image turns run through a low-cost vision model first (default: OpenRouter Nemotron free), then your main agent model handles the final reply/tool flow using the extracted vision notes.
-- **Tool-first execution**: structured tools for exec/files/reminders/cron, OpenClaw-style `process` background session management, and single-user subagent orchestration (`sessions_spawn/list/history/send/stop`).
-- **Image generation fallback**: `image_gen` tool uses Gemini first and Hugging Face FLUX.1-dev fallback (provider-aware routing + 5 req/min guardrail). If a model incorrectly claims image tools are unavailable, backend now runs deterministic image fallback instead of returning a false denial.
-- **Subagent control UX**: deterministic `/subagents` command flow (`list/spawn/info/send/stop`, optional `--wait` on send) plus conservative auto-spawn for explicit long/background requests (toggle: `ASTA_SUBAGENTS_AUTO_SPAWN`).
-- **Files**: local knowledge files + allowed paths. User context (who you are) lives in per-user memory files (editable in Settings > Memories).
-- **Learning**: "learn about X for Y minutes" (also: "research/study/become an expert on X") with retrievable context.
-- **Schedule (Reminders + Cron)**: list, add, update, remove, and run recurring jobs or one-shot reminders. One-shot reminders (created via "Remind me at...") are now visible on the **Cron** page with a **One-Shot** badge for easier management.
-- **Automated Voice Calls (Pingram)**: triggering reliable phone calls for reminders and jobs via NotificationAPI (integration: Pingram). Supports custom **Pingram Templates** and fallback to default messages. Configure your phone number and credentials in the **Channels** page.
-- **Channels**: Telegram and Voice Calls (Pingram) integrations in one place.
-- **Settings/Skills**: key management, fixed main-provider flow, model policy controls, toggles, and backend controls.
-- **Vision controls in Settings**: preprocess toggle with fixed model `nvidia/nemotron-nano-12b-v2-vl:free` for UI consistency.
+<details>
+<summary>Desktop app</summary>
+
+- Sidebar with persistent conversation history
+- Agent picker with category-based colored icons
+- Automations Dashboard (cron control panel) — schedule recurring jobs, YouTube Growth presets
+- Document generation (PDF, DOCX, PPTX, XLSX) with in-chat download
+- Reasoning controls: per-user thinking level and visibility (streamed or post-generation)
+- Vision: drag-and-drop image input with hybrid vision pipeline
+- Image generation via Gemini (Hugging Face FLUX.1-dev fallback)
+- Tailscale remote access toggle
+- Global shortcut `Alt+Space` to show/hide
+- Auto-updater via GitHub Releases
+
+</details>
+
+<details>
+<summary>Chat and AI</summary>
+
+- SSE live streaming with real-time reasoning and assistant updates
+- Provider priority chain: Claude -> Google -> OpenRouter -> Ollama (auto-disable on auth failures)
+- Editable past user turns that rewind and re-run from the edit point
+- Subagent orchestration: spawn, list, send, stop background sessions
+- Configurable thinking level (`off` through `xhigh`) and strict final mode
+
+</details>
+
+<details>
+<summary>Channels and integrations</summary>
+
+- **Telegram**: bot commands (`/status`, `/exec_mode`, `/allow`, `/think`, `/subagents`), photo vision input, native media replies
+- **Voice calls (Pingram)**: phone call reminders via NotificationAPI with custom templates
+- **Reminders and cron**: one-shot and recurring jobs, visible in the Automations Dashboard
+
+</details>
 
 ## Channel Setup
 
@@ -127,27 +142,15 @@ Then run `ollama serve` (or open Ollama app). If Ollama is unavailable, learning
 
 ## Desktop App
 
-The cross-platform desktop app lives in `MACWinApp/asta-app/`. It's built with **Tauri v2** (Rust + React/TypeScript).
-
-**Features:**
-- Sidebar with persistent conversation history (click to reload any past chat)
-- Agent picker in chat with category-based colored icons (selection stays on the same chat until changed)
-- Agents hub in sidebar (below **New chat**) to search/add/remove/create agents
-- Message actions in chat: copy under both sides, plus edit/re-run for past user turns
-- PDF generation: ask Asta to create PDFs (contracts, reports, invoices) — downloads directly in chat
-- Settings panel: API keys, providers, Tailscale remote access, Spotify
-- Remote access via Tailscale: "Enable HTTPS Tunnel" sets up `tailscale serve` for a proper `https://machine.ts.net` link to share with other devices
-- File drag-and-drop in chat
-- Provider icons in model dropdown and message badges
-- Global shortcut `Alt+Space` to show/hide the app from anywhere
+The desktop app lives in `MACWinApp/asta-app/` — **Tauri v2** (Rust + React/TypeScript).
 
 **Releasing:**
 ```bash
 # Bump version in VERSION, Cargo.toml, and tauri.conf.json, then:
-git tag v1.4.2
+git tag v1.4.7
 git push origin main --tags
 ```
-GitHub Actions automatically builds macOS DMG (Apple Silicon + Intel) and Windows MSI, then publishes them to [GitHub Releases](https://github.com/helloworldxdwastaken/asta/releases).
+GitHub Actions automatically builds macOS DMG (Apple Silicon + Intel) and Windows MSI, then publishes them to [GitHub Releases](https://github.com/helloworldxdwastaken/asta/releases). The `latest.json` updater manifest is included in the release for the auto-updater.
 
 **Build:**
 ```bash
@@ -163,6 +166,19 @@ npm install
 npx tauri dev
 ```
 
+## Mobile App
+
+The mobile app lives in `MobileApp/` — **Expo SDK 55** (React Native + TypeScript), full feature parity with desktop.
+
+**Dev:**
+```bash
+cd MobileApp
+npm install
+npx expo start    # scan QR with Expo Go for quick preview
+```
+
+**API base:** Points to your backend URL (configurable in Settings → Connection).
+
 ## Project Structure
 
 ```text
@@ -172,6 +188,17 @@ asta/
 │   └── asta-app/      # Tauri app source
 │       ├── src/       # React frontend
 │       └── src-tauri/ # Rust backend (Tauri commands)
+├── MobileApp/         # iOS/Android mobile app (Expo SDK 55 + React Native)
+│   ├── src/
+│   │   ├── components/ # Drawer, Icons, ProviderIcon, Toggle, …
+│   │   ├── screens/    # ChatScreen, SettingsScreen, …
+│   │   └── lib/        # api.ts, auth helpers
+│   └── assets/         # Provider logos, fonts
+├── workspace/
+│   ├── skills/        # SKILL.md workspace skills (incl. youtube-* pipeline skills)
+│   ├── scripts/youtube/ # pipeline.py and video editing helpers
+│   ├── youtube/       # Pipeline output videos (dated folders)
+│   └── office_docs/   # Generated PDF/DOCX/PPTX/XLSX files
 ├── scripts/           # helper scripts (RAG/Ollama setup)
 ├── docs/              # install, spec, errors, security
 ├── asta.sh            # start/stop/restart/status/doc
@@ -180,6 +207,10 @@ asta/
 └── README.md
 ```
 
+## Contributing
+
+Contributions are welcome. Open an issue to discuss larger changes before submitting a PR.
+
 ## License
 
-Use and modify freely.
+[PolyForm Noncommercial 1.0.0](LICENSE) — free for personal and noncommercial use.

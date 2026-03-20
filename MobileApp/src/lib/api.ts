@@ -226,7 +226,7 @@ function streamChatXHR(
 
 // ── Conversations ───────────────────────────────────────────
 export const listConversations = (limit = 50) =>
-  req<{ conversations: Conversation[] }>("GET", `/api/chat/conversations?channel=mobile&limit=${limit}`);
+  req<{ conversations: Conversation[] }>("GET", `/api/chat/conversations?limit=${limit}`);
 export const loadMessages = (conversationId: string) =>
   req<{ messages: Message[] }>("GET", `/api/chat/messages?conversation_id=${conversationId}`);
 export const deleteConversation = (id: string) =>
@@ -241,6 +241,37 @@ export const renameFolder = (id: string, name: string) => req("PATCH", `/api/cha
 export const deleteFolder = (id: string) => req("DELETE", `/api/chat/folders/${id}`);
 export const assignConversationFolder = (convId: string, folderId: string | null) =>
   req("PUT", `/api/chat/conversations/${convId}/folder`, { folder_id: folderId });
+
+// ── Project Files ──────────────────────────────────────
+export interface ProjectFile { name: string; size: number; modified: string; }
+
+export async function uploadProjectFile(folderId: string, fileUri: string, fileName: string, mimeType: string): Promise<{ ok: boolean; filename: string; path: string }> {
+  const base = await getBackendUrl();
+  const headers = await authHeaders();
+  const formData = new FormData();
+  formData.append("file", { uri: fileUri, name: fileName, type: mimeType } as any);
+  const res = await fetch(`${base}/api/chat/folders/${folderId}/files`, {
+    method: "POST",
+    headers: { ...headers },
+    body: formData,
+  });
+  if (!res.ok) throw new Error(`Upload failed (${res.status})`);
+  return res.json();
+}
+
+export const listProjectFiles = (folderId: string) =>
+  req<{ files: ProjectFile[] }>("GET", `/api/chat/folders/${folderId}/files`);
+export const deleteProjectFile = (folderId: string, filename: string) =>
+  req("DELETE", `/api/chat/folders/${folderId}/files/${encodeURIComponent(filename)}`);
+export const getProjectContext = (folderId: string) =>
+  req<{ content: string }>("GET", `/api/chat/folders/${folderId}/context`);
+
+// ── File Downloads ─────────────────────────────────────
+export async function downloadFile(path: string): Promise<string> {
+  const base = await getBackendUrl();
+  const jwt = await getJwt();
+  return `${base}${path}${jwt ? `?token=${jwt}` : ""}`;
+}
 
 // ── Settings ────────────────────────────────────────────────
 export const getDefaultAI = () => req("GET", "/api/settings/default-ai");
@@ -283,12 +314,17 @@ export const createUser = (username: string, password: string, role: string) =>
 export const deleteUser = (userId: string) => req("DELETE", `/api/auth/users/${userId}`);
 export const resetUserPassword = (userId: string, new_password: string) =>
   req("PUT", `/api/auth/users/${userId}/reset-password`, { new_password });
+export const changePassword = (current_password: string, new_password: string) =>
+  req("PUT", "/api/auth/change-password", { current_password, new_password });
 
 // ── Cron ────────────────────────────────────────────────────
 export const listCron = () => req("GET", "/api/cron");
+export const cronDashboard = () => req("GET", "/api/cron/dashboard");
+export const cronJobRuns = (id: string, limit = 10) => req("GET", `/api/cron/${id}/runs?limit=${limit}`);
 export const createCron = (job: any) => req("POST", "/api/cron", job);
 export const updateCron = (id: string, job: any) => req("PUT", `/api/cron/${id}`, job);
 export const deleteCron = (id: string) => req("DELETE", `/api/cron/${id}`);
+export const runCronNow = (id: string) => req("POST", `/api/cron/${id}/run`);
 
 // ── Models ─────────────────────────────────────────────────
 export const getModels = () => req("GET", "/api/settings/models");
@@ -317,3 +353,13 @@ export const testPingramCall = (testNumber: string) =>
 // ── Notifications ───────────────────────────────────────────
 export const getNotifications = (limit = 20) => req("GET", `/api/notifications?limit=${limit}`);
 export const deleteNotification = (id: string) => req("DELETE", `/api/notifications/${id}`);
+
+// ── Spotify ────────────────────────────────────────────
+export const spotifyStatus = () => req("GET", "/api/spotify/status");
+export const spotifyDevices = () => req("GET", "/api/spotify/devices");
+export const spotifyConnectUrl = async () => {
+  const base = await getBackendUrl();
+  const jwt = await getJwt();
+  return `${base}/api/spotify/connect${jwt ? `?token=${jwt}` : ""}`;
+};
+export const spotifyDisconnect = () => req("POST", "/api/spotify/disconnect");

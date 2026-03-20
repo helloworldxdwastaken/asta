@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { setKeys, getKeyStatus, testKey } from "../../../lib/api";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import ProviderLogo from "../../ProviderLogo";
 
 // key = field name sent to PUT /api/settings/keys
@@ -14,6 +15,10 @@ const FIELDS = [
   { key: "huggingface_api_key", label: "HuggingFace", ph: "hf_...", prov: null, icon: "huggingface", url: "https://huggingface.co/settings/tokens" },
   { key: "giphy_api_key", label: "Giphy", ph: "", prov: null, icon: "giphy", url: "https://developers.giphy.com/" },
   { key: "notion_api_key", label: "Notion", ph: "ntn_...", prov: null, icon: "notion", url: "https://www.notion.so/my-integrations" },
+  { key: "pexels_api_key", label: "Pexels", ph: "", prov: null, icon: "pexels", url: "https://www.pexels.com/api/" },
+  { key: "pixabay_api_key", label: "Pixabay", ph: "", prov: null, icon: "pixabay", url: "https://pixabay.com/api/docs/" },
+  { key: "youtube_api_key", label: "YouTube", ph: "AIza...", prov: null, icon: "youtube", url: "https://console.cloud.google.com/apis/library/youtube.googleapis.com" },
+  { key: "github_token", label: "GitHub", ph: "ghp_...", prov: null, icon: "github", url: "https://github.com/settings/tokens" },
 ];
 
 export default function TabKeys() {
@@ -63,7 +68,7 @@ export default function TabKeys() {
                 <span className={`w-1.5 h-1.5 rounded-full ${isSet ? "bg-success" : "bg-label-tertiary/30"}`} />
                 <span className={`text-11 font-mono ${isSet ? "text-success" : "text-label-tertiary"}`}>{isSet ? "Active" : "Not set"}</span>
                 <div className="flex-1" />
-                {f.url && <a href={f.url} target="_blank" rel="noreferrer" className="text-11 text-accent hover:underline">Get key</a>}
+                {f.url && <button onClick={() => openUrl(f.url!).catch(() => window.open(f.url!, "_blank"))} className="text-11 text-accent hover:underline bg-transparent border-none cursor-pointer p-0">Get key</button>}
               </div>
               <div className="flex gap-2">
                 <input type={vis[f.key] ? "text" : "password"} value={keys[f.key] ?? ""}

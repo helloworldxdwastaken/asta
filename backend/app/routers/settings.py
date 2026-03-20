@@ -98,6 +98,9 @@ ALLOWED_API_KEY_NAMES = frozenset({
     "telegram_bot_token", "giphy_api_key",
     "spotify_client_id", "spotify_client_secret",
     "notion_api_key",
+    "pexels_api_key", "pixabay_api_key", "youtube_api_key",
+    "github_token",
+    "google_service_account",
 })
 
 
@@ -688,6 +691,11 @@ class ApiKeysIn(BaseModel):
     spotify_client_id: str | None = None
     spotify_client_secret: str | None = None
     notion_api_key: str | None = None
+    pexels_api_key: str | None = None
+    pixabay_api_key: str | None = None
+    youtube_api_key: str | None = None
+    github_token: str | None = None
+    google_service_account: str | None = None
 
 
 @router.put("/settings/keys")

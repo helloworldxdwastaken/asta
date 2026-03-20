@@ -6,6 +6,7 @@ import json
 import re
 import html
 import shlex
+from datetime import datetime
 from pathlib import Path
 from inspect import isawaitable
 from typing import Any
@@ -492,12 +493,13 @@ _VISION_PROVIDER_KEY = {
     "openrouter": "openrouter_api_key",
 }
 _VISION_PROVIDER_ORDER_DEFAULT = ("openrouter",)
-_VISION_OPENROUTER_MODEL_DEFAULT = "google/gemma-3-27b-it:free,nvidia/nemotron-nano-12b-v2-vl:free,google/gemma-3-12b-it:free,openrouter/auto"
+_VISION_OPENROUTER_MODEL_DEFAULT = "openrouter/free"
 _VISION_PREPROCESSOR_UNAVAILABLE_MESSAGE = (
     "Image received, but the dedicated vision preprocessor is unavailable. "
     "Asta uses free vision models on OpenRouter for image analysis. "
     "Please make sure your OpenRouter API key is set in Settings."
 )
+_vision_last_working_model: str | None = None  # cached last-success model for fast retry
 _GIF_COOLDOWN_SECONDS = 30 * 60
 _SILENT_REPLY_TOKEN = "NO_REPLY"
 _FILES_LOCATION_HINTS = {
@@ -931,6 +933,7 @@ async def _run_vision_preprocessor(
 
     # Build a flat list of (provider_name, model, provider_obj) attempts.
     # For OpenRouter: try each comma-separated model individually (avoids chained timeouts).
+    global _vision_last_working_model
     attempts: list[tuple[str, str, object]] = []
     for candidate in provider_order:
         provider = get_provider(candidate)
@@ -946,6 +949,14 @@ async def _run_vision_preprocessor(
             models = [m.strip() for m in openrouter_model.split(",") if m.strip()] if openrouter_model else []
             for model in models:
                 attempts.append((candidate, model, provider))
+
+    # If we have a cached working model, try it first (skip full retry loop)
+    if _vision_last_working_model:
+        cached = _vision_last_working_model
+        # Move cached model to front of attempts list
+        cached_entry = next((a for a in attempts if a[1] == cached), None)
+        if cached_entry:
+            attempts = [cached_entry] + [a for a in attempts if a[1] != cached]
 
     for candidate, model, provider in attempts:
         chat_kwargs: dict = {
@@ -978,8 +989,17 @@ async def _run_vision_preprocessor(
         analysis = (resp.content or "").strip()
         if not analysis:
             continue
+        # Cache this working model so next image skips straight to it
+        if _vision_last_working_model != model:
+            _vision_last_working_model = model
+            logger.info("Vision preprocessor cached working model: %s", model)
         logger.info("Vision preprocess complete using %s/%s", candidate, model)
         return analysis[:5000], candidate, model
+
+    # All attempts failed — reset cache so next call does a fresh sweep
+    if _vision_last_working_model:
+        logger.info("Vision preprocessor resetting cached model (all attempts failed)")
+        _vision_last_working_model = None
     return None
 
 
@@ -2649,6 +2669,88 @@ def _selected_agent_skill_filter(extra: dict) -> list[str] | None:
     return normalized
 
 
+_PROJECT_WORKSPACE_ROOT = Path(__file__).resolve().parent.parent.parent / "workspace"
+_PROJECT_MD_TEMPLATE = """# Project Context
+
+_Auto-maintained by Asta. Last updated: {ts}_
+
+## Summary
+[What this project is about]
+
+## Key Decisions
+- [decisions made]
+
+## Status
+[current status]
+
+## Notes
+- [other important info]
+"""
+
+
+async def _run_project_update_tool(args: Any, conversation_id: str, db: Any) -> str:
+    """Execute the project_update tool: read/append/replace_section on project.md."""
+    if not isinstance(args, dict):
+        return "Error: invalid arguments."
+    action = str(args.get("action") or "read").strip()
+    folder_id = await db.get_conversation_folder_id(conversation_id)
+    if not folder_id:
+        return "Error: this conversation does not belong to a project folder."
+    project_dir = _PROJECT_WORKSPACE_ROOT / "projects" / folder_id
+    project_dir.mkdir(parents=True, exist_ok=True)
+    project_md = project_dir / "project.md"
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    if action == "read":
+        if not project_md.exists():
+            return "(project.md is empty — no context yet)"
+        return project_md.read_text(encoding="utf-8")
+    elif action == "append":
+        content = str(args.get("content") or "").strip()
+        if not content:
+            return "Error: content is required for append."
+        if not project_md.exists():
+            project_md.write_text(_PROJECT_MD_TEMPLATE.format(ts=ts), encoding="utf-8")
+        existing = project_md.read_text(encoding="utf-8")
+        # Update the "Last updated" timestamp
+        import re as _re
+        existing = _re.sub(r"_Auto-maintained by Asta\. Last updated: [^_]+_", f"_Auto-maintained by Asta. Last updated: {ts}_", existing)
+        entry = f"\n- [{ts}] {content}"
+        # Append to Notes section if it exists, else add at end
+        if "## Notes" in existing:
+            existing = existing.rstrip() + entry + "\n"
+        else:
+            existing = existing.rstrip() + "\n\n## Notes\n" + entry + "\n"
+        project_md.write_text(existing, encoding="utf-8")
+        return f"Appended to project.md."
+    elif action == "replace_section":
+        section = str(args.get("section") or "").strip()
+        content = str(args.get("content") or "").strip()
+        if not section:
+            return "Error: section is required for replace_section."
+        if not project_md.exists():
+            project_md.write_text(_PROJECT_MD_TEMPLATE.format(ts=ts), encoding="utf-8")
+        existing = project_md.read_text(encoding="utf-8")
+        import re as _re
+        # Update timestamp
+        existing = _re.sub(r"_Auto-maintained by Asta\. Last updated: [^_]+_", f"_Auto-maintained by Asta. Last updated: {ts}_", existing)
+        header = f"## {section}"
+        # Find the section and replace its content
+        section_pattern = _re.compile(
+            rf"(^## {_re.escape(section)}\s*\n)(.*?)(?=^## |\Z)",
+            _re.MULTILINE | _re.DOTALL,
+        )
+        replacement = f"## {section}\n{content}\n\n"
+        if section_pattern.search(existing):
+            existing = section_pattern.sub(replacement, existing)
+        else:
+            # Section doesn't exist, append it
+            existing = existing.rstrip() + f"\n\n## {section}\n{content}\n"
+        project_md.write_text(existing, encoding="utf-8")
+        return f"Updated section '{section}' in project.md."
+    else:
+        return f"Error: unknown action '{action}'."
+
+
 async def handle_message(
     user_id: str,
     channel: str,
@@ -3374,6 +3476,54 @@ async def handle_message(
     if _is_admin and channel != "subagent":
         from app.subagent_orchestrator import get_subagent_tools_openai_def
         tools = tools + get_subagent_tools_openai_def()
+    # Project update tool: only when this conversation belongs to a project folder
+    _conv_folder_id = await db.get_conversation_folder_id(cid)
+    if _conv_folder_id:
+        tools = (tools or []) + [
+            {
+                "type": "function",
+                "function": {
+                    "name": "project_update",
+                    "description": (
+                        "Update the current project's context notes (project.md). "
+                        "Call this when you learn important information about the project — goals, decisions, preferences, "
+                        "key findings, or status changes. Keep entries concise. "
+                        "Do NOT call this for every message — only when genuinely important context should be persisted "
+                        "for future conversations in this project."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action": {
+                                "type": "string",
+                                "enum": ["append", "replace_section", "read"],
+                                "description": "append: add a new entry. replace_section: replace a named section. read: read current project.md",
+                            },
+                            "section": {
+                                "type": "string",
+                                "description": "Section name (e.g., 'Summary', 'Decisions', 'Status', 'Open Questions'). Required for replace_section.",
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "Content to write. For append: a concise bullet point or paragraph. For replace_section: the full new section content.",
+                            },
+                        },
+                        "required": ["action"],
+                    },
+                },
+            }
+        ]
+    # MCP tools: add tool definitions from connected MCP servers
+    try:
+        from app import mcp_client
+        await mcp_client.ensure_initialized(db)
+        mcp_tool_defs = mcp_client.get_tool_definitions()
+        if mcp_tool_defs:
+            tools = tools + mcp_tool_defs
+            logger.info("MCP tools added: %s", [d["function"]["name"] for d in mcp_tool_defs])
+    except Exception as e:
+        logger.warning("MCP initialization skipped: %s", e)
+
     tools = tools if tools else None
 
     from app.providers.fallback import (
@@ -4100,6 +4250,17 @@ async def handle_message(
                 used_tool_labels.append(_build_tool_trace_label("image_gen"))
                 out = await run_image_gen(user_id=user_id, prompt=prompt)
                 ran_image_gen_tool = True
+            elif name == "project_update":
+                out = await _run_project_update_tool(args_data, cid, db)
+                used_tool_labels.append(_build_tool_trace_label("project_update", str((args_data or {}).get("action") or "")))
+            elif name and name.startswith("mcp_"):
+                # Route to MCP server
+                from app import mcp_client
+                if mcp_client.is_mcp_tool(name):
+                    out = await mcp_client.call_tool(name, args_data)
+                    used_tool_labels.append(_build_tool_trace_label(name))
+                else:
+                    out = f"Error: MCP tool '{name}' not found"
             else:
                 out = "Unknown tool."
 

@@ -2,16 +2,16 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
   View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet,
   KeyboardAvoidingView, Platform, ActivityIndicator, Image,
-  ScrollView,
+  ScrollView, Alert, Linking,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, spacing, radius } from "../theme/colors";
-import { streamChat, loadMessages, setDefaultAI, setThinking, setMoodSetting, truncateConversation } from "../lib/api";
+import { streamChat, loadMessages, setDefaultAI, setThinking, truncateConversation, downloadFile } from "../lib/api";
 import type { Message, StreamChunk, Agent } from "../lib/types";
 import {
   IconSend, IconStop, IconMenu, IconBrain, IconCopy, IconCheck,
-  IconSliders, IconAttach, IconX, IconChevronDown, IconAgents, IconEdit,
-  resolveAgentIcon,
+  IconAttach, IconX, IconChevronDown, IconAgents, IconEdit,
+  IconTrash, resolveAgentIcon,
 } from "../components/Icons";
 import { ProviderBadge, ProviderDot, ProviderLogo } from "../components/ProviderIcon";
 import { ThinkingWordAnimation, ThinkingDots } from "../components/ThinkingIndicator";
@@ -28,25 +28,22 @@ const PROVIDERS = [
 ];
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
-const MOODS = ["normal", "friendly", "serious"];
 
 interface Props {
   conversationId?: string;
   onConversationCreated?: (id: string) => void;
   provider?: string;
   thinkingLevel?: string;
-  mood?: string;
   agents?: Agent[];
   onOpenDrawer?: () => void;
   onProviderChange?: (p: string) => void;
   onThinkingChange?: (t: string) => void;
-  onMoodChange?: (m: string) => void;
 }
 
 export default function ChatScreen({
   conversationId, onConversationCreated, provider = "claude",
-  thinkingLevel = "off", mood = "normal", agents = [],
-  onOpenDrawer, onProviderChange, onThinkingChange, onMoodChange,
+  thinkingLevel = "off", agents = [],
+  onOpenDrawer, onProviderChange, onThinkingChange,
 }: Props) {
   const insets = useSafeAreaInsets();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -67,7 +64,7 @@ export default function ChatScreen({
   const [errorMsg, setErrorMsg] = useState("");
   const [loadingMsgs, setLoadingMsgs] = useState(false);
   // Dropdown state: which menu is open (anchored to input bar)
-  const [dropdown, setDropdown] = useState<"provider" | "thinking" | "mood" | "agent" | null>(null);
+  const [dropdown, setDropdown] = useState<"provider" | "thinking" | "agent" | null>(null);
   const flatListRef = useRef<FlatList>(null);
   const stopRef = useRef<(() => void) | null>(null);
   const convIdRef = useRef(conversationId);
@@ -285,8 +282,42 @@ export default function ChatScreen({
     send(captured);
   }
 
+  function confirmDeleteMessage(id: string) {
+    if (Platform.OS === "web") {
+      if (confirm("Delete this message?")) setMessages(prev => prev.filter(m => m.id !== id));
+      return;
+    }
+    Alert.alert("Delete Message", "Remove this message?", [
+      { text: "Cancel", style: "cancel" },
+      { text: "Delete", style: "destructive", onPress: () => setMessages(prev => prev.filter(m => m.id !== id)) },
+    ]);
+  }
+
   const showThinking = thinkingLevel !== "off";
   const activeAgent = agents.find(a => a.id === selectedAgent);
+
+  const DOWNLOAD_RE = /Download:\s*(\/api\/files\/download-(?:pdf|office|video)\/([^\s\n]+))/gi;
+
+  function extractDownloadLinks(content: string): { path: string; name: string }[] {
+    const links: { path: string; name: string }[] = [];
+    let m: RegExpExecArray | null;
+    const re = new RegExp(DOWNLOAD_RE.source, DOWNLOAD_RE.flags);
+    while ((m = re.exec(content)) !== null) {
+      const path = m[1];
+      const name = decodeURIComponent(m[2].split("/").pop() || "file");
+      links.push({ path, name });
+    }
+    return links;
+  }
+
+  async function handleDownload(path: string) {
+    try {
+      const url = await downloadFile(path);
+      await Linking.openURL(url);
+    } catch {
+      Alert.alert("Download Error", "Could not open download link");
+    }
+  }
 
   function renderMessage({ item }: { item: Message }) {
     const isUser = item.role === "user";
@@ -353,13 +384,32 @@ export default function ChatScreen({
                 </Text>
               </>
             ) : (
-              <MarkdownContent>{item.content}</MarkdownContent>
+              <>
+                <MarkdownContent>{item.content}</MarkdownContent>
+                {extractDownloadLinks(item.content).map((dl, i) => (
+                  <TouchableOpacity key={i} style={styles.downloadBtn}
+                    onPress={() => handleDownload(dl.path)} activeOpacity={0.7}>
+                    <Text style={styles.downloadIcon}>{dl.name.match(/\.(mp4|mov|webm)$/i) ? "\u{1F3AC}" : "\u{1F4C4}"}</Text>
+                    <Text style={styles.downloadText} numberOfLines={1}>{dl.name}</Text>
+                    <Text style={styles.downloadArrow}>{"\u2193"}</Text>
+                  </TouchableOpacity>
+                ))}
+              </>
             )}
           </View>
           {isUser && !isEditing && !streaming && (
             <View style={styles.msgFooter}>
               <TouchableOpacity style={styles.copyBtn} onPress={() => startEdit(item)}>
                 <IconEdit size={12} color={colors.labelTertiary} />
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.copyBtn} onPress={() => copyText(item.id, item.content)}>
+                {copiedId === item.id
+                  ? <IconCheck size={12} color={colors.success} />
+                  : <IconCopy size={12} color={colors.labelTertiary} />
+                }
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.copyBtn} onPress={() => confirmDeleteMessage(item.id)}>
+                <IconTrash size={12} color={colors.labelTertiary} />
               </TouchableOpacity>
             </View>
           )}
@@ -371,6 +421,9 @@ export default function ChatScreen({
                   ? <IconCheck size={12} color={colors.success} />
                   : <IconCopy size={12} color={colors.labelTertiary} />
                 }
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.copyBtn} onPress={() => confirmDeleteMessage(item.id)}>
+                <IconTrash size={12} color={colors.labelTertiary} />
               </TouchableOpacity>
             </View>
           )}
@@ -395,30 +448,26 @@ export default function ChatScreen({
       {/* ── Header ── */}
       <View style={[styles.header, { paddingTop: insets.top + 4 }]}>
         <TouchableOpacity style={styles.menuBtn} onPress={onOpenDrawer} activeOpacity={0.7}>
-          <IconMenu size={22} color={colors.label} />
+          <IconMenu size={18} color={colors.label} />
         </TouchableOpacity>
 
-        <Text style={styles.headerTitle}>Asta</Text>
-
-        {/* Thinking badge in header (like desktop brain indicator) */}
-        {thinkingLevel !== "off" && (
-          <View style={styles.thinkingIndicator}>
-            <IconBrain size={12} color={colors.violet} />
-            <Text style={styles.thinkingIndicatorText}>
-              {thinkingLevel === "xhigh" ? "max" : thinkingLevel}
+        {/* Centered thinking level selector */}
+        <View style={{ flex: 1, alignItems: "center" }}>
+          <TouchableOpacity
+            style={[styles.thinkingSelector, dropdown === "thinking" && { borderColor: "rgba(139,92,246,0.3)" }]}
+            onPress={() => setDropdown(dropdown === "thinking" ? null : "thinking")}
+            activeOpacity={0.7}
+          >
+            <IconBrain size={14} color={thinkingLevel !== "off" ? colors.violet : colors.labelTertiary} />
+            <Text style={[styles.thinkingSelectorText, thinkingLevel !== "off" && { color: colors.violet }]}>
+              {thinkingLevel === "off" ? "Thinking" : thinkingLevel === "xhigh" ? "Maximum" : thinkingLevel.charAt(0).toUpperCase() + thinkingLevel.slice(1)}
             </Text>
-          </View>
-        )}
+            <IconChevronDown size={10} color={thinkingLevel !== "off" ? colors.violet : colors.labelTertiary} />
+          </TouchableOpacity>
+        </View>
 
-        {/* Settings menu (thinking + mood) */}
-        <TouchableOpacity
-          style={[styles.headerBtn, dropdown === "thinking" && { backgroundColor: colors.white08 }]}
-          onPress={() => setDropdown(dropdown === "thinking" ? null : "thinking")}
-          activeOpacity={0.7}
-        >
-          <IconSliders size={16} color={dropdown === "thinking" ? colors.accent : colors.labelSecondary} />
-          <IconChevronDown size={10} color={colors.labelTertiary} />
-        </TouchableOpacity>
+        {/* Spacer to balance menu button */}
+        <View style={{ width: 36 }} />
       </View>
 
       {/* ── Error banner ── */}
@@ -436,7 +485,7 @@ export default function ChatScreen({
         renderItem={renderMessage}
         keyExtractor={(m) => m.id}
         contentContainerStyle={styles.list}
-        onContentSizeChange={scrollToEnd}
+        onContentSizeChange={() => { if (streaming || !showScrollBtn) scrollToEnd(); }}
         onScroll={handleScroll}
         scrollEventThrottle={100}
         ListEmptyComponent={
@@ -449,9 +498,7 @@ export default function ChatScreen({
           <View style={styles.empty}>
             <PixelSprites />
             <View style={styles.emptyContent}>
-              <View style={styles.emptyLogo}>
-                <Image source={require("../../assets/appicon.png")} style={{ width: 56, height: 56, borderRadius: 14 }} />
-              </View>
+              <Image source={require("../../assets/appicon.png")} style={styles.emptyLogo} />
               <Text style={styles.emptyTitle}>What can I help with?</Text>
               <Text style={styles.emptySubtitle}>Ask anything, or try a suggestion</Text>
               <View style={styles.suggestions}>
@@ -556,100 +603,6 @@ export default function ChatScreen({
         </TouchableOpacity>
       )}
 
-      {/* ── Dropdown menus (anchored above input bar) ── */}
-      {dropdown && (
-        <View style={styles.dropdownOverlay}>
-          <TouchableOpacity style={{ flex: 1 }} onPress={() => setDropdown(null)} activeOpacity={1} />
-          <View style={styles.dropdownSheet}>
-            <View style={styles.dropdownHandle} />
-            <ScrollView style={{ maxHeight: 360 }} bounces={false}>
-              {dropdown === "provider" && (
-                <>
-                  <Text style={styles.dropdownTitle}>AI Provider</Text>
-                  {PROVIDERS.map((p) => (
-                    <TouchableOpacity key={p.key}
-                      style={[styles.dropdownItem, provider === p.key && styles.dropdownItemActive]}
-                      onPress={() => { onProviderChange?.(p.key); setDefaultAI(p.key).catch(() => {}); setDropdown(null); }}
-                      activeOpacity={0.7}>
-                      <ProviderLogo provider={p.key} size={18} />
-                      <Text style={[styles.dropdownItemText, provider === p.key && styles.dropdownItemTextActive]}>{p.label}</Text>
-                      {provider === p.key && <IconCheck size={14} color={colors.accent} />}
-                    </TouchableOpacity>
-                  ))}
-                </>
-              )}
-              {dropdown === "thinking" && (
-                <>
-                  <Text style={styles.dropdownTitle}>Thinking Level</Text>
-                  {THINKING_LEVELS.map((t) => (
-                    <TouchableOpacity key={t}
-                      style={[styles.dropdownItem, thinkingLevel === t && styles.dropdownItemThinkActive]}
-                      onPress={() => { onThinkingChange?.(t); setThinking(t).catch(() => {}); setDropdown(null); }}
-                      activeOpacity={0.7}>
-                      {t !== "off" && <IconBrain size={12} color={thinkingLevel === t ? colors.violet : colors.labelTertiary} />}
-                      <Text style={[styles.dropdownItemText, thinkingLevel === t && { color: colors.violet, fontWeight: "700" }]}>
-                        {t === "xhigh" ? "Maximum" : t.charAt(0).toUpperCase() + t.slice(1)}
-                      </Text>
-                      {thinkingLevel === t && <IconCheck size={14} color={colors.violet} />}
-                    </TouchableOpacity>
-                  ))}
-                  <View style={styles.dropdownDivider} />
-                  <Text style={styles.dropdownTitle}>Mood</Text>
-                  {MOODS.map((m) => (
-                    <TouchableOpacity key={m}
-                      style={[styles.dropdownItem, mood === m && styles.dropdownItemActive]}
-                      onPress={() => { onMoodChange?.(m); setMoodSetting(m).catch(() => {}); setDropdown(null); }}
-                      activeOpacity={0.7}>
-                      <Text style={[styles.dropdownItemText, mood === m && styles.dropdownItemTextActive]}>
-                        {m.charAt(0).toUpperCase() + m.slice(1)}
-                      </Text>
-                      {mood === m && <IconCheck size={14} color={colors.accent} />}
-                    </TouchableOpacity>
-                  ))}
-                </>
-              )}
-              {dropdown === "agent" && (
-                <>
-                  <Text style={styles.dropdownTitle}>Agent</Text>
-                  <TouchableOpacity
-                    style={[styles.dropdownItem, !selectedAgent && styles.dropdownItemActive]}
-                    onPress={() => { setSelectedAgent(undefined); setDropdown(null); }}
-                    activeOpacity={0.7}>
-                    <Text style={[styles.dropdownItemText, !selectedAgent && styles.dropdownItemTextActive]}>None (default)</Text>
-                    {!selectedAgent && <IconCheck size={14} color={colors.accent} />}
-                  </TouchableOpacity>
-                  <View style={styles.dropdownDivider} />
-                  {agents.map((a) => {
-                    const ai = resolveAgentIcon(a);
-                    const isActive = selectedAgent === a.id;
-                    return (
-                      <TouchableOpacity key={a.id}
-                        style={[styles.dropdownItem, isActive && styles.dropdownItemActive]}
-                        onPress={() => { setSelectedAgent(a.id); setDropdown(null); }}
-                        activeOpacity={0.7}>
-                        <View style={[styles.agentIconSmall, { backgroundColor: ai.bg }]}>
-                          <ai.Icon size={12} color={ai.color} />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={[styles.dropdownItemText, isActive && styles.dropdownItemTextActive]}>{a.name}</Text>
-                          {a.description ? <Text style={styles.dropdownItemDesc} numberOfLines={1}>{a.description}</Text> : null}
-                          {a.category ? (
-                            <View style={[styles.agentCategoryBadge, { backgroundColor: ai.color + "15" }]}>
-                              <Text style={[styles.agentCategoryText, { color: ai.color }]}>{a.category}</Text>
-                            </View>
-                          ) : null}
-                        </View>
-                        {isActive && <IconCheck size={14} color={colors.accent} />}
-                      </TouchableOpacity>
-                    );
-                  })}
-                </>
-              )}
-            </ScrollView>
-          </View>
-        </View>
-      )}
-
       {/* ── Input bar ── */}
       <View style={[styles.inputBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
         {/* Pending image preview */}
@@ -697,16 +650,20 @@ export default function ChatScreen({
             </View>
             {/* Right: provider selector + send */}
             <View style={styles.inputToolbarRight}>
-              <TouchableOpacity
-                style={styles.providerSelector}
-                onPress={() => setDropdown(dropdown === "provider" ? null : "provider")}
-                activeOpacity={0.7}>
-                <ProviderLogo provider={provider} size={14} />
-                <Text style={styles.providerSelectorText}>
-                  {PROVIDERS.find(p => p.key === provider)?.label || provider}
-                </Text>
-                <IconChevronDown size={8} color={colors.labelTertiary} />
-              </TouchableOpacity>
+              <View style={{ position: "relative" }}>
+                <TouchableOpacity
+                  style={styles.providerSelector}
+                  onPress={() => setDropdown(dropdown === "provider" ? null : "provider")}
+                  activeOpacity={0.7}>
+                  <ProviderLogo provider={provider} size={14} />
+                  <Text style={styles.providerSelectorText}>
+                    {PROVIDERS.find(p => p.key === provider)?.label || provider}
+                  </Text>
+                  <IconChevronDown size={8} color={colors.labelTertiary} />
+                </TouchableOpacity>
+
+{/* Provider dropdown rendered as top-level overlay */}
+              </View>
               <TouchableOpacity
                 style={[styles.sendBtn, streaming ? styles.stopBtn : (!input.trim() && !pendingImage ? styles.sendBtnDisabled : {})]}
                 onPress={streaming ? () => stopRef.current?.() : () => send()}
@@ -718,6 +675,96 @@ export default function ChatScreen({
           </View>
         </View>
       </View>
+
+      {/* ── All dropdowns rendered LAST so they float above header, chat & input ── */}
+
+      {/* Thinking dropdown — drops DOWN from header */}
+      {dropdown === "thinking" && (
+        <View style={styles.dropdownOverlay}>
+          <TouchableOpacity style={StyleSheet.absoluteFill} onPress={() => setDropdown(null)} activeOpacity={1} />
+          <View style={[styles.topDropdown, { top: insets.top + 48 }]}>
+            <Text style={styles.dropdownTitle}>Thinking Level</Text>
+            {THINKING_LEVELS.map((t) => (
+              <TouchableOpacity key={t}
+                style={[styles.dropdownItem, thinkingLevel === t && styles.dropdownItemThinkActive]}
+                onPress={() => { onThinkingChange?.(t); setThinking(t).catch(() => {}); setDropdown(null); }}
+                activeOpacity={0.7}>
+                {t !== "off" && <IconBrain size={14} color={thinkingLevel === t ? colors.violet : colors.labelTertiary} />}
+                <Text style={[styles.dropdownItemText, thinkingLevel === t && { color: colors.violet, fontWeight: "700" }]}>
+                  {t === "xhigh" ? "Maximum" : t.charAt(0).toUpperCase() + t.slice(1)}
+                </Text>
+                {thinkingLevel === t && <IconCheck size={14} color={colors.violet} />}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      )}
+
+      {/* Provider dropdown — bottom sheet */}
+      {dropdown === "provider" && (
+        <View style={styles.dropdownOverlay}>
+          <TouchableOpacity style={{ flex: 1 }} onPress={() => setDropdown(null)} activeOpacity={1} />
+          <View style={styles.dropdownSheet}>
+            <View style={styles.dropdownHandle} />
+            <Text style={styles.dropdownTitle}>Provider</Text>
+            {PROVIDERS.map((p) => (
+              <TouchableOpacity key={p.key}
+                style={[styles.dropdownItem, provider === p.key && styles.dropdownItemActive]}
+                onPress={() => { onProviderChange?.(p.key); setDefaultAI(p.key).catch(() => {}); setDropdown(null); }}
+                activeOpacity={0.7}>
+                <ProviderLogo provider={p.key} size={18} />
+                <Text style={[styles.dropdownItemText, provider === p.key && styles.dropdownItemTextActive]}>{p.label}</Text>
+                {provider === p.key && <IconCheck size={14} color={colors.accent} />}
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+      )}
+
+      {/* Agent dropdown — bottom sheet */}
+      {dropdown === "agent" && (
+        <View style={styles.dropdownOverlay}>
+          <TouchableOpacity style={{ flex: 1 }} onPress={() => setDropdown(null)} activeOpacity={1} />
+          <View style={styles.dropdownSheet}>
+            <View style={styles.dropdownHandle} />
+            <ScrollView style={{ maxHeight: 360 }} bounces={false}>
+              <Text style={styles.dropdownTitle}>Agent</Text>
+              <TouchableOpacity
+                style={[styles.dropdownItem, !selectedAgent && styles.dropdownItemActive]}
+                onPress={() => { setSelectedAgent(undefined); setDropdown(null); }}
+                activeOpacity={0.7}>
+                <Text style={[styles.dropdownItemText, !selectedAgent && styles.dropdownItemTextActive]}>None (default)</Text>
+                {!selectedAgent && <IconCheck size={14} color={colors.accent} />}
+              </TouchableOpacity>
+              <View style={styles.dropdownDivider} />
+              {agents.map((a) => {
+                const ai = resolveAgentIcon(a);
+                const isActive = selectedAgent === a.id;
+                return (
+                  <TouchableOpacity key={a.id}
+                    style={[styles.dropdownItem, isActive && styles.dropdownItemActive]}
+                    onPress={() => { setSelectedAgent(a.id); setDropdown(null); }}
+                    activeOpacity={0.7}>
+                    <View style={[styles.agentIconSmall, { backgroundColor: ai.bg }]}>
+                      <ai.Icon size={12} color={ai.color} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.dropdownItemText, isActive && styles.dropdownItemTextActive]}>{a.name}</Text>
+                      {a.description ? <Text style={styles.dropdownItemDesc} numberOfLines={1}>{a.description}</Text> : null}
+                      {a.category ? (
+                        <View style={[styles.agentCategoryBadge, { backgroundColor: ai.color + "15" }]}>
+                          <Text style={[styles.agentCategoryText, { color: ai.color }]}>{a.category}</Text>
+                        </View>
+                      ) : null}
+                    </View>
+                    {isActive && <IconCheck size={14} color={colors.accent} />}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </View>
+      )}
     </KeyboardAvoidingView>
   );
 }
@@ -738,26 +785,22 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row", alignItems: "center",
     paddingBottom: 8, paddingHorizontal: spacing.md,
-    borderBottomWidth: 1, borderBottomColor: colors.separator,
+    zIndex: 5,
   },
-  menuBtn: { padding: 6, marginRight: 6 },
-  headerTitle: { fontSize: 18, fontWeight: "700", color: colors.label, flex: 1 },
-  thinkingIndicator: {
-    flexDirection: "row", alignItems: "center", gap: 4,
-    backgroundColor: colors.violetSubtle,
-    borderRadius: radius.full,
-    paddingHorizontal: 8, paddingVertical: 3,
-    marginRight: 6,
-    borderWidth: 1, borderColor: "rgba(139,92,246,0.15)",
-  },
-  thinkingIndicatorText: { fontSize: 10, fontWeight: "700", color: colors.violet, textTransform: "capitalize" },
-  headerBtn: {
-    flexDirection: "row", alignItems: "center", gap: 2,
+  menuBtn: {
+    width: 36, height: 36, borderRadius: 18,
     backgroundColor: colors.white05,
-    borderRadius: radius.sm,
-    paddingHorizontal: 8, paddingVertical: 6,
+    borderWidth: 1, borderColor: colors.separator,
+    alignItems: "center", justifyContent: "center",
+  },
+  thinkingSelector: {
+    flexDirection: "row", alignItems: "center", gap: 5,
+    backgroundColor: colors.white05,
+    borderRadius: radius.full,
+    paddingHorizontal: 12, paddingVertical: 6,
     borderWidth: 1, borderColor: colors.separator,
   },
+  thinkingSelectorText: { fontSize: 13, fontWeight: "600", color: colors.labelSecondary },
 
   // ── Scroll-to-bottom FAB ──
   scrollFab: {
@@ -768,14 +811,24 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
     shadowColor: "#000", shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.25, shadowRadius: 8, elevation: 10,
-    zIndex: 20,
+    zIndex: 5,
   },
 
   // ── Dropdown (bottom-sheet style) ──
   dropdownOverlay: {
     position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
-    zIndex: 100, backgroundColor: "rgba(0,0,0,0.3)",
+    zIndex: 200, backgroundColor: "rgba(0,0,0,0.3)",
     justifyContent: "flex-end",
+  },
+  topDropdown: {
+    position: "absolute", left: spacing.md, right: spacing.md,
+    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
+    borderWidth: 1, borderColor: colors.separator,
+    shadowColor: "#000", shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3, shadowRadius: 20, elevation: 30,
+    zIndex: 201,
   },
   dropdownSheet: {
     backgroundColor: colors.surfaceRaised,
@@ -816,11 +869,12 @@ const styles = StyleSheet.create({
   empty: { flex: 1, minHeight: 400, justifyContent: "center", alignItems: "center" },
   emptyContent: { alignItems: "center", zIndex: 1 },
   emptyLogo: {
+    width: 56, height: 56, borderRadius: 14,
     marginBottom: spacing.lg,
     shadowColor: colors.accent,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.15,
-    shadowRadius: 32,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 24,
     elevation: 10,
   },
   emptyTitle: { fontSize: 24, fontWeight: "700", color: colors.label, marginBottom: spacing.xs },
@@ -857,6 +911,17 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   msgText: { fontSize: 15, lineHeight: 22, color: colors.label },
+  downloadBtn: {
+    flexDirection: "row", alignItems: "center", gap: 8,
+    backgroundColor: colors.accentSubtle,
+    borderRadius: radius.sm,
+    paddingHorizontal: 12, paddingVertical: 10,
+    marginTop: spacing.sm,
+    borderWidth: 1, borderColor: "rgba(255,107,44,0.2)",
+  },
+  downloadIcon: { fontSize: 16 },
+  downloadText: { flex: 1, fontSize: 13, fontWeight: "600", color: colors.accent },
+  downloadArrow: { fontSize: 16, fontWeight: "700", color: colors.accent },
   msgTextUser: { color: colors.userBubbleText },
 
   msgFooter: { flexDirection: "row", alignItems: "center", gap: 8, paddingLeft: 4, marginTop: 2 },
@@ -899,6 +964,7 @@ const styles = StyleSheet.create({
   inputBar: {
     paddingHorizontal: spacing.md,
     paddingTop: spacing.sm,
+    zIndex: 5,
   },
   pendingImageRow: { flexDirection: "row", paddingBottom: spacing.sm },
   pendingImageWrap: { position: "relative" },

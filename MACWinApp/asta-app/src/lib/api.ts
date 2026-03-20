@@ -128,7 +128,7 @@ export const getServerStatus = () => req<any>("GET", "/api/settings/server-statu
 // ── Conversations ─────────────────────────────────────────────────────────────
 export const listConversations = (limit?: number) =>
   req<{ conversations: any[] }>("GET", "/api/chat/conversations", undefined,
-    { channel: "web", ...(limit ? { limit: String(limit) } : {}) });
+    { ...(limit ? { limit: String(limit) } : {}) });
 
 export const deleteConversation = (id: string) =>
   req("DELETE", `/api/chat/conversations/${id}`);
@@ -155,6 +155,31 @@ export const deleteFolder = (id: string) =>
 
 export const assignConversationFolder = (id: string, folderId: string | null) =>
   req("PUT", `/api/chat/conversations/${id}/folder`, { folder_id: folderId });
+
+// ── Project files ─────────────────────────────────────────────────────────────
+export interface ProjectFile { name: string; size: number; modified: string; }
+
+export async function uploadProjectFile(folderId: string, file: File): Promise<{ ok: boolean; filename: string; path: string }> {
+  const url = `${_backendUrl}/api/chat/folders/${folderId}/files`;
+  const formData = new FormData();
+  formData.append("file", file);
+  const opts: any = { method: "POST", headers: { ..._authHeaders() }, body: formData };
+  if (_backendUrl.startsWith("https://")) {
+    opts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
+  }
+  const res = await _fetch(url, opts);
+  if (!res.ok) throw new Error(`uploadProjectFile → ${res.status}`);
+  return res.json();
+}
+
+export const listProjectFiles = (folderId: string) =>
+  req<{ files: ProjectFile[] }>("GET", `/api/chat/folders/${folderId}/files`);
+
+export const deleteProjectFile = (folderId: string, filename: string) =>
+  req("DELETE", `/api/chat/folders/${folderId}/files/${encodeURIComponent(filename)}`);
+
+export const getProjectContext = (folderId: string) =>
+  req<{ content: string }>("GET", `/api/chat/folders/${folderId}/context`);
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
 export interface SendMessageOpts {
@@ -424,9 +449,13 @@ export const spotifyDisconnect = () => req("POST", "/api/spotify/disconnect");
 
 // ── Cron Jobs ─────────────────────────────────────────────────────────────────
 export const listCron = () => req<any>("GET", "/api/cron");
+export const cronDashboard = () => req<any>("GET", "/api/cron/dashboard");
+export const cronJobRuns = (id: string, limit = 10) => req<any>("GET", `/api/cron/${id}/runs`, undefined, { limit: String(limit) });
 export const createCron = (job: any) => req("POST", "/api/cron", job);
+export const createYouTubeSchedule = (config: any) => req("POST", "/api/cron/youtube-schedule", config);
 export const updateCron = (id: string, job: any) => req("PUT", `/api/cron/${id}`, job);
 export const deleteCron = (id: string) => req("DELETE", `/api/cron/${id}`);
+export const runCronNow = (id: string) => req<any>("POST", `/api/cron/${id}/run`);
 
 // ── Notifications ─────────────────────────────────────────────────────────────
 export const getNotifications = (limit?: number) =>
@@ -484,6 +513,50 @@ export function downloadPdf(filename: string): Promise<void> {
 export function downloadOfficeDoc(filename: string): Promise<void> {
   return _downloadFile(`/api/files/download-office/${encodeURIComponent(filename)}`, filename);
 }
+
+export function downloadVideo(filepath: string): Promise<void> {
+  const filename = filepath.split("/").pop() ?? "video.mp4";
+  return _downloadFile(`/api/files/download-video/${filepath}`, filename);
+}
+
+// ── Studio: Channels ─────────────────────────────────────────────────────────
+export const listStudioChannels = () => req<any>("GET", "/api/studio/channels");
+export const createStudioChannel = (data: any) => req<any>("POST", "/api/studio/channels", data);
+export const updateStudioChannel = (id: string, data: any) => req("PUT", `/api/studio/channels/${id}`, data);
+export const deleteStudioChannel = (id: string) => req("DELETE", `/api/studio/channels/${id}`);
+
+// ── Studio: Projects ─────────────────────────────────────────────────────────
+export const listStudioProjects = (filters?: Record<string, string>) =>
+  req<any>("GET", "/api/studio/projects", undefined, filters);
+export const createStudioProject = (data: any) => req<any>("POST", "/api/studio/projects", data);
+export const getStudioProject = (id: string) => req<any>("GET", `/api/studio/projects/${id}`);
+export const updateStudioProject = (id: string, data: any) => req("PUT", `/api/studio/projects/${id}`, data);
+export const deleteStudioProject = (id: string) => req("DELETE", `/api/studio/projects/${id}`);
+
+// ── Studio: Assets ───────────────────────────────────────────────────────────
+export const listStudioAssets = (filters?: Record<string, string>) =>
+  req<any>("GET", "/api/studio/assets", undefined, filters);
+export const updateStudioAsset = (id: string, data: any) => req("PUT", `/api/studio/assets/${id}`, data);
+export const deleteStudioAsset = (id: string) => req("DELETE", `/api/studio/assets/${id}`);
+export async function uploadStudioAsset(file: File, name: string, assetType: string, channelId = ""): Promise<any> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("name", name);
+  form.append("asset_type", assetType);
+  form.append("channel_id", channelId);
+  const uploadOpts: any = { method: "POST", body: form, headers: _authHeaders() };
+  if (_backendUrl.startsWith("https://")) {
+    uploadOpts.danger = { acceptInvalidCerts: true, acceptInvalidHostnames: true };
+  }
+  const res = await _fetch(`${_backendUrl}/api/studio/assets`, uploadOpts);
+  if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
+  return res.json();
+}
+
+// ── Studio: Renders ──────────────────────────────────────────────────────────
+export const listStudioRenders = (projectId?: string) =>
+  req<any>("GET", "/api/studio/renders", undefined, projectId ? { project_id: projectId } : undefined);
+export const getStudioRender = (id: string) => req<any>("GET", `/api/studio/renders/${id}`);
 
 // ── System ────────────────────────────────────────────────────────────────────
 export const restartBackend = () => req("POST", "/api/restart");

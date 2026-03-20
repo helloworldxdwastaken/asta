@@ -69,6 +69,27 @@ Asta has two skill types:
 - **workspace/skills/skill-creator/** — Skill that helps you create and package skills (same format as OpenClaw). Use when designing or writing a new skill.
 - **Using OpenClaw skills in Asta:** Copy any skill folder from OpenClaw (e.g. `openclaw/workspace/skills/spotify-player/`) into **workspace/skills/**. Ensure `SKILL.md` has `name` and `description` in the frontmatter. The skill appears in Settings → Skills.
 
+## YouTube automation skills
+
+The YouTube pipeline is powered by six workspace skills that work together. Enable them all in Settings → Skills:
+
+| Skill folder | Purpose |
+|---|---|
+| `youtube-creator` | Orchestrating agent (`is_agent: true`). Coordinates the full pipeline end-to-end. Uses agent-knowledge folder at `workspace/agent-knowledge/youtube-creator/`. |
+| `youtube-trends` | Discovers trending topics and keywords via YouTube Data API. |
+| `youtube-source` | Finds and downloads footage from Pexels (photos + videos) and Pixabay. |
+| `youtube-script` | Writes a structured video script (hook, body, CTA) matched to the format preset. |
+| `youtube-edit` | Calls `workspace/scripts/youtube/pipeline.py` via the exec tool; runs FFmpeg editing (Ken Burns on photos, crossfades, color grading, ASS captions, voiceover, background music, Shorts crop). |
+| `youtube-upload` | Uploads the finished video to YouTube via the Data API v3. |
+
+**Prerequisites:** FFmpeg must be installed (`brew install ffmpeg` / `apt install ffmpeg`). API keys `pexels_api_key`, `pixabay_api_key`, and `youtube_api_key` must be set in Settings → API keys (injected as environment variables by exec_tool.py).
+
+**Format presets:** `short` (45 s, 9:16 vertical), `standard` (3 min, 16:9), `long` (8 min+, 16:9).
+
+**Output:** Videos land in `workspace/youtube/YYYY-MM-DD/output/`. The model includes a `Download: /api/files/download-video/YYYY-MM-DD/output/output.mp4` link in the chat reply.
+
+**Automations Dashboard:** Use the monitor icon in the desktop sidebar to schedule recurring YouTube jobs. The **YouTube Growth** preset creates 4 Shorts + 2 Standard videos per week.
+
 ## Agent Knowledge Folders (RAG-style docs per agent)
 
 For named agents (`is_agent: true`), Asta supports local per-agent knowledge folders:

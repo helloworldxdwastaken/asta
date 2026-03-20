@@ -192,12 +192,18 @@ class Db:
         await self._conn.commit()
         return cid
 
-    async def list_conversations(self, user_id: str, channel: str = "web", limit: int = 50) -> list[dict[str, Any]]:
+    async def list_conversations(self, user_id: str, channel: str | None = "web", limit: int = 50) -> list[dict[str, Any]]:
         """List conversations ordered by most recent activity. Uses AI-generated title when available, falls back to first user message."""
         if not self._conn:
             await self.connect()
+        if channel:
+            where_clause = "WHERE c.user_id = ? AND c.channel = ?"
+            params: tuple = (user_id, channel, limit)
+        else:
+            where_clause = "WHERE c.user_id = ?"
+            params = (user_id, limit)
         cursor = await self._conn.execute(
-            """
+            f"""
             SELECT
                 c.id,
                 c.created_at,
@@ -208,7 +214,7 @@ class Db:
                 (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id) AS message_count,
                 (SELECT COALESCE(SUM(LENGTH(content)), 0) FROM messages WHERE conversation_id = c.id) / 4 AS approx_tokens
             FROM conversations c
-            WHERE c.user_id = ? AND c.channel = ?
+            {where_clause}
               AND EXISTS (SELECT 1 FROM messages WHERE conversation_id = c.id)
             ORDER BY COALESCE(
                 (SELECT created_at FROM messages WHERE conversation_id = c.id ORDER BY id DESC LIMIT 1),
@@ -216,7 +222,7 @@ class Db:
             ) DESC
             LIMIT ?
             """,
-            (user_id, channel, limit),
+            params,
         )
         rows = await cursor.fetchall()
         result = []
@@ -256,7 +262,28 @@ class Db:
         row = await cursor.fetchone()
         return row["title"] if row else None
 
+    async def get_conversation_folder_id(self, conversation_id: str) -> str | None:
+        """Return the folder_id for a conversation, or None if not in a folder."""
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute(
+            "SELECT folder_id FROM conversations WHERE id = ?",
+            (conversation_id,),
+        )
+        row = await cursor.fetchone()
+        return row["folder_id"] if row else None
+
     # ── Conversation folders ───────────────────────────────────────────────
+
+    async def get_folder_owner(self, folder_id: str) -> str | None:
+        """Return the user_id that owns the given folder, or None."""
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute(
+            "SELECT user_id FROM conversation_folders WHERE id = ?", (folder_id,)
+        )
+        row = await cursor.fetchone()
+        return row["user_id"] if row else None
 
     async def list_folders(self, user_id: str, channel: str = "web") -> list[dict[str, Any]]:
         if not self._conn:
@@ -1349,6 +1376,14 @@ class Db:
             )
         await self._conn.commit()
 
+    async def get_api_keys(self, user_id: str | None = None) -> dict[str, str]:
+        """Return all stored API keys as {key_name: value}."""
+        if not self._conn:
+            await self.connect()
+        cursor = await self._conn.execute("SELECT key_name, value FROM api_keys")
+        rows = await cursor.fetchall()
+        return {r["key_name"]: r["value"] for r in rows if r["value"]}
+
     async def get_api_keys_status(self) -> dict[str, bool]:
         """Return which API keys are set (true/false), no values."""
         if not self._conn:
@@ -1842,6 +1877,219 @@ class Db:
         await self.connect()
         cursor = await self._conn.execute("SELECT COUNT(*) FROM users")
         return (await cursor.fetchone())[0] > 0
+
+    # ── Studio: Channels ──────────────────────────────────────────────────────
+
+    async def add_studio_channel(self, user_id: str, channel_id: str, channel_name: str,
+                                  channel_youtube_id: str | None = None, avatar_url: str | None = None,
+                                  oauth_tokens_json: str | None = None,
+                                  default_voice: str = "male", default_caption_preset: str = "standard") -> str:
+        await self.connect()
+        now = datetime.now(timezone.utc).isoformat()
+        await self._conn.execute(
+            """INSERT INTO studio_channels (id, user_id, channel_name, channel_youtube_id, avatar_url,
+               oauth_tokens_json, default_voice, default_caption_preset, enabled, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)""",
+            (channel_id, user_id, channel_name, channel_youtube_id or "", avatar_url or "",
+             oauth_tokens_json or "", default_voice, default_caption_preset, now, now),
+        )
+        await self._conn.commit()
+        return channel_id
+
+    async def get_studio_channels(self, user_id: str) -> list[dict[str, Any]]:
+        await self.connect()
+        cursor = await self._conn.execute(
+            "SELECT * FROM studio_channels WHERE user_id = ? ORDER BY created_at DESC", (user_id,))
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_studio_channel(self, channel_id: str) -> dict[str, Any] | None:
+        await self.connect()
+        cursor = await self._conn.execute("SELECT * FROM studio_channels WHERE id = ?", (channel_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def update_studio_channel(self, channel_id: str, **kwargs: Any) -> bool:
+        await self.connect()
+        allowed = {"channel_name", "channel_youtube_id", "avatar_url", "oauth_tokens_json",
+                    "default_voice", "default_caption_preset", "enabled"}
+        updates, params = [], []
+        for k, v in kwargs.items():
+            if k in allowed and v is not None:
+                updates.append(f"{k} = ?")
+                params.append(v)
+        if not updates:
+            return False
+        updates.append("updated_at = ?")
+        params.append(datetime.now(timezone.utc).isoformat())
+        params.append(channel_id)
+        await self._conn.execute(f"UPDATE studio_channels SET {', '.join(updates)} WHERE id = ?", params)
+        await self._conn.commit()
+        return True
+
+    async def delete_studio_channel(self, channel_id: str) -> bool:
+        await self.connect()
+        cursor = await self._conn.execute("DELETE FROM studio_channels WHERE id = ?", (channel_id,))
+        await self._conn.commit()
+        return cursor.rowcount > 0
+
+    # ── Studio: Projects ──────────────────────────────────────────────────────
+
+    async def add_studio_project(self, user_id: str, project_id: str, title: str,
+                                  topic: str | None = None, channel_id: str | None = None,
+                                  format: str = "standard") -> str:
+        await self.connect()
+        now = datetime.now(timezone.utc).isoformat()
+        await self._conn.execute(
+            """INSERT INTO studio_projects (id, user_id, channel_id, title, topic, status, format,
+               render_progress, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'draft', ?, 0, ?, ?)""",
+            (project_id, user_id, channel_id or "", title, topic or "", format, now, now),
+        )
+        await self._conn.commit()
+        return project_id
+
+    async def get_studio_projects(self, user_id: str, channel_id: str | None = None,
+                                   status: str | None = None) -> list[dict[str, Any]]:
+        await self.connect()
+        sql = "SELECT * FROM studio_projects WHERE user_id = ?"
+        params: list[Any] = [user_id]
+        if channel_id:
+            sql += " AND channel_id = ?"
+            params.append(channel_id)
+        if status:
+            sql += " AND status = ?"
+            params.append(status)
+        sql += " ORDER BY created_at DESC"
+        cursor = await self._conn.execute(sql, params)
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_studio_project(self, project_id: str) -> dict[str, Any] | None:
+        await self.connect()
+        cursor = await self._conn.execute("SELECT * FROM studio_projects WHERE id = ?", (project_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def update_studio_project(self, project_id: str, **kwargs: Any) -> bool:
+        await self.connect()
+        allowed = {"channel_id", "title", "topic", "status", "format", "script_md", "metadata_json",
+                    "voice", "work_dir", "scheduled_at", "cron_job_id", "render_progress",
+                    "render_error", "video_path", "upload_result_json"}
+        updates, params = [], []
+        for k, v in kwargs.items():
+            if k in allowed:
+                updates.append(f"{k} = ?")
+                params.append(v)
+        if not updates:
+            return False
+        updates.append("updated_at = ?")
+        params.append(datetime.now(timezone.utc).isoformat())
+        params.append(project_id)
+        await self._conn.execute(f"UPDATE studio_projects SET {', '.join(updates)} WHERE id = ?", params)
+        await self._conn.commit()
+        return True
+
+    async def delete_studio_project(self, project_id: str) -> bool:
+        await self.connect()
+        cursor = await self._conn.execute("DELETE FROM studio_projects WHERE id = ?", (project_id,))
+        await self._conn.commit()
+        return cursor.rowcount > 0
+
+    # ── Studio: Assets ────────────────────────────────────────────────────────
+
+    async def add_studio_asset(self, user_id: str, asset_id: str, name: str, asset_type: str,
+                                file_path: str, duration_seconds: float | None = None,
+                                thumbnail_path: str | None = None, channel_id: str | None = None) -> str:
+        await self.connect()
+        now = datetime.now(timezone.utc).isoformat()
+        await self._conn.execute(
+            """INSERT INTO studio_assets (id, user_id, name, asset_type, file_path, duration_seconds,
+               thumbnail_path, channel_id, sort_order, enabled, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 1, ?)""",
+            (asset_id, user_id, name, asset_type, file_path, duration_seconds,
+             thumbnail_path or "", channel_id or "", now),
+        )
+        await self._conn.commit()
+        return asset_id
+
+    async def get_studio_assets(self, user_id: str, asset_type: str | None = None,
+                                 channel_id: str | None = None) -> list[dict[str, Any]]:
+        await self.connect()
+        sql = "SELECT * FROM studio_assets WHERE user_id = ?"
+        params: list[Any] = [user_id]
+        if asset_type:
+            sql += " AND asset_type = ?"
+            params.append(asset_type)
+        if channel_id:
+            sql += " AND (channel_id = ? OR channel_id = '')"
+            params.append(channel_id)
+        sql += " ORDER BY sort_order, created_at DESC"
+        cursor = await self._conn.execute(sql, params)
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def update_studio_asset(self, asset_id: str, **kwargs: Any) -> bool:
+        await self.connect()
+        allowed = {"name", "sort_order", "enabled", "channel_id"}
+        updates, params = [], []
+        for k, v in kwargs.items():
+            if k in allowed and v is not None:
+                updates.append(f"{k} = ?")
+                params.append(v)
+        if not updates:
+            return False
+        params.append(asset_id)
+        await self._conn.execute(f"UPDATE studio_assets SET {', '.join(updates)} WHERE id = ?", params)
+        await self._conn.commit()
+        return True
+
+    async def delete_studio_asset(self, asset_id: str) -> bool:
+        await self.connect()
+        cursor = await self._conn.execute("DELETE FROM studio_assets WHERE id = ?", (asset_id,))
+        await self._conn.commit()
+        return cursor.rowcount > 0
+
+    # ── Studio: Renders ───────────────────────────────────────────────────────
+
+    async def add_studio_render(self, render_id: str, project_id: str, user_id: str) -> str:
+        await self.connect()
+        now = datetime.now(timezone.utc).isoformat()
+        await self._conn.execute(
+            """INSERT INTO studio_renders (id, project_id, user_id, status, progress, created_at)
+               VALUES (?, ?, ?, 'queued', 0, ?)""",
+            (render_id, project_id, user_id, now),
+        )
+        await self._conn.commit()
+        return render_id
+
+    async def get_studio_renders(self, user_id: str, project_id: str | None = None) -> list[dict[str, Any]]:
+        await self.connect()
+        sql = "SELECT * FROM studio_renders WHERE user_id = ?"
+        params: list[Any] = [user_id]
+        if project_id:
+            sql += " AND project_id = ?"
+            params.append(project_id)
+        sql += " ORDER BY created_at DESC"
+        cursor = await self._conn.execute(sql, params)
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_studio_render(self, render_id: str) -> dict[str, Any] | None:
+        await self.connect()
+        cursor = await self._conn.execute("SELECT * FROM studio_renders WHERE id = ?", (render_id,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def update_studio_render(self, render_id: str, **kwargs: Any) -> bool:
+        await self.connect()
+        allowed = {"status", "step", "progress", "output_path", "error", "started_at", "finished_at"}
+        updates, params = [], []
+        for k, v in kwargs.items():
+            if k in allowed:
+                updates.append(f"{k} = ?")
+                params.append(v)
+        if not updates:
+            return False
+        params.append(render_id)
+        await self._conn.execute(f"UPDATE studio_renders SET {', '.join(updates)} WHERE id = ?", params)
+        await self._conn.commit()
+        return True
 
 
 _db: Db | None = None

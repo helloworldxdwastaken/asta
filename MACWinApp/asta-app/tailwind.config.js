@@ -6,6 +6,7 @@ export default {
     extend: {
       colors: {
         accent:    { DEFAULT: "#FF6B2C", hover: "#FF8A50", dim: "rgba(255,107,44,0.08)" },
+        studio:    { DEFAULT: "#7C3AED", hover: "#8B5CF6", dim: "rgba(124,58,237,0.08)", glow: "rgba(124,58,237,0.25)" },
         surface:   { DEFAULT: "var(--surface)", raised: "var(--surface-raised)", overlay: "var(--surface-overlay)" },
         label:     { DEFAULT: "var(--label)", secondary: "var(--label-secondary)", tertiary: "var(--label-tertiary)" },
         separator: { DEFAULT: "var(--separator)", bold: "var(--separator-bold)" },

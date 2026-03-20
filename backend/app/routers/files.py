@@ -309,3 +309,29 @@ async def download_office(request: Request, filename: str):
     ext = file_path.suffix.lower()
     media_type = _OFFICE_MIME.get(ext, "application/octet-stream")
     return FileResponse(file_path, media_type=media_type, filename=safe_name)
+
+
+_VIDEO_MIME = {
+    ".mp4": "video/mp4",
+    ".webm": "video/webm",
+    ".mov": "video/quicktime",
+    ".mkv": "video/x-matroska",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+}
+
+
+@router.get("/files/download-video/{filepath:path}")
+async def download_video(request: Request, filepath: str):
+    """Serve a video/audio file from workspace/youtube/. Available to all authenticated users."""
+    get_current_user_id(request)  # requires auth, not admin
+    yt_dir = Path(__file__).resolve().parent.parent.parent.parent / "workspace" / "youtube"
+    # Resolve and ensure path stays inside youtube dir
+    resolved = (yt_dir / filepath).resolve()
+    if not str(resolved).startswith(str(yt_dir.resolve())):
+        raise HTTPException(403, "Path traversal not allowed")
+    if not resolved.exists() or not resolved.is_file():
+        raise HTTPException(404, "File not found")
+    ext = resolved.suffix.lower()
+    media_type = _VIDEO_MIME.get(ext, "application/octet-stream")
+    return FileResponse(resolved, media_type=media_type, filename=resolved.name)
